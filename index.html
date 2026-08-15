@@ -28,6 +28,10 @@ button,input,select{font-family:'Inter',sans-serif;}
 .pcp-sidebar-btn:hover{background:var(--row-hover);color:var(--text);}
 .pcp-sidebar-btn.active{background:var(--row-hover);color:var(--brand);}
 .pcp-sidebar-btn.active::before{content:'';position:absolute;left:-12px;top:8px;bottom:8px;width:3px;background:var(--brand);border-radius:0 3px 3px 0;}
+.pcp-sidebar-group-header{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:14px 12px 6px;border:none;background:transparent;color:var(--text-muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;cursor:pointer;width:100%;text-align:left;}
+.pcp-sidebar-group-header:hover{color:var(--text);}
+.pcp-sidebar-group-chevron{display:inline-flex;transition:transform .15s;flex-shrink:0;}
+.pcp-sidebar-group-items{display:flex;flex-direction:column;gap:3px;}
 .pcp-content{flex:1;min-width:0;padding:30px 34px;overflow-x:auto;}
 
 .btn{font-size:13px;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--steel);background:var(--panel);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap;}
@@ -124,6 +128,8 @@ button,input,select{font-family:'Inter',sans-serif;}
   .pcp-sidebar{width:100%;flex-direction:row;overflow-x:auto;border-right:none;border-bottom:1px solid var(--steel-border);padding:10px;gap:4px;}
   .pcp-sidebar-btn{flex-shrink:0;}
   .pcp-sidebar-btn.active::before{left:8px;right:8px;top:auto;bottom:-9px;height:3px;width:auto;border-radius:3px 3px 0 0;}
+  .pcp-sidebar-group-header{display:none;}
+  .pcp-sidebar-group-items{display:flex !important;flex-direction:row;gap:4px;}
   .pcp-content{padding:18px;}
 }
 </style>
@@ -249,6 +255,7 @@ const ICON_PATHS = {
   edit:'<path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>',
   trash:'<polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>',
   chevronLeft:'<polyline points="15 18 9 12 15 6"/>',
+  chevronDown:'<polyline points="6 9 12 15 18 9"/>',
   chevronRight:'<polyline points="9 18 15 12 9 6"/>',
   alert:'<path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>',
   logout:'<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/>',
@@ -424,10 +431,10 @@ function newId(prefix){ idCounter++; return prefix+"-"+idCounter; }
 
 const STAGES = ["perfilar","pintura","colagem","entrega"];
 const STAGE_DEFS = {
-  perfilar: {label:"Programação Semanal Perfilar", short:"Perfilar", icon:"calendar", concludeLabel:"Concluir Perfilagem"},
-  pintura:  {label:"Programação Semanal Pintura",  short:"Pintura",  icon:"droplet",  concludeLabel:"Concluir Pintura"},
-  colagem:  {label:"Programação Semanal Colagem",  short:"Colagem",  icon:"layers",   concludeLabel:"Concluir Colagem"},
-  entrega:  {label:"Programação de Entrega",       short:"Entrega",  icon:"truck",    concludeLabel:"Confirmar Entrega"},
+  perfilar: {label:"Programação Perfiladeira", short:"Perfilar", icon:"calendar", concludeLabel:"Concluir Perfilagem"},
+  pintura:  {label:"Programação Pintura",  short:"Pintura",  icon:"droplet",  concludeLabel:"Concluir Pintura"},
+  colagem:  {label:"Programação Coladeira",  short:"Colagem",  icon:"layers",   concludeLabel:"Concluir Colagem"},
+  entrega:  {label:"Programação Entregas",       short:"Entrega",  icon:"truck",    concludeLabel:"Confirmar Entrega"},
 };
 function defaultStageFilterState(){
   return {
@@ -457,6 +464,7 @@ function pedidoTemAtencao(p){
 }
 const STATE = {
   loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
+  sidebarCollapsedGroups:{},
   stageState:{},
   pedidosFiltro:{cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:""},
   pedidosSort:{campo:"dataProg", direcao:"asc"},
@@ -485,6 +493,7 @@ function initLocalDefaults(){
   if(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches){
     STATE.theme = "light";
   }
+  STATE.sidebarCollapsedGroups = loadSidebarCollapsedGroups();
 }
 async function loadAllData(){
   const content = document.getElementById("content");
@@ -1735,7 +1744,7 @@ function renderPedidosScreen(){
   const estoqueBaixo = STATE.materiais.filter(m=>m.estoque<m.estoqueMinimo).length;
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("dashboard","Lançamento de Pedidos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho para ordenar",
+    screenHeaderHtml("dashboard","Lançamentos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho para ordenar",
       '<button class="btn btn-primary" onclick="openPedidoModal(\'new\')">'+icon("plus",14)+' Novo Pedido</button>')+
     '<div class="stat-row">'+
       statCardHtml("Pedidos no Filtro", pedidos.length, "dashboard")+
@@ -2512,34 +2521,79 @@ function renderNotasScreen(){
     ? emptyStateHtml('Nenhuma nota de entrada lançada. Clique em "Nova Nota" para adicionar.')
     : '<table class="pcp-table"><thead><tr><th>Data</th><th>Fornecedor</th><th>Nº Nota</th><th>Itens</th><th>Valor Total</th></tr></thead><tbody>'+rows+'</tbody></table>';
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("package","Notas de Entrada","Lançamentos que somam ao estoque de matéria-prima",
+    screenHeaderHtml("package","Notas Fiscais","Lançamentos que somam ao estoque de matéria-prima",
       '<button class="btn btn-primary" onclick="openNotaModal()">'+icon("plus",14)+' Nova Nota</button>')+
     '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
 }
 
 /* ============================== NAV / LOGIN / INIT ============================== */
-const NAV_ITEMS = [
-  {id:"dashboard", label:"Dashboard", icon:"barChart"},
-  {id:"pedidos", label:"Lançamento de Pedidos", icon:"dashboard"},
-  {id:"prog-perfilar", label:"Programação Semanal Perfilar", icon:"calendar"},
-  {id:"prog-pintura", label:"Programação Semanal Pintura", icon:"droplet"},
-  {id:"prog-colagem", label:"Programação Semanal Colagem", icon:"layers"},
-  {id:"prog-entrega", label:"Programação de Entrega", icon:"truck"},
-  {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
-  {id:"calendario", label:"Calendário", icon:"calendar"},
-  {id:"baixas", label:"Baixa de Materiais", icon:"arrowDownCircle"},
-  {id:"baixaEstoque", label:"Baixa de Estoque (Perda)", icon:"trash"},
-  {id:"transferencia", label:"Transferência de Estoque", icon:"repeat"},
-  {id:"movimentacao", label:"Movimentação de Estoque", icon:"trendingUp"},
-  {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
-  {id:"notas", label:"Notas de Entrada", icon:"package"},
-  {id:"motoristas", label:"Motoristas", icon:"truck"},
-  {id:"cidades", label:"Cidades", icon:"mapPin"},
-  {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
+const NAV_GROUPS = [
+  { id:"_top", items:[
+    {id:"dashboard", label:"Dashboard", icon:"barChart"},
+  ]},
+  { id:"programacao", title:"Programação", items:[
+    {id:"pedidos", label:"Lançamentos", icon:"dashboard"},
+    {id:"prog-perfilar", label:"Programação Perfiladeira", icon:"calendar"},
+    {id:"prog-pintura", label:"Programação Pintura", icon:"droplet"},
+    {id:"prog-colagem", label:"Programação Coladeira", icon:"layers"},
+    {id:"prog-entrega", label:"Programação Entregas", icon:"truck"},
+    {id:"entregues", label:"Entrega", icon:"checkCircle"},
+    {id:"calendario", label:"Calendário", icon:"calendar"},
+  ]},
+  { id:"baixaManual", title:"Baixa Manual", items:[
+    {id:"baixas", label:"Baixa de Materiais", icon:"arrowDownCircle"},
+    {id:"baixaEstoque", label:"Baixa de Estoque (Perda)", icon:"trash"},
+    {id:"transferencia", label:"Transferência de Estoque", icon:"repeat"},
+    {id:"movimentacao", label:"Movimentação de Estoque", icon:"trendingUp"},
+    {id:"notas", label:"Notas Fiscais", icon:"package"},
+  ]},
+  { id:"cadastros", title:"Cadastros", items:[
+    {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
+    {id:"motoristas", label:"Motoristas", icon:"truck"},
+    {id:"cidades", label:"Cidades", icon:"mapPin"},
+    {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
+  ]},
 ];
-function setScreen(id){ STATE.screen=id; renderSidebar(); renderScreen(); }
+const NAV_ITEMS = NAV_GROUPS.reduce((acc,g)=>acc.concat(g.items), []);
+function findNavGroupFor(screenId){
+  for(const g of NAV_GROUPS){ if(g.items.some(it=>it.id===screenId)) return g.id; }
+  return null;
+}
+function loadSidebarCollapsedGroups(){
+  try{
+    const raw = window.localStorage.getItem("eleve_sidebar_collapsed");
+    return raw ? JSON.parse(raw) : {};
+  } catch(err){ return {}; }
+}
+function saveSidebarCollapsedGroups(){
+  try{ window.localStorage.setItem("eleve_sidebar_collapsed", JSON.stringify(STATE.sidebarCollapsedGroups)); } catch(err){}
+}
+function toggleSidebarGroup(groupId){
+  STATE.sidebarCollapsedGroups[groupId] = !STATE.sidebarCollapsedGroups[groupId];
+  saveSidebarCollapsedGroups();
+  renderSidebar();
+}
+function setScreen(id){
+  STATE.screen=id;
+  const groupId = findNavGroupFor(id);
+  if(groupId && STATE.sidebarCollapsedGroups[groupId]){
+    STATE.sidebarCollapsedGroups[groupId] = false;
+    saveSidebarCollapsedGroups();
+  }
+  renderSidebar();
+  renderScreen();
+}
 function renderSidebar(){
-  const items = NAV_ITEMS.map(it=>'<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+'</button>').join("");
+  const groupsHtml = NAV_GROUPS.map(g=>{
+    const itemsHtml = g.items.map(it=>'<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+'</button>').join("");
+    if(g.id==="_top") return itemsHtml;
+    const collapsed = !!STATE.sidebarCollapsedGroups[g.id];
+    return '<button class="pcp-sidebar-group-header" onclick="toggleSidebarGroup(\''+g.id+'\')">'+
+        '<span>'+g.title+'</span>'+
+        '<span class="pcp-sidebar-group-chevron" style="'+(collapsed?"transform:rotate(-90deg)":"")+'">'+icon("chevronDown",13)+'</span>'+
+      '</button>'+
+      '<div class="pcp-sidebar-group-items" style="'+(collapsed?"display:none":"")+'">'+itemsHtml+'</div>';
+  }).join("");
   const themeBtnIcon = STATE.theme==="dark" ? "sun" : "moon";
   const themeBtnLabel = STATE.theme==="dark" ? "Modo Claro" : "Modo Escuro";
   document.getElementById("sidebar").innerHTML =
@@ -2548,7 +2602,7 @@ function renderSidebar(){
         '<img src="'+markDataUri()+'" alt="ELEVE" style="width:100%;height:100%;object-fit:contain"/></div>'+
       '<div><div style="font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:14.5px;letter-spacing:.02em">ELEVE</div>'+
       '<div style="font-size:10px;color:'+COLORS.textMuted+'">Painel de Produção</div></div>'+
-    '</div>'+items+
+    '</div>'+groupsHtml+
     '<div style="flex:1"></div>'+
     '<button class="pcp-sidebar-btn" onclick="toggleTheme()">'+icon(themeBtnIcon,16)+' '+themeBtnLabel+'</button>'+
     '<div style="padding:10px 12px;font-size:11.5px;color:'+COLORS.textMuted+'">'+escapeHtml(STATE.userName)+'</div>'+

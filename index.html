@@ -1036,7 +1036,7 @@ const ENTITY_CONFIGS = {
       {key:"dataCadastro", label:"Cadastrado em", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtDateBR(it.dataCadastro)+'</span>'},
     ],
     fields: [
-      {key:"tipo", label:"Tipo", type:"text", required:true, datalist:()=>uniqueMaterialTipos()},
+      {key:"tipo", label:"Tipo", type:"text", required:true, datalist:()=>uniqueMaterialTipos(), quickAddType:"tipoMaterial"},
       {key:"nome", label:"Nome / Cor", type:"text", required:true},
       {key:"cor", label:"É Cor? (S/N)", type:"select", options:()=>[{value:"S",label:"Sim"},{value:"N",label:"Não"}], default:"N"},
       {key:"unidade", label:"Unidade", type:"text", default:"m"},
@@ -1120,16 +1120,17 @@ function fieldHtml(f, item){
   let control;
   if(f.type==="select"){
     const opts = f.options();
-    control = '<select class="field-select" name="'+f.key+'" '+(f.required?"required":"")+'><option value="">Selecione…</option>'+
+    control = '<select class="field-select" id="f-'+f.key+'" name="'+f.key+'" '+(f.required?"required":"")+'><option value="">Selecione…</option>'+
       opts.map(o=>'<option value="'+escapeAttr(o.value)+'" '+(String(val)===String(o.value)?"selected":"")+'>'+escapeHtml(o.label)+'</option>').join('')+
       '</select>';
   } else if(f.type==="number"){
-    control = '<input class="field-input" type="number" step="0.01" name="'+f.key+'" value="'+escapeAttr(val)+'" '+(f.required?"required":"")+'/>';
+    control = '<input class="field-input" id="f-'+f.key+'" type="number" step="0.01" name="'+f.key+'" value="'+escapeAttr(val)+'" '+(f.required?"required":"")+'/>';
   } else {
     const listId = "dl-"+f.key;
     const listAttr = f.datalist ? ' list="'+listId+'"' : '';
-    control = '<input class="field-input" type="text" name="'+f.key+'" value="'+escapeAttr(val)+'"'+listAttr+' '+(f.required?"required":"")+'/>';
+    control = '<input class="field-input" id="f-'+f.key+'" type="text" name="'+f.key+'" value="'+escapeAttr(val)+'"'+listAttr+' '+(f.required?"required":"")+'/>';
     if(f.datalist){ control += '<datalist id="'+listId+'">'+f.datalist().map(o=>'<option value="'+escapeAttr(o)+'">').join('')+'</datalist>'; }
+    if(f.quickAddType){ control += '<div id="qa-'+f.quickAddType+'">'+quickAddButtonHtml(f.quickAddType)+'</div>'; }
   }
   return '<div style="'+(f.full?"grid-column:1 / -1":"")+'">'+label+control+'</div>';
 }
@@ -1444,6 +1445,21 @@ async function submitQuickAdd(type){
       if(!ok){ STATE.motivosPerda.pop(); return; }
     }
     newObj={id:val}; selectId="f-motivoPerda";
+  }
+  else if(type==="tipoMaterial"){
+    if(!STATE.materialTipos.includes(val)){
+      STATE.materialTipos.push(val);
+      const ok = await configSet("material_tipos", STATE.materialTipos);
+      if(!ok){ STATE.materialTipos.pop(); return; }
+    }
+    const tipoInput = document.getElementById("f-tipo");
+    if(tipoInput) tipoInput.value = val;
+    const dl = document.getElementById("dl-tipo");
+    if(dl && !Array.from(dl.options).some(o=>o.value===val)){
+      const opt2 = document.createElement("option"); opt2.value = val; dl.appendChild(opt2);
+    }
+    cancelQuickAdd(type);
+    return;
   }
   const select = document.getElementById(selectId);
   const opt = document.createElement("option");

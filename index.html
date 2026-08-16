@@ -23,6 +23,7 @@ body{font-family:'Inter',sans-serif;color:var(--text);transition:background .2s,
 button,input,select{font-family:'Inter',sans-serif;}
 
 .pcp-shell{display:flex;min-height:100vh;}
+@media (min-width:861px){.pcp-sidebar{height:100vh;position:sticky;top:0;overflow-y:auto;}}
 .pcp-sidebar{width:236px;flex-shrink:0;background:var(--panel-alt);border-right:1px solid var(--steel-border);padding:20px 12px;display:flex;flex-direction:column;gap:3px;transition:background .2s,border-color .2s;}
 .pcp-sidebar-btn{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:7px;border:none;background:transparent;color:var(--text-muted);font-size:13.5px;font-weight:500;cursor:pointer;text-align:left;position:relative;transition:background .15s,color .15s;width:100%;}
 .pcp-sidebar-btn:hover{background:var(--row-hover);color:var(--text);}
@@ -33,6 +34,38 @@ button,input,select{font-family:'Inter',sans-serif;}
 .pcp-sidebar-group-chevron{display:inline-flex;transition:transform .15s;flex-shrink:0;}
 .pcp-sidebar-group-items{display:flex;flex-direction:column;gap:3px;}
 .pcp-content{flex:1;min-width:0;padding:30px 34px;overflow-x:auto;}
+
+/* ---- Menu recolhível (item 1) ---- */
+.pcp-shell.sidebar-hidden .pcp-sidebar{display:none;}
+.pcp-shell.sidebar-hidden .pcp-content{padding-top:58px;--pad-v:88px;}
+#sidebar-float-btn{display:none;position:fixed;top:12px;left:12px;z-index:55;align-items:center;gap:7px;
+  background:var(--panel);border:1px solid var(--steel);color:var(--text);border-radius:8px;padding:8px 12px;
+  font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.30);font-family:'Inter',sans-serif;}
+#sidebar-float-btn:hover{border-color:var(--brand);color:var(--brand);}
+
+/* ---- Cabeçalho estático + área de lançamentos rolável (itens 2, 3 e 4) ---- */
+.screen-fixed{display:flex;flex-direction:column;height:calc(100vh - var(--pad-v,60px));}
+.screen-fixed-head{flex:0 0 auto;}
+.screen-fixed-body{flex:1 1 auto;min-height:180px;overflow:auto;}
+.screen-fixed-body .pcp-table thead th{position:sticky;top:0;z-index:4;background:var(--panel);box-shadow:inset 0 -1px 0 var(--steel-border);}
+.screen-fixed .stat-row,.screen-fixed .filter-bar{margin-bottom:14px;}
+
+/* ---- Controle de classificação (item 6) ---- */
+.sort-control{display:flex;align-items:center;gap:6px;background:var(--panel);border:1px solid var(--steel);
+  border-radius:7px;padding:4px 6px 4px 10px;}
+.sort-control label{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:700;}
+.sort-control select{background:var(--bg);border:1px solid var(--steel);color:var(--text);border-radius:6px;padding:6px 8px;font-size:12.5px;}
+
+/* ---- Gráficos de acompanhamento (item 7) ---- */
+.chart-wrap{position:relative;height:210px;display:flex;align-items:flex-end;gap:2px;
+  border-left:1px solid var(--steel-border);border-bottom:1px solid var(--steel-border);padding:0 2px;}
+.chart-col{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;position:relative;}
+.chart-bar{width:78%;border-radius:3px 3px 0 0;min-height:1px;transition:height .2s;}
+.chart-days{display:flex;gap:2px;margin-top:5px;padding:0 2px;}
+.chart-day{flex:1 1 0;text-align:center;font-size:8.5px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace;}
+.chart-meta-line{position:absolute;left:0;right:0;border-top:2px dashed var(--red);pointer-events:none;}
+.chart-meta-tag{position:absolute;right:0;transform:translateY(-100%);font-size:9.5px;color:var(--red);
+  background:var(--panel);padding:0 4px;font-weight:700;}
 
 .btn{font-size:13px;font-weight:600;padding:9px 16px;border-radius:7px;border:1px solid var(--steel);background:var(--panel);color:var(--text);cursor:pointer;display:inline-flex;align-items:center;gap:6px;transition:all .15s;white-space:nowrap;}
 .btn:hover{border-color:var(--brand);background:var(--row-hover);}
@@ -121,6 +154,10 @@ button,input,select{font-family:'Inter',sans-serif;}
   .coil-swatch-wrap{gap:3px !important;}
   .status-pill{padding:1px 5px !important;font-size:7px !important;}
   .status-pill-dot{width:4px !important;height:4px !important;}
+  .screen-fixed{display:block !important;height:auto !important;}
+  .screen-fixed-body{overflow:visible !important;}
+  .screen-fixed-body .pcp-table thead th{position:static !important;}
+  #sidebar-float-btn{display:none !important;}
 }
 
 @media (max-width:860px){
@@ -131,6 +168,11 @@ button,input,select{font-family:'Inter',sans-serif;}
   .pcp-sidebar-group-header{display:none;}
   .pcp-sidebar-group-items{display:flex !important;flex-direction:row;gap:4px;}
   .pcp-content{padding:18px;}
+  .screen-fixed{display:block;height:auto;}
+  .screen-fixed-body{overflow:visible;}
+  .screen-fixed-body .pcp-table thead th{position:static;}
+  .pcp-shell.sidebar-hidden .pcp-content{padding-top:58px;}
+  #sidebar-float-btn{top:8px;left:8px;}
 }
 </style>
 </head>
@@ -154,6 +196,8 @@ button,input,select{font-family:'Inter',sans-serif;}
   <aside class="pcp-sidebar" id="sidebar"></aside>
   <main class="pcp-content" id="content"></main>
 </div>
+
+<button id="sidebar-float-btn" class="no-print" onclick="toggleSidebarHidden()" title="Mostrar menu (Ctrl+B)"></button>
 
 <div id="modal-root"></div>
 <div id="toast-root"></div>
@@ -179,6 +223,8 @@ const DEFAULT_CONFIG_VALUES = {
   metas_pintura: [800,800,800,800,800,400],
   metas_colagem: [800,800,800,800,800,400],
   metas_entrega: [800,800,800,800,800,400],
+  meta_diaria_colagem: 800,
+  meta_diaria_perfilar: 800,
 };
 async function configGet(key){
   const { data, error } = await sb.from("app_config").select("value").eq("key", key).maybeSingle();
@@ -285,6 +331,10 @@ const ICON_PATHS = {
   droplet:'<path d="M12 2.69s5.66 5.99 5.66 10.03A5.66 5.66 0 0 1 12 18.38a5.66 5.66 0 0 1-5.66-5.66C6.34 8.68 12 2.69 12 2.69z"/>',
   truck:'<rect x="1" y="3" width="15" height="13"/><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/>',
   star:'<polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>',
+  menu:'<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
+  panelLeft:'<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>',
+  activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  arrowUpDown:'<polyline points="7 4 7 20"/><polyline points="4 7 7 4 10 7"/><polyline points="17 20 17 4"/><polyline points="14 17 17 20 20 17"/>',
   repeat:'<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
 };
 function icon(name, size, color){
@@ -475,6 +525,9 @@ const STATE = {
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:""},
+  sidebarHidden:false,
+  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"prog"},
+  metasDiarias:{colagem:800, perfilar:800},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
@@ -494,6 +547,7 @@ function initLocalDefaults(){
     STATE.theme = "light";
   }
   STATE.sidebarCollapsedGroups = loadSidebarCollapsedGroups();
+  try{ STATE.sidebarHidden = window.localStorage.getItem("eleve_sidebar_hidden")==="1"; } catch(err){}
 }
 async function loadAllData(){
   const content = document.getElementById("content");
@@ -526,6 +580,11 @@ async function loadAllData(){
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
   ]);
+  const [metaDiaColagem, metaDiaPerfilar] = await Promise.all([
+    configGet("meta_diaria_colagem"), configGet("meta_diaria_perfilar"),
+  ]);
+  STATE.metasDiarias.colagem = Number(metaDiaColagem != null ? metaDiaColagem : DEFAULT_CONFIG_VALUES.meta_diaria_colagem);
+  STATE.metasDiarias.perfilar = Number(metaDiaPerfilar != null ? metaDiaPerfilar : DEFAULT_CONFIG_VALUES.meta_diaria_perfilar);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
   STATE.tipoOptions = tipoOptions || DEFAULT_CONFIG_VALUES.tipo_options;
@@ -1216,11 +1275,15 @@ function renderGenericScreen(type){
     '<button class="btn btn-primary" onclick="openEntityModal(\''+type+'\',\'new\')">'+icon("plus",14)+' Novo</button>'+
   '</div>';
   document.getElementById("content").innerHTML =
-    printHeader +
-    screenHeaderHtml(cfg.icon, cfg.title, cfg.subtitle, actions, !!cfg.printable)+
-    extra +
-    filterBar +
-    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+    '<div class="screen-fixed">'+
+    '<div class="screen-fixed-head">'+
+      printHeader +
+      screenHeaderHtml(cfg.icon, cfg.title, cfg.subtitle, actions, !!cfg.printable)+
+      extra +
+      filterBar +
+    '</div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+table+'</div></div>'+
+    '</div>';
 }
 
 /* ============================== PEDIDOS ============================== */
@@ -1683,6 +1746,26 @@ function setPedidosSort(campo){
   else { STATE.pedidosSort = {campo, direcao:"asc"}; }
   renderScreen();
 }
+function setPedidosSortCampo(campo){
+  STATE.pedidosSort = {campo:campo, direcao:STATE.pedidosSort.direcao||"asc"};
+  renderScreen();
+}
+function togglePedidosSortDir(){
+  STATE.pedidosSort.direcao = STATE.pedidosSort.direcao==="asc" ? "desc" : "asc";
+  renderScreen();
+}
+function pedidosSortControlHtml(){
+  const sc = STATE.pedidosSort;
+  const opts = PEDIDO_COLUMNS.map(c=>'<option value="'+c.key+'" '+(sc.campo===c.key?"selected":"")+'>'+c.label+'</option>').join("");
+  const asc = sc.direcao==="asc";
+  return '<div class="sort-control no-print">'+
+    icon("arrowUpDown",14,COLORS.textMuted)+
+    '<label for="pedidos-sort-campo">Classificar</label>'+
+    '<select id="pedidos-sort-campo" onchange="setPedidosSortCampo(this.value)">'+opts+'</select>'+
+    '<button class="icon-btn" title="'+(asc?"Crescente (A→Z / menor→maior)":"Decrescente (Z→A / maior→menor)")+'" onclick="togglePedidosSortDir()">'+
+      (asc?"\u25B2":"\u25BC")+'</button>'+
+  '</div>';
+}
 function sortPedidos(list){
   const accessor = PEDIDO_SORT_ACCESSORS[STATE.pedidosSort.campo] || PEDIDO_SORT_ACCESSORS.dataProg;
   const dir = STATE.pedidosSort.direcao==="asc" ? 1 : -1;
@@ -1744,8 +1827,10 @@ function renderPedidosScreen(){
   const estoqueBaixo = STATE.materiais.filter(m=>m.estoque<m.estoqueMinimo).length;
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("dashboard","Lançamentos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho para ordenar",
-      '<button class="btn btn-primary" onclick="openPedidoModal(\'new\')">'+icon("plus",14)+' Novo Pedido</button>')+
+    '<div class="screen-fixed"><div class="screen-fixed-head">'+
+    screenHeaderHtml("dashboard","Lançamentos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho ou use \"Classificar\" para ordenar",
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+pedidosSortControlHtml()+
+      '<button class="btn btn-primary" onclick="openPedidoModal(\'new\')">'+icon("plus",14)+' Novo Pedido</button></div>')+
     '<div class="stat-row">'+
       statCardHtml("Pedidos no Filtro", pedidos.length, "dashboard")+
       statCardHtml("Em Produção / Pré-Prod.", totalAtivos, "calendar", COLORS.brand)+
@@ -1769,7 +1854,9 @@ function renderPedidosScreen(){
       '<div style="min-width:150px"><label class="field-label">Prog. fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updatePedidosFiltro(\'dFim\', this.value)"/></div>'+
       '<button class="btn btn-ghost" onclick="clearPedidosFiltro()">Limpar filtros</button>'+
     '</div>'+
-    '<div class="pcp-card" style="padding:0;overflow:auto">'+pedidoTableHtml(pedidos, false, false, false, true, null, false)+'</div>';
+    '</div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(pedidos, false, false, false, true, null, false)+'</div></div>'+
+    '</div>';
 }
 
 /* ============================== PROGRAMAÇÃO POR ETAPA (Perfilar / Pintura / Colagem / Entrega) ============================== */
@@ -2045,7 +2132,8 @@ function renderEntreguesScreen(){
   const visibleCols = ["dataProg","cliente","op","material","corSup","corInf","eps","metragem","cidade","motorista"];
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("checkCircle","Pedidos Entregues","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
+    '<div class="screen-fixed"><div class="screen-fixed-head">'+
+    screenHeaderHtml("checkCircle","Pedidos Entregues Concluídos","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
       statCardHtml("Metragem Total", fmtNum(metragemTotal)+" m", "package", COLORS.brand)+
@@ -2059,7 +2147,9 @@ function renderEntreguesScreen(){
       '<div style="min-width:150px"><label class="field-label">Entregue até</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateEntreguesFiltro(\'dFim\', this.value)"/></div>'+
       '<button class="btn btn-ghost" onclick="clearEntreguesFiltro()">Limpar filtros</button>'+
     '</div>'+
-    '<div class="pcp-card" style="padding:0;overflow:auto">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false)+'</div>';
+    '</div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false)+'</div></div>'+
+    '</div>';
 }
 
 /* ============================== BAIXA DE MATERIAIS ============================== */
@@ -2526,6 +2616,150 @@ function renderNotasScreen(){
     '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
 }
 
+
+/* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
+function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
+function clearAcompFiltro(){
+  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"prog"};
+  renderScreen();
+}
+function stageConcluido(p, stage){
+  const order = stageOrderFor(p);
+  const iStage = order.indexOf(stage);
+  if(iStage===-1) return false;
+  if(p.etapaAtual==="entregue") return true;
+  const iAtual = order.indexOf(p.etapaAtual);
+  if(iAtual===-1) return false;
+  return iAtual > iStage;
+}
+function producaoDiariaPorEtapa(stage){
+  const f = STATE.acompFiltro;
+  const dias = new Array(31).fill(0);
+  const pedidosDia = new Array(31).fill(0);
+  STATE.pedidos.forEach(function(p){
+    if(!p.dataProg) return;
+    if(f.ano && p.dataProg.slice(0,4)!==String(f.ano)) return;
+    if(f.mes && p.dataProg.slice(5,7)!==String(f.mes)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    if(stage==="colagem" && !p.temColagem) return;
+    if(f.base==="concl" && !stageConcluido(p, stage)) return;
+    const d = Number(p.dataProg.slice(8,10));
+    if(!(d>=1 && d<=31)) return;
+    dias[d-1] += Number(p.metragem||0);
+    pedidosDia[d-1] += 1;
+  });
+  return {dias:dias, pedidos:pedidosDia};
+}
+function diasNoMes(ano, mes){
+  const y = Number(ano), m = Number(mes);
+  if(!y || !m) return 31;
+  return new Date(y, m, 0).getDate();
+}
+function openMetaDiariaModal(stage){
+  const label = stage==="colagem" ? "Colagem" : "Perfilar";
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Meta diária — '+label+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Meta por dia (m)</label>'+
+        '<input class="field-input" type="number" step="1" min="0" id="meta-diaria-input" value="'+Number(STATE.metasDiarias[stage]||0)+'"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">A meta é aplicada a todos os dias do gráfico e fica salva para todos os usuários.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="saveMetaDiaria(\''+stage+'\')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function saveMetaDiaria(stage){
+  const val = Number(document.getElementById("meta-diaria-input").value||0);
+  const ok = await configSet("meta_diaria_"+stage, val);
+  if(!ok) return;
+  STATE.metasDiarias[stage] = val;
+  closeModal();
+  renderScreen();
+  showToast("success","Meta diária atualizada.");
+}
+function producaoChartHtml(stage, titulo, iconName, cor){
+  const f = STATE.acompFiltro;
+  const dados = producaoDiariaPorEtapa(stage);
+  const meta = Number(STATE.metasDiarias[stage]||0);
+  const maxDia = diasNoMes(f.ano, f.mes);
+  const maxValor = Math.max.apply(null, dados.dias.concat([meta, 1]));
+  const escala = maxValor * 1.15;
+  const total = dados.dias.reduce(function(a,b){return a+b;},0);
+  const diasComProd = dados.dias.filter(function(v,i){ return v>0 && (i+1)<=maxDia; }).length;
+  const diasNaMeta = meta>0 ? dados.dias.filter(function(v,i){ return (i+1)<=maxDia && v>=meta; }).length : 0;
+  const media = diasComProd>0 ? total/diasComProd : 0;
+  const metaMes = meta * maxDia;
+  const pctMeta = metaMes>0 ? Math.round((total/metaMes)*100) : 0;
+
+  const barras = dados.dias.map(function(v,i){
+    const dia = i+1;
+    const foraDoMes = dia>maxDia;
+    const alturaPct = escala>0 ? Math.min(100, (v/escala)*100) : 0;
+    const bateuMeta = meta>0 && v>=meta;
+    const corBarra = foraDoMes ? "var(--steel-border)" : (v===0 ? "var(--steel-border)" : (bateuMeta ? COLORS.green : cor));
+    const tip = "Dia "+pad2(dia)+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(meta>0?(" · meta "+fmtNum(meta)+" m"):"");
+    return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
+      (v>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
+    '</div>';
+  }).join("");
+
+  const rotulos = dados.dias.map(function(v,i){
+    const dia = i+1;
+    return '<div class="chart-day" style="opacity:'+(dia>maxDia?0.35:1)+'">'+dia+'</div>';
+  }).join("");
+
+  const metaLinha = meta>0 && escala>0
+    ? '<div class="chart-meta-line" style="bottom:'+Math.min(99,(meta/escala)*100)+'%"><span class="chart-meta-tag">Meta '+fmtNum(meta)+' m</span></div>'
+    : '';
+
+  return '<div class="pcp-card" style="margin-bottom:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
+        '<h3 style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+
+      '<div class="no-print"><button class="btn" onclick="openMetaDiariaModal(\''+stage+'\')">'+icon("target",14)+' '+(meta>0?"Editar meta":"Adicionar meta")+'</button></div>'+
+    '</div>'+
+    '<div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div><div class="stat-label">Total no mês</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
+      '<div><div class="stat-label">Média por dia produzido</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
+      '<div><div class="stat-label">Dias com produção</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+diasComProd+'</div></div>'+
+      (meta>0 ? '<div><div class="stat-label">Dias que bateram a meta</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
+                '<div><div class="stat-label">% da meta do mês</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctMeta>=100?COLORS.green:(pctMeta>=60?COLORS.brand:COLORS.red))+'">'+pctMeta+'%</div></div>' : '')+
+    '</div>'+
+    '<div class="chart-wrap">'+metaLinha+barras+'</div>'+
+    '<div class="chart-days">'+rotulos+'</div>'+
+  '</div>';
+}
+function renderAcompanhamentoScreen(){
+  const f = STATE.acompFiltro;
+  const anosPedidos = STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean);
+  const anos = Array.from(new Set(anosPedidos.concat([String(new Date().getFullYear())]))).sort();
+  const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+    '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button>'+
+  '</div>';
+
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("activity","Acompanhamento da Produção","Produção diária por etapa — dias 1 a 31, com meta configurável", acoes)+
+    '<div class="pcp-card filter-bar no-print">'+
+      '<div style="min-width:150px"><label class="field-label">Mês</label><select class="field-select" onchange="updateAcompFiltro(\'mes\', this.value)">'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+      '<div style="width:120px"><label class="field-label">Ano</label><select class="field-select" onchange="updateAcompFiltro(\'ano\', this.value)">'+
+        anos.map(function(y){ return '<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:190px"><label class="field-label">Máquina / Equipamento</label><select class="field-select" onchange="updateAcompFiltro(\'maquinaId\', this.value)"><option value="">Todas</option>'+
+        STATE.equipamentos.map(function(e){ return '<option value="'+e.id+'" '+(f.maquinaId===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:190px"><label class="field-label">Base do cálculo</label><select class="field-select" onchange="updateAcompFiltro(\'base\', this.value)">'+
+        '<option value="prog" '+(f.base==="prog"?"selected":"")+'>Programado (data de prog.)</option>'+
+        '<option value="concl" '+(f.base==="concl"?"selected":"")+'>Somente etapas concluídas</option>'+
+        '</select></div>'+
+      '<button class="btn btn-ghost" onclick="clearAcompFiltro()">Limpar filtros</button>'+
+    '</div>'+
+    '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Acompanhamento da Produção — '+MESES[Number(f.mes)-1]+'/'+f.ano+'</div></div>'+
+    producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand)+
+    producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00");
+}
+
 /* ============================== NAV / LOGIN / INIT ============================== */
 const NAV_GROUPS = [
   { id:"_top", items:[
@@ -2537,8 +2771,9 @@ const NAV_GROUPS = [
     {id:"prog-pintura", label:"Programação Pintura", icon:"droplet"},
     {id:"prog-colagem", label:"Programação Coladeira", icon:"layers"},
     {id:"prog-entrega", label:"Programação Entregas", icon:"truck"},
-    {id:"entregues", label:"Entrega", icon:"checkCircle"},
+    {id:"entregues", label:"Pedidos Entregues Concluídos", icon:"checkCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
+    {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
   ]},
   { id:"baixaManual", title:"Baixa Manual", items:[
     {id:"baixas", label:"Baixa de Materiais", icon:"arrowDownCircle"},
@@ -2568,6 +2803,27 @@ function loadSidebarCollapsedGroups(){
 function saveSidebarCollapsedGroups(){
   try{ window.localStorage.setItem("eleve_sidebar_collapsed", JSON.stringify(STATE.sidebarCollapsedGroups)); } catch(err){}
 }
+function applySidebarHidden(){
+  const shell = document.getElementById("app-shell");
+  const btn = document.getElementById("sidebar-float-btn");
+  if(shell) shell.classList.toggle("sidebar-hidden", !!STATE.sidebarHidden);
+  if(btn){
+    btn.style.display = STATE.sidebarHidden ? "inline-flex" : "none";
+    btn.innerHTML = icon("menu",16)+' Menu';
+  }
+}
+function toggleSidebarHidden(){
+  STATE.sidebarHidden = !STATE.sidebarHidden;
+  try{ window.localStorage.setItem("eleve_sidebar_hidden", STATE.sidebarHidden ? "1" : "0"); } catch(err){}
+  applySidebarHidden();
+}
+document.addEventListener("keydown", function(e){
+  if((e.ctrlKey||e.metaKey) && (e.key==="b"||e.key==="B")){
+    if(!STATE.loggedIn) return;
+    e.preventDefault();
+    toggleSidebarHidden();
+  }
+});
 function toggleSidebarGroup(groupId){
   STATE.sidebarCollapsedGroups[groupId] = !STATE.sidebarCollapsedGroups[groupId];
   saveSidebarCollapsedGroups();
@@ -2600,8 +2856,9 @@ function renderSidebar(){
     '<div style="display:flex;align-items:center;gap:9px;padding:4px 8px 18px">'+
       '<div style="width:32px;height:32px;border-radius:8px;background:var(--panel-alt);display:flex;align-items:center;justify-content:center;flex-shrink:0;padding:5px">'+
         '<img src="'+markDataUri()+'" alt="ELEVE" style="width:100%;height:100%;object-fit:contain"/></div>'+
-      '<div><div style="font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:14.5px;letter-spacing:.02em">ELEVE</div>'+
+      '<div style="flex:1;min-width:0"><div style="font-family:\'Space Grotesk\',sans-serif;font-weight:700;font-size:14.5px;letter-spacing:.02em">ELEVE</div>'+
       '<div style="font-size:10px;color:'+COLORS.textMuted+'">Painel de Produção</div></div>'+
+      '<button class="icon-btn" title="Ocultar menu (Ctrl+B)" onclick="toggleSidebarHidden()">'+icon("panelLeft",14)+'</button>'+
     '</div>'+groupsHtml+
     '<div style="flex:1"></div>'+
     '<button class="pcp-sidebar-btn" onclick="toggleTheme()">'+icon(themeBtnIcon,16)+' '+themeBtnLabel+'</button>'+
@@ -2617,6 +2874,7 @@ function renderScreen(){
   else if(STATE.screen==="prog-entrega") renderStageScreen("entrega");
   else if(STATE.screen==="entregues") renderEntreguesScreen();
   else if(STATE.screen==="calendario") renderCalendarioScreen();
+  else if(STATE.screen==="acompanhamento") renderAcompanhamentoScreen();
   else if(STATE.screen==="baixas") renderBaixasScreen();
   else if(STATE.screen==="baixaEstoque") renderBaixaEstoqueScreen();
   else if(STATE.screen==="transferencia") renderTransferenciaScreen();
@@ -2642,6 +2900,7 @@ async function enterApp(userName){
   STATE.loggedIn = true;
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app-shell").style.display = "flex";
+  applySidebarHidden();
   renderSidebar();
   await loadAllData();
   renderScreen();
@@ -2672,6 +2931,7 @@ async function handleLogin(event){
 async function handleLogout(){
   await sb.auth.signOut();
   STATE.loggedIn = false;
+  const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
   STATE.dataLoaded = false;
   document.getElementById("app-shell").style.display = "none";
   document.getElementById("login-screen").style.display = "flex";
@@ -2682,6 +2942,7 @@ async function handleLogout(){
 sb.auth.onAuthStateChange((event, session)=>{
   if(event==="SIGNED_OUT" && STATE.loggedIn){
     STATE.loggedIn = false;
+    const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
     STATE.dataLoaded = false;
     document.getElementById("app-shell").style.display = "none";
     document.getElementById("login-screen").style.display = "flex";

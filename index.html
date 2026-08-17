@@ -63,6 +63,12 @@ button,input,select{font-family:'Inter',sans-serif;}
 .chart-bar{width:78%;border-radius:3px 3px 0 0;min-height:1px;transition:height .2s;}
 .chart-days{display:flex;gap:2px;margin-top:5px;padding:0 2px;}
 .chart-day{flex:1 1 0;text-align:center;font-size:8.5px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace;}
+.chart-day-clickable{cursor:pointer;border-radius:3px;padding:1px 0;}
+.chart-day-clickable:hover{color:var(--brand);background:var(--brand)15;}
+.chart-day-obs-dot{display:block;width:4px;height:4px;border-radius:50%;margin:2px auto 0;}
+.chart-obs-item:hover{background:var(--row-hover);}
+.chart-obs-item .icon-btn{opacity:.55;}
+.chart-obs-item:hover .icon-btn{opacity:1;}
 .chart-meta-line{position:absolute;left:0;right:0;border-top:2px dashed var(--red);pointer-events:none;}
 .chart-meta-tag{position:absolute;right:0;transform:translateY(-100%);font-size:9.5px;color:var(--red);
   background:var(--panel);padding:0 4px;font-weight:700;}
@@ -172,6 +178,10 @@ button,input,select{font-family:'Inter',sans-serif;}
   .acomp-print-page .chart-day{font-size:6.5px !important;}
   .acomp-print-page .chart-meta-tag{font-size:7.5px !important;}
   .acomp-print-page .print-only{margin-bottom:6px !important;}
+  .acomp-print-page .chart-obs-section{margin-top:6px !important;}
+  .acomp-print-page .chart-obs-item{padding:3px 0 !important;gap:5px !important;}
+  .acomp-print-page .chart-obs-text{font-size:8.5px !important;line-height:1.3 !important;}
+  .acomp-print-page .chart-obs-empty{font-size:8px !important;margin:4px 0 0 !important;}
 }
 
 @media (max-width:860px){
@@ -573,6 +583,7 @@ const STATE = {
   sidebarHidden:false,
   acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"},
   metasDiarias:{colagem:800, perfilar:800},
+  obsProducao:{}, obsProducaoLoading:{},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
@@ -2930,6 +2941,58 @@ async function saveMetaDiaria(stage){
   renderScreen();
   showToast("success","Meta diária atualizada.");
 }
+
+/* ============================== OBSERVAÇÕES DIÁRIAS DE PRODUÇÃO ============================== */
+function obsCacheKey(stage, ano, mes){ return stage+"_"+ano+"_"+mes; }
+function obsConfigKey(stage, ano, mes){ return "obs_producao_"+stage+"_"+ano+"_"+mes; }
+function ensureObsProducaoLoaded(stage, ano, mes){
+  const cacheKey = obsCacheKey(stage, ano, mes);
+  if(STATE.obsProducao[cacheKey]!==undefined) return;
+  if(STATE.obsProducaoLoading[cacheKey]) return;
+  STATE.obsProducaoLoading[cacheKey] = true;
+  configGet(obsConfigKey(stage, ano, mes)).then(function(data){
+    STATE.obsProducao[cacheKey] = (data && typeof data==="object") ? data : {};
+    STATE.obsProducaoLoading[cacheKey] = false;
+    renderScreen();
+  });
+}
+function openObsDiaModal(stage, dia){
+  const f = STATE.acompFiltro;
+  const cacheKey = obsCacheKey(stage, f.ano, f.mes);
+  const obsMes = STATE.obsProducao[cacheKey] || {};
+  const diaStr = pad2(dia);
+  const atual = obsMes[diaStr] || "";
+  const label = stage==="colagem" ? "Coladeira" : "Perfiladeira";
+  const dataLabel = diaStr+"/"+f.mes+"/"+f.ano;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Observação — '+label+' — '+dataLabel+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Por que a produção foi bem neste dia?</label>'+
+        '<textarea class="field-input" id="obs-dia-textarea" rows="4" style="resize:vertical;font-family:inherit" placeholder="Ex.: equipe completa, material disponível, sem paradas de máquina…">'+escapeHtml(atual)+'</textarea></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Deixe em branco e salve para remover a observação deste dia.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="saveObsDia(\''+stage+'\','+dia+')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function saveObsDia(stage, dia){
+  const textarea = document.getElementById("obs-dia-textarea");
+  const texto = (textarea ? textarea.value : "").trim();
+  const f = STATE.acompFiltro;
+  const cacheKey = obsCacheKey(stage, f.ano, f.mes);
+  const obsMes = Object.assign({}, STATE.obsProducao[cacheKey]||{});
+  const diaStr = pad2(dia);
+  if(texto) obsMes[diaStr] = texto; else delete obsMes[diaStr];
+  const ok = await configSet(obsConfigKey(stage, f.ano, f.mes), obsMes);
+  if(!ok) return;
+  STATE.obsProducao[cacheKey] = obsMes;
+  closeModal();
+  renderScreen();
+  showToast("success", texto ? "Observação salva." : "Observação removida.");
+}
+
 function producaoChartHtml(stage, titulo, iconName, cor){
   const f = STATE.acompFiltro;
   const dados = producaoDiariaPorEtapa(stage);
@@ -2944,13 +3007,18 @@ function producaoChartHtml(stage, titulo, iconName, cor){
   const metaMes = meta * maxDia;
   const pctMeta = metaMes>0 ? Math.round((total/metaMes)*100) : 0;
 
+  ensureObsProducaoLoaded(stage, f.ano, f.mes);
+  const obsMes = STATE.obsProducao[obsCacheKey(stage, f.ano, f.mes)] || {};
+
   const barras = dados.dias.map(function(v,i){
     const dia = i+1;
+    const diaStr = pad2(dia);
     const foraDoMes = dia>maxDia;
     const alturaPct = escala>0 ? Math.min(100, (v/escala)*100) : 0;
     const bateuMeta = meta>0 && v>=meta;
     const corBarra = foraDoMes ? "var(--steel-border)" : (v===0 ? "var(--steel-border)" : (bateuMeta ? COLORS.green : cor));
-    const tip = "Dia "+pad2(dia)+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(meta>0?(" · meta "+fmtNum(meta)+" m"):"");
+    const temObs = !!(obsMes[diaStr] && obsMes[diaStr].trim());
+    const tip = "Dia "+diaStr+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(meta>0?(" · meta "+fmtNum(meta)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
     return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
       (v>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
@@ -2959,12 +3027,30 @@ function producaoChartHtml(stage, titulo, iconName, cor){
 
   const rotulos = dados.dias.map(function(v,i){
     const dia = i+1;
-    return '<div class="chart-day" style="opacity:'+(dia>maxDia?0.35:1)+'">'+dia+'</div>';
+    const diaStr = pad2(dia);
+    const foraDoMes = dia>maxDia;
+    const temObs = !!(obsMes[diaStr] && obsMes[diaStr].trim());
+    const clickAttr = foraDoMes ? '' : ' onclick="openObsDiaModal(\''+stage+'\','+dia+')"';
+    const titleAttr = temObs ? escapeAttr(obsMes[diaStr]) : (foraDoMes ? '' : 'Adicionar observação do dia '+dia);
+    return '<div class="chart-day chart-day-clickable" style="opacity:'+(foraDoMes?0.35:1)+'"'+clickAttr+' title="'+titleAttr+'">'+dia+(temObs?'<span class="chart-day-obs-dot" style="background:'+cor+'"></span>':'')+'</div>';
   }).join("");
 
   const metaLinha = meta>0 && escala>0
     ? '<div class="chart-meta-line" style="bottom:'+Math.min(99,(meta/escala)*100)+'%"><span class="chart-meta-tag">Meta '+fmtNum(meta)+' m</span></div>'
     : '';
+
+  const diasComObs = Object.keys(obsMes).filter(function(d){ return obsMes[d] && obsMes[d].trim(); }).sort();
+  const obsListHtml = diasComObs.length===0
+    ? '<p class="chart-obs-empty" style="font-size:11px;color:'+COLORS.textMuted+';margin:10px 0 0">Nenhuma observação registrada nos dias deste mês. Clique em um dia no eixo abaixo do gráfico para adicionar.</p>'
+    : '<div class="chart-obs-list" style="margin-top:12px">'+
+        diasComObs.map(function(d){
+          return '<div class="chart-obs-item" style="display:flex;gap:8px;align-items:flex-start;padding:6px 0;border-top:1px solid var(--steel-border)">'+
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:11px;color:'+cor+';font-weight:700;min-width:26px;padding-top:1px">'+d+'</div>'+
+            '<div class="chart-obs-text" style="font-size:12px;color:var(--text);flex:1;white-space:pre-wrap;line-height:1.4">'+escapeHtml(obsMes[d])+'</div>'+
+            '<button class="icon-btn no-print" title="Editar observação" onclick="openObsDiaModal(\''+stage+'\','+Number(d)+')">'+icon("edit",12)+'</button>'+
+          '</div>';
+        }).join("")+
+      '</div>';
 
   return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
@@ -2981,6 +3067,10 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     '</div>'+
     '<div class="chart-wrap">'+metaLinha+barras+'</div>'+
     '<div class="chart-days">'+rotulos+'</div>'+
+    '<div class="chart-obs-section">'+
+      '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700;margin-top:14px;margin-bottom:2px">Observações do mês — por que produziu bem</div>'+
+      obsListHtml+
+    '</div>'+
   '</div>';
 }
 function renderAcompanhamentoScreen(){

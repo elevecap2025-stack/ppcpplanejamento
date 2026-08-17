@@ -336,6 +336,7 @@ const ICON_PATHS = {
   activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
   arrowUpDown:'<polyline points="7 4 7 20"/><polyline points="4 7 7 4 10 7"/><polyline points="17 20 17 4"/><polyline points="14 17 17 20 20 17"/>',
   repeat:'<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
+  undo:'<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
 };
 function icon(name, size, color){
   size = size || 16; color = color || "currentColor";
@@ -474,6 +475,31 @@ function barListHtml(items){
     '</div>';
   }).join('');
 }
+/* Gráfico de barras verticais para comparar categorias (cidade, cor, tipo de EPS, etc). */
+function categoryBarChartHtml(items, cor, unidade){
+  unidade = unidade || "m";
+  if(!items.length) return emptyStateHtml("Sem dados para o filtro selecionado.");
+  const maxVal = Math.max.apply(null, items.map(function(i){ return i.value; }).concat([1]));
+  const escala = maxVal * 1.15;
+  const colWidth = 42;
+  const bars = items.map(function(it){
+    const alturaPct = escala>0 ? Math.min(100, (it.value/escala)*100) : 0;
+    const tip = (it.label||"")+" — "+fmtNum(it.value)+" "+unidade;
+    return '<div class="chart-col" style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px" title="'+escapeAttr(tip)+'">'+
+      (it.value>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(it.value)+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+cor+'"></div>'+
+    '</div>';
+  }).join('');
+  const labels = items.map(function(it){
+    const txt = (it.label||"").length>11 ? (it.label||"").slice(0,10)+"…" : (it.label||"");
+    return '<div style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px;text-align:center;font-size:9px;color:'+COLORS.textMuted+';white-space:nowrap;overflow:hidden" title="'+escapeAttr(it.label||"")+'">'+escapeHtml(txt)+'</div>';
+  }).join('');
+  const totalWidth = items.length*colWidth;
+  return '<div style="overflow-x:auto">'+
+    '<div class="chart-wrap" style="min-width:'+totalWidth+'px">'+bars+'</div>'+
+    '<div class="chart-days" style="min-width:'+totalWidth+'px">'+labels+'</div>'+
+  '</div>';
+}
 
 /* ============================== SEED DATA ============================== */
 let idCounter = 100;
@@ -488,7 +514,7 @@ const STAGE_DEFS = {
 };
 function defaultStageFilterState(){
   return {
-    weekStart:"", dIni:"", dFim:"", maquinaId:"", cidadeId:"", corSupId:"", corInfId:"", epsId:"", material:"", motoristaId:"",
+    weekStart:"", dIni:"", dFim:"", maquinaId:"", cidadeId:"", corSupId:"", corInfId:"", epsId:"", material:"", motoristaId:"", op:"",
     colunasVisiveis:{dataProg:true,cliente:true,op:true,situacao:true,material:true,corSup:true,corInf:true,eps:true,metragem:true,cidade:true,motorista:true},
     diasVisiveis:[true,true,true,true,true,true],
     metas:[800,800,800,800,800,400],
@@ -519,14 +545,14 @@ const STATE = {
   pedidosFiltro:{cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:""},
   pedidosSort:{campo:"dataProg", direcao:"asc"},
   entreguesFiltro:{cliente:"",op:"",motoristaId:"",dIni:"",dFim:""},
-  baixasFiltro:{materialId:"",ano:"",mes:"",dia:"",dIni:"",dFim:""},
+  baixasFiltro:{materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"},
   baixaManualFiltro:{materialId:"",motivo:"",dIni:"",dFim:""},
   transferenciaFiltro:{materialOrigemId:"",materialDestinoId:"",dIni:"",dFim:""},
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
-  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:""},
+  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false},
   sidebarHidden:false,
-  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"prog"},
+  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"},
   metasDiarias:{colagem:800, perfilar:800},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
@@ -698,7 +724,7 @@ async function removeMotivoPerda(idx){
 }
 
 function updateMateriaisFiltro(key, val){ STATE.materiaisFiltro[key]=val; renderScreen(); }
-function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:""}; renderScreen(); }
+function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false}; renderScreen(); }
 
 /* ---- acerto de estoque ---- */
 function openAcertoModal(materialId){
@@ -817,6 +843,56 @@ async function doDeleteBaixaManual(id){
   renderScreen();
   showToast("info","Baixa removida e estoque estornado.");
 }
+/* Devolução ao estoque a partir de uma linha da tela "Baixa de Materiais" — usada para corrigir
+   uma baixa duplicada ou lançada por engano. Registra um lançamento negativo em baixas_manual
+   (aparece como devolução, em verde, na tela "Baixa de Estoque") e credita o estoque real. */
+function confirmDevolverBaixaRow(pedidoId, materialId, papel){
+  const p = STATE.pedidos.find(x=>x.id===pedidoId);
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!p || !m) return;
+  const map = computeConsumption(p);
+  const quantidade = Number(map[materialId]||0);
+  if(!(quantidade>0)) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Devolver ao Estoque</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0 0 12px">Use isso para corrigir uma baixa lançada em duplicidade ou por engano — OP '+escapeHtml(p.op||p.id)+(p.cliente?(" · "+escapeHtml(p.cliente)):"")+" ("+escapeHtml(papel)+').</p>'+
+        '<div class="grid-2">'+
+          '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima</label><div class="field-input" style="background:var(--panel-alt);color:'+COLORS.textMuted+'">'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque atual: '+fmtNum(m.estoque)+' '+m.unidade+')</div></div>'+
+          '<div style="grid-column:1/-1"><label class="field-label">Quantidade a devolver *</label><input class="field-input" type="number" step="0.01" min="0.01" id="devolver-qtd-input" value="'+quantidade+'"/></div>'+
+          '<div style="grid-column:1/-1"><label class="field-label">Observação</label><input class="field-input" id="devolver-obs-input" value="'+escapeAttr("Estorno de baixa duplicada — OP "+(p.op||p.id))+'"/></div>'+
+        '</div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="devolverBaixaRow(\''+materialId+'\')">Confirmar Devolução</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function devolverBaixaRow(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const qtdInput = document.getElementById("devolver-qtd-input");
+  const obsInput = document.getElementById("devolver-obs-input");
+  const qtd = Number((qtdInput&&qtdInput.value)||0);
+  const obs = (obsInput&&obsInput.value)||"";
+  if(!(qtd>0)) return;
+  const novoEstoque = Math.round((m.estoque + qtd)*100)/100;
+  const { data:row, error:insErr } = await sb.from("baixas_manual").insert({
+    material_id:materialId, quantidade:-qtd, motivo:"Devolução (baixa duplicada)", observacao:obs, data:todayStr(),
+  }).select().single();
+  if(insErr){ sbErrorToast("registrar devolução", insErr); return; }
+  const { error:updErr } = await sb.from("materiais").update({estoque:novoEstoque}).eq("id", materialId);
+  if(updErr){
+    sbErrorToast("atualizar estoque na devolução", updErr);
+    await sb.from("baixas_manual").delete().eq("id", row.id);
+    return;
+  }
+  m.estoque = novoEstoque;
+  STATE.baixasManual.push(mapBaixaManualFromRow(row));
+  closeModal();
+  renderScreen();
+  showToast("success", fmtNum(qtd)+" "+m.unidade+" devolvidos ao estoque de "+m.nome+".");
+}
 function updateBaixaManualFiltro(key, val){ STATE.baixaManualFiltro[key]=val; renderScreen(); }
 function clearBaixaManualFiltro(){ STATE.baixaManualFiltro = {materialId:"",motivo:"",dIni:"",dFim:""}; renderScreen(); }
 function renderBaixaEstoqueScreen(){
@@ -830,11 +906,14 @@ function renderBaixaEstoqueScreen(){
   const rows = filtered.map(b=>{
     const m = STATE.materiais.find(x=>x.id===b.materialId);
     const valor = b.quantidade*(m?Number(m.valorUnitario||0):0);
+    const isDevolucao = b.quantidade<0;
+    const qtdColor = isDevolucao ? COLORS.green : COLORS.red;
+    const qtdSign = isDevolucao ? "+" : "−";
     return '<tr>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(b.data)+'</td>'+
       '<td>'+(m ? (m.tipo==="Bobina"?coilSwatchHtml(m.nome):escapeHtml(m.nome)) : "?")+'</td>'+
-      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+'">−'+fmtNum(b.quantidade)+' '+(m?m.unidade:"")+'</td>'+
-      '<td><span style="font-size:11.5px;padding:3px 9px;border-radius:20px;background:'+COLORS.red+'18;color:'+COLORS.red+'">'+escapeHtml(b.motivo||"—")+'</span></td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+qtdColor+'">'+qtdSign+fmtNum(Math.abs(b.quantidade))+' '+(m?m.unidade:"")+'</td>'+
+      '<td><span style="font-size:11.5px;padding:3px 9px;border-radius:20px;background:'+qtdColor+'18;color:'+qtdColor+'">'+escapeHtml(b.motivo||"—")+'</span></td>'+
       '<td style="color:'+COLORS.textMuted+'">'+escapeHtml(b.observacao||"—")+'</td>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(valor)+'</td>'+
       '<td class="no-print"><button class="icon-btn" onclick="confirmDeleteBaixaManual(\''+b.id+'\')">'+icon("trash",13)+'</button></td>'+
@@ -851,7 +930,7 @@ function renderBaixaEstoqueScreen(){
       '</div>')+
     '<div class="stat-row">'+
       statCardHtml("Baixas no Filtro", filtered.length, "trash", COLORS.red)+
-      statCardHtml("Valor Total Perdido", fmtBRL(valorTotal), "trendingUp", COLORS.red)+
+      statCardHtml("Valor Líquido (Perdas − Devoluções)", fmtBRL(valorTotal), "trendingUp", valorTotal>=0?COLORS.red:COLORS.green)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:200px"><label class="field-label">Material</label><select class="field-select" onchange="updateBaixaManualFiltro(\'materialId\', this.value)"><option value="">Todos</option>'+
@@ -1053,11 +1132,13 @@ const ENTITY_CONFIGS = {
     items: ()=>STATE.materiais,
     filterItems: (items)=>{
       const f = STATE.materiaisFiltro;
+      const preTotals = f.somentePreProducao ? preProducaoTotals() : null;
       return items.filter(m=>{
         if(f.tipo && m.tipo!==f.tipo) return false;
         if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
         if(f.ano && (!m.dataCadastro || m.dataCadastro.slice(0,4)!==String(f.ano))) return false;
         if(f.mes && (!m.dataCadastro || m.dataCadastro.slice(5,7)!==String(f.mes).padStart(2,"0"))) return false;
+        if(preTotals && !(Number(preTotals[m.id]||0)>0)) return false;
         return true;
       });
     },
@@ -1074,6 +1155,8 @@ const ENTITY_CONFIGS = {
           MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
         '<div style="width:110px"><label class="field-label">Ano (cadastro)</label><select class="field-select" onchange="updateMateriaisFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
           anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
+        '<label style="display:flex;align-items:center;gap:7px;padding-bottom:9px;font-size:12.5px;color:'+COLORS.textMuted+';cursor:pointer" title="Mostrar apenas materiais com quantidade reservada em pedidos de Pré-produção (ainda não baixada do estoque)">'+
+          '<input type="checkbox" '+(f.somentePreProducao?"checked":"")+' onchange="updateMateriaisFiltro(\'somentePreProducao\', this.checked)"/> Somente com reserva em Pré-produção</label>'+
         '<button class="btn btn-ghost" onclick="clearMateriaisFiltro()">Limpar filtros</button>'+
       '</div>';
     },
@@ -1081,10 +1164,13 @@ const ENTITY_CONFIGS = {
       const valorTotal = items.reduce((s,m)=>s+(Number(m.estoque||0)*Number(m.valorUnitario||0)),0);
       const metragemTotal = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(m.estoque||0),0);
       const baixoCount = items.filter(m=>m.estoque<m.estoqueMinimo).length;
+      const preTotals = preProducaoTotals();
+      const preProducaoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(preTotals[m.id]||0),0);
       return '<div class="stat-row">'+
         statCardHtml("Valor Total em Estoque", fmtBRL(valorTotal), "trendingUp", COLORS.brand)+
         statCardHtml("Metragem Total em Estoque", fmtNum(metragemTotal)+" m", "boxes", COLORS.green)+
         statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
+        statCardHtml("Reservado em Pré-produção", fmtNum(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
       '</div>';
     },
     columns: [
@@ -1095,6 +1181,11 @@ const ENTITY_CONFIGS = {
       {key:"estoque", label:"Estoque", render:(it)=>{
         const low = it.estoque < it.estoqueMinimo;
         return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px">'+fmtNum(it.estoque)+' '+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
+      }},
+      {key:"preProducao", label:"Pré-produção", render:(it)=>{
+        const total = Number(preProducaoTotals()[it.id]||0);
+        if(!total) return '<span style="color:'+COLORS.textMuted+'">—</span>';
+        return '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600" title="Reservado em pedidos de Pré-produção — ainda não baixado do estoque">'+fmtNum(total)+' '+it.unidade+'</span>';
       }},
       {key:"estoqueMinimo", label:"Mínimo", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtNum(it.estoqueMinimo)+' '+it.unidade+'</span>'},
       {key:"loteMinimo", label:"Lote Mín. Compra", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtNum(it.loteMinimo||0)+' '+it.unidade+'</span>'},
@@ -1300,9 +1391,33 @@ function computeConsumption(pedido){
   }
   return map;
 }
+function isPedidoPreProducao(pedido){
+  if(!pedido) return false;
+  const st = STATE.statusOptions.find(s=>s.id===pedido.situacaoId);
+  return st ? isStatusPreProducao(st.nome) : false;
+}
+/* Consumo "efetivo": o que de fato deve ser baixado do estoque real.
+   Enquanto o pedido estiver em situação de Pré-produção, o consumo é 0 —
+   ele só é baixado quando a situação deixa de ser Pré-produção (ex.: Em Produção). */
+function computeEffectiveConsumption(pedido){
+  if(!pedido) return {};
+  if(isPedidoPreProducao(pedido)) return {};
+  return computeConsumption(pedido);
+}
+/* Totais reservados (ainda não baixados) para pedidos em Pré-produção, por material.
+   Usado apenas para visualização (coluna "Pré-produção" no estoque, filtros, etc). */
+function preProducaoTotals(){
+  const totals = {};
+  STATE.pedidos.forEach(p=>{
+    if(!isPedidoPreProducao(p)) return;
+    const map = computeConsumption(p);
+    Object.keys(map).forEach(id=>{ totals[id] = (totals[id]||0) + map[id]; });
+  });
+  return totals;
+}
 async function adjustStock(oldPedido, newPedido){
-  const oldMap = computeConsumption(oldPedido);
-  const newMap = computeConsumption(newPedido);
+  const oldMap = computeEffectiveConsumption(oldPedido);
+  const newMap = computeEffectiveConsumption(newPedido);
   const ids = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
   const writes = [];
   ids.forEach(id=>{
@@ -1379,11 +1494,16 @@ async function updatePedidoSituacao(id, situacaoId){
   const p = STATE.pedidos.find(x=>x.id===id);
   if(!p) return;
   const anterior = p.situacaoId;
+  const oldSnapshot = Object.assign({}, p, {situacaoId:anterior});
   p.situacaoId = situacaoId;
   renderScreen();
   const { error } = await sb.from("pedidos").update({situacao_id:situacaoId||null}).eq("id", id);
   if(error){ sbErrorToast("atualizar situação", error); p.situacaoId = anterior; renderScreen(); return; }
-  showToast("success","Situação atualizada.");
+  await adjustStock(oldSnapshot, p);
+  renderScreen();
+  const saiuDePreProducao = isStatusPreProducao((STATE.statusOptions.find(s=>s.id===anterior)||{}).nome) && !isPedidoPreProducao(p);
+  const entrouEmPreProducao = !isStatusPreProducao((STATE.statusOptions.find(s=>s.id===anterior)||{}).nome) && isPedidoPreProducao(p);
+  showToast("success", saiuDePreProducao ? "Situação atualizada — matéria-prima baixada do estoque." : entrouEmPreProducao ? "Situação atualizada — baixa estornada (pedido voltou para Pré-produção)." : "Situação atualizada.");
 }
 
 /* ---- production timer ---- */
@@ -1411,6 +1531,7 @@ async function pauseTimer(id){
 async function concludeTimer(id){
   const p = STATE.pedidos.find(x=>x.id===id);
   if(!p) return;
+  const oldSnapshot = Object.assign({}, p);
   let elapsed = p.producaoElapsedMs||0;
   if(p.producaoStatus==="rodando"){
     elapsed = elapsed + (Date.now()-(p.producaoStartedAt||Date.now()));
@@ -1439,16 +1560,89 @@ async function concludeTimer(id){
     const stDef = STAGE_DEFS[to];
     showToast("success", (STAGE_DEFS[fromStage]?STAGE_DEFS[fromStage].short:fromStage)+" concluída — pedido movido para "+(stDef?stDef.label:to)+".");
   }
+  await adjustStock(oldSnapshot, p);
   renderScreen();
 }
+function confirmVoltarEtapa(id){
+  const p = STATE.pedidos.find(x=>x.id===id);
+  if(!p) return;
+  const order = stageOrderFor(p);
+  const idxAtual = order.indexOf(p.etapaAtual);
+  if(idxAtual<=0) return;
+  const etapaAnterior = order[idxAtual-1];
+  const label = STAGE_DEFS[etapaAnterior] ? STAGE_DEFS[etapaAnterior].label : etapaAnterior;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Retornar etapa</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Voltar o pedido OP '+escapeHtml(p.op||p.id)+' para <strong>'+escapeHtml(label)+'</strong>? O cronômetro desta etapa será reiniciado.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="voltarEtapaAnterior(\''+id+'\')">Retornar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function voltarEtapaAnterior(id){
+  const p = STATE.pedidos.find(x=>x.id===id);
+  if(!p) return;
+  const order = stageOrderFor(p);
+  const idxAtual = order.indexOf(p.etapaAtual);
+  if(idxAtual<=0){ closeModal(); return; }
+  const etapaAnterior = order[idxAtual-1];
+  const oldSnapshot = Object.assign({}, p);
+  const patch = { etapa_atual:etapaAnterior, producao_status:"idle", producao_started_at:null, producao_elapsed_ms:0 };
+  const { error } = await sb.from("pedidos").update(patch).eq("id", id);
+  closeModal();
+  if(error){ sbErrorToast("retornar etapa", error); return; }
+  p.etapaAtual = patch.etapa_atual;
+  p.producaoStatus = patch.producao_status;
+  p.producaoStartedAt = null;
+  p.producaoElapsedMs = 0;
+  await adjustStock(oldSnapshot, p);
+  renderScreen();
+  showToast("info","Pedido retornado para "+(STAGE_DEFS[etapaAnterior]?STAGE_DEFS[etapaAnterior].label:etapaAnterior)+".");
+}
+function confirmVoltarDeEntregue(id){
+  const p = STATE.pedidos.find(x=>x.id===id);
+  if(!p) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Retornar pedido</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Desfazer a entrega do pedido OP '+escapeHtml(p.op||p.id)+' e devolvê-lo para a Programação de Entrega?</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="voltarDeEntregue(\''+id+'\')">Retornar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function voltarDeEntregue(id){
+  const p = STATE.pedidos.find(x=>x.id===id);
+  if(!p) return;
+  const oldSnapshot = Object.assign({}, p);
+  const patch = { etapa_atual:"entrega", producao_status:"idle", producao_started_at:null, producao_elapsed_ms:0, data_entregue:null };
+  const { error } = await sb.from("pedidos").update(patch).eq("id", id);
+  closeModal();
+  if(error){ sbErrorToast("retornar pedido", error); return; }
+  p.etapaAtual = "entrega";
+  p.producaoStatus = "idle";
+  p.producaoStartedAt = null;
+  p.producaoElapsedMs = 0;
+  p.dataEntregue = null;
+  await adjustStock(oldSnapshot, p);
+  renderScreen();
+  showToast("info","Pedido retornado para a Programação de Entrega.");
+}
 function producaoCellHtml(p){
+  const order = stageOrderFor(p);
+  const idxAtual = order.indexOf(p.etapaAtual);
+  const podeRetornar = idxAtual>0;
+  const voltarBtn = podeRetornar ? '<button type="button" class="icon-btn" title="Retornar para '+(STAGE_DEFS[order[idxAtual-1]]?STAGE_DEFS[order[idxAtual-1]].short:"etapa anterior")+'" onclick="confirmVoltarEtapa(\''+p.id+'\')">'+icon("chevronLeft",12)+'</button>' : '';
   const status = p.producaoStatus || "idle";
   const running = status==="rodando" && p.producaoStartedAt;
   const elapsed = (p.producaoElapsedMs||0) + (running ? (Date.now()-p.producaoStartedAt) : 0);
   const timeColor = status==="concluido" ? COLORS.green : (running ? COLORS.brand : COLORS.textMuted);
   const timeHtml = '<span id="timer-'+p.id+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;font-weight:600;color:'+timeColor+'">'+fmtElapsed(elapsed)+'</span>';
   if(status==="concluido"){
-    return '<div style="display:flex;align-items:center;gap:6px">'+icon("checkCircle",14,COLORS.green)+timeHtml+'</div>';
+    return '<div style="display:flex;align-items:center;gap:6px">'+icon("checkCircle",14,COLORS.green)+timeHtml+voltarBtn+'</div>';
   }
   const stageDef = STAGE_DEFS[p.etapaAtual] || STAGE_DEFS.perfilar;
   const concludeTitle = stageDef.concludeLabel;
@@ -1463,7 +1657,7 @@ function producaoCellHtml(p){
     buttons = '<button type="button" class="icon-btn" title="Iniciar produção" onclick="startTimer(\''+p.id+'\')">'+icon("play",12)+'</button>'+
       '<button type="button" class="icon-btn" title="'+concludeTitle+'" onclick="concludeTimer(\''+p.id+'\')">'+icon("check",12)+'</button>';
   }
-  return '<div style="display:flex;align-items:center;gap:5px">'+timeHtml+buttons+'</div>';
+  return '<div style="display:flex;align-items:center;gap:5px">'+timeHtml+buttons+voltarBtn+'</div>';
 }
 setInterval(function(){
   if(!STATE || !STATE.pedidos) return;
@@ -1727,7 +1921,7 @@ function pedidoCellHtml(key, p, opts){
   }
   return "";
 }
-function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista){
+function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml){
   const cols = visibleCols || PEDIDO_COLUMNS.map(c=>c.key);
   const dragAttrs = draggable ? ' draggable="true" ondragstart="handleDragStart(event,\''+p.id+'\')" ondragend="handleDragEnd(event)"' : '';
   const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista})).join("");
@@ -1736,9 +1930,10 @@ function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, h
   if(draggable) rowClasses.push("pedido-row-draggable");
   if(pedidoTemAtencao(p)) rowClasses.push("row-atencao");
   const classAttr = rowClasses.length ? ' class="'+rowClasses.join(" ")+'"' : '';
+  const extraAction = extraActionHtml ? extraActionHtml(p) : '';
   return '<tr'+classAttr+dragAttrs+'>'+
     cellsHtml+timerCell+
-    '<td class="no-print"><div style="display:flex;gap:6px"><button class="icon-btn" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button></div></td>'+
+    '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+'<button class="icon-btn" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button></div></td>'+
   '</tr>';
 }
 function setPedidosSort(campo){
@@ -1790,9 +1985,9 @@ function headerRowHtml(visibleCols, showTimer, sortableHeaders){
   }).join("");
   return '<tr>'+ths+(showTimer?'<th class="no-print" style="width:150px">Produção</th>':'')+'<th class="no-print" style="width:84px">Ações</th></tr>';
 }
-function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista){
+function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml){
   if(pedidos.length===0) return emptyStateHtml(draggable ? "Nenhum pedido programado. Arraste um pedido para cá." : undefined);
-  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista)).join("");
+  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml)).join("");
   const headRow = headerRowHtml(visibleCols, showTimer, sortableHeaders);
   return '<table class="pcp-table"><thead>'+headRow+'</thead><tbody>'+rows+'</tbody></table>';
 }
@@ -1870,7 +2065,7 @@ function shiftWeek(stage, n){
 function updateProgFilter(stage, which, val){ STATE.stageState[stage][which]=val; renderScreen(); }
 function clearProgFiltro(stage){
   const s = STATE.stageState[stage];
-  s.maquinaId=""; s.cidadeId=""; s.corSupId=""; s.corInfId=""; s.material=""; s.epsId=""; s.motoristaId="";
+  s.maquinaId=""; s.cidadeId=""; s.corSupId=""; s.corInfId=""; s.material=""; s.epsId=""; s.motoristaId=""; s.op="";
   renderScreen();
 }
 function toggleDiaVisivel(stage, idx){ STATE.stageState[stage].diasVisiveis[idx] = !STATE.stageState[stage].diasVisiveis[idx]; renderScreen(); }
@@ -1972,6 +2167,7 @@ function computeStageAtivos(stage){
     if(s.corInfId && p.corInfId!==s.corInfId) return false;
     if(s.epsId && p.epsId!==s.epsId) return false;
     if(s.material && !(p.material||"").toLowerCase().includes(s.material.toLowerCase())) return false;
+    if(s.op && !(p.op||"").toLowerCase().includes(s.op.toLowerCase())) return false;
     if(stage==="entrega" && s.motoristaId && p.motoristaId!==s.motoristaId) return false;
     return true;
   });
@@ -2101,6 +2297,7 @@ function renderStageScreen(stage){
         epsMats.map(m=>'<option value="'+m.id+'" '+(s.epsId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
       motoristaFiltroHtml+
+      '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateProgFilter(\''+stage+'\',\'op\', this.value)"/></div>'+
       '<div style="min-width:160px"><label class="field-label">Material</label><input class="field-input" value="'+escapeAttr(s.material)+'" placeholder="Buscar material…" onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
       '<div style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-'+stage+'" value="'+weekNum+'"/></div>'+
       '<div style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-'+stage+'" value="'+year+'"/></div>'+
@@ -2148,7 +2345,7 @@ function renderEntreguesScreen(){
       '<button class="btn btn-ghost" onclick="clearEntreguesFiltro()">Limpar filtros</button>'+
     '</div>'+
     '</div>'+
-    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false)+'</div></div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false, function(p){ return '<button class="icon-btn" title="Retornar para Programação de Entrega" onclick="confirmVoltarDeEntregue(\''+p.id+'\')">'+icon("chevronLeft",13)+'</button>'; })+'</div></div>'+
     '</div>';
 }
 
@@ -2157,49 +2354,80 @@ function getBaixaRows(){
   const rows = [];
   STATE.pedidos.forEach(p=>{
     if(!p.dataProg) return;
-    if(p.corSupId){ const m=STATE.materiais.find(x=>x.id===p.corSupId); rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"Cor Sup.", materialId:p.corSupId, materialNome:m?m.nome:"?", quantidade:Number(p.metragem||0), unidade:m?m.unidade:"m"}); }
-    if(p.corInfId){ const m=STATE.materiais.find(x=>x.id===p.corInfId); rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"Cor Inf.", materialId:p.corInfId, materialNome:m?m.nome:"?", quantidade:Number(p.metragem||0), unidade:m?m.unidade:"m"}); }
-    if(p.epsId){ const m=STATE.materiais.find(x=>x.id===p.epsId); const fator=m?Number(m.fator||1):1; rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"EPS", materialId:p.epsId, materialNome:m?m.nome:"?", quantidade:Number(p.metragem||0)*fator, unidade:m?m.unidade:"m"}); }
+    const preProducao = isPedidoPreProducao(p);
+    if(p.corSupId){ const m=STATE.materiais.find(x=>x.id===p.corSupId); rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"Cor Sup.", materialId:p.corSupId, materialNome:m?m.nome:"?", materialTipo:m?m.tipo:"", quantidade:Number(p.metragem||0), unidade:m?m.unidade:"m", preProducao:preProducao}); }
+    if(p.corInfId){ const m=STATE.materiais.find(x=>x.id===p.corInfId); rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"Cor Inf.", materialId:p.corInfId, materialNome:m?m.nome:"?", materialTipo:m?m.tipo:"", quantidade:Number(p.metragem||0), unidade:m?m.unidade:"m", preProducao:preProducao}); }
+    if(p.epsId){ const m=STATE.materiais.find(x=>x.id===p.epsId); const fator=m?Number(m.fator||1):1; rows.push({pedidoId:p.id, op:p.op, data:p.dataProg, cliente:p.cliente, papel:"EPS", materialId:p.epsId, materialNome:m?m.nome:"?", materialTipo:m?m.tipo:"", quantidade:Number(p.metragem||0)*fator, unidade:m?m.unidade:"m", preProducao:preProducao}); }
   });
   return rows;
+}
+/* Linhas que representam baixa REAL (já efetivada no estoque) — exclui Pré-produção. */
+function getEfetivaBaixaRows(){ return getBaixaRows().filter(r=>!r.preProducao); }
+function matchesBaixaDateMaterial(r, f){
+  if(f.materialId && r.materialId!==f.materialId) return false;
+  if(f.tipo && r.materialTipo!==f.tipo) return false;
+  if(f.op && !(r.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
+  return matchesDateFilters(r.data, f);
 }
 function filterBaixaRows(rows){
   const f = STATE.baixasFiltro;
   return rows.filter(r=>{
-    if(f.materialId && r.materialId!==f.materialId) return false;
-    return matchesDateFilters(r.data, f);
+    if(!matchesBaixaDateMaterial(r, f)) return false;
+    if(f.situacao==="efetivas" && r.preProducao) return false;
+    if(f.situacao==="preproducao" && !r.preProducao) return false;
+    return true;
   });
 }
 function updateBaixasFilter(key, val){ STATE.baixasFiltro[key]=val; renderScreen(); }
-function clearBaixasFiltro(){ STATE.baixasFiltro = {materialId:"",ano:"",mes:"",dia:"",dIni:"",dFim:""}; renderScreen(); }
+function clearBaixasFiltro(){ STATE.baixasFiltro = {materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"}; renderScreen(); }
 
 function renderBaixasScreen(){
   const allRows = getBaixaRows();
   const years = Array.from(new Set(allRows.map(r=>r.data.slice(0,4)))).sort();
+  const f = STATE.baixasFiltro;
   const filtered = filterBaixaRows(allRows).sort((a,b)=> b.data.localeCompare(a.data));
   const totalQtd = filtered.reduce((s,r)=>s+r.quantidade,0);
-  const f = STATE.baixasFiltro;
+  const totalLabel = f.situacao==="preproducao" ? "Quantidade no Filtro (Pré-produção)" : f.situacao==="todas" ? "Quantidade no Filtro (Total)" : "Quantidade Baixada (efetiva)";
+  const preProducaoNoFiltro = allRows.filter(r=>r.preProducao && matchesBaixaDateMaterial(r, f));
+  const preProducaoQtd = preProducaoNoFiltro.reduce((s,r)=>s+r.quantidade,0);
+  const preProducaoPedidos = new Set(preProducaoNoFiltro.map(r=>r.pedidoId)).size;
 
   const rowsHtml = filtered.map(r=>{
+    const badge = r.preProducao ? ' <span style="font-size:9.5px;font-weight:700;letter-spacing:.03em;color:#C98A00;background:#C98A0022;border:1px solid #C98A0055;border-radius:10px;padding:1.5px 7px;white-space:nowrap">PRÉ-PRODUÇÃO</span>' : '';
+    const devolverBtn = r.preProducao ? '' : '<button class="icon-btn no-print" title="Devolver ao estoque (corrigir duplicidade ou lançamento errado)" onclick="confirmDevolverBaixaRow(\''+r.pedidoId+'\',\''+r.materialId+'\',\''+r.papel+'\')">'+icon("undo",13)+'</button>';
     return '<tr>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(r.data)+'<div style="font-size:10px;color:'+COLORS.textMuted+'">'+weekdayFromDateStr(r.data)+'</div></td>'+
       '<td>'+escapeHtml(r.cliente||"—")+'</td>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(r.op||"—")+'</td>'+
       '<td><span style="font-size:11px;color:'+COLORS.textMuted+'">'+r.papel+'</span></td>'+
       '<td>'+coilSwatchHtml(r.materialNome)+'</td>'+
-      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+'">−'+fmtNum(r.quantidade)+' '+r.unidade+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+(r.preProducao?"#C98A00":COLORS.red)+'">−'+fmtNum(r.quantidade)+' '+r.unidade+'</td>'+
+      '<td>'+badge+'</td>'+
+      '<td class="no-print">'+devolverBtn+'</td>'+
     '</tr>';
   }).join("");
   const table = filtered.length===0 ? emptyStateHtml("Nenhuma baixa encontrada para os filtros selecionados.") :
-    '<table class="pcp-table"><thead><tr><th>Data</th><th>Cliente</th><th>OP</th><th>Papel</th><th>Material / Cor</th><th>Quantidade</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>';
+    '<table class="pcp-table"><thead><tr><th>Data</th><th>Cliente</th><th>OP</th><th>Papel</th><th>Material / Cor</th><th>Quantidade</th><th>Observação</th><th class="no-print" style="width:56px">Ações</th></tr></thead><tbody>'+rowsHtml+'</tbody></table>';
+
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("arrowDownCircle","Baixa de Materiais","Itens baixados do estoque conforme a produção dos pedidos")+
+    screenHeaderHtml("arrowDownCircle","Baixa de Materiais","Itens baixados do estoque conforme a produção dos pedidos — pedidos em Pré-produção ainda não têm baixa real, apenas prevista")+
     '<div class="stat-row">'+
       statCardHtml("Baixas no Filtro", filtered.length, "arrowDownCircle", COLORS.red)+
-      statCardHtml("Quantidade Total Baixada", fmtNum(totalQtd)+" m", "package", COLORS.brand)+
+      statCardHtml(totalLabel, fmtNum(totalQtd)+" m", "package", COLORS.brand)+
+      statCardHtml("Pedidos em Pré-produção", preProducaoPedidos, "activity", preProducaoPedidos?"#C98A00":COLORS.textMuted)+
+      statCardHtml("Quantidade em Pré-produção (m)", fmtNum(preProducaoQtd)+" m", "boxes", preProducaoQtd?"#C98A00":COLORS.textMuted)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
+      '<div style="min-width:190px"><label class="field-label">Situação</label><select class="field-select" onchange="updateBaixasFilter(\'situacao\', this.value)">'+
+        '<option value="efetivas" '+(f.situacao==="efetivas"?"selected":"")+'>Somente efetivas (produzido/em produção)</option>'+
+        '<option value="preproducao" '+(f.situacao==="preproducao"?"selected":"")+'>Somente Pré-produção (previsto)</option>'+
+        '<option value="todas" '+(f.situacao==="todas"?"selected":"")+'>Todas</option>'+
+        '</select></div>'+
+      '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateBaixasFilter(\'op\', this.value)"/></div>'+
+      '<div style="min-width:150px"><label class="field-label">Tipo</label><select class="field-select" onchange="updateBaixasFilter(\'tipo\', this.value)"><option value="">Todos</option>'+
+        uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
+        '</select></div>'+
       '<div style="min-width:200px"><label class="field-label">Material / Cor</label><select class="field-select" onchange="updateBaixasFilter(\'materialId\', this.value)"><option value="">Todos</option>'+
         STATE.materiais.map(m=>'<option value="'+m.id+'" '+(f.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
@@ -2227,7 +2455,7 @@ function monthlyMovementForMaterial(materialId, year){
     const mIdx = Number(n.data.slice(5,7))-1;
     n.itens.forEach(it=>{ if(it.materialId===materialId) compras[mIdx]+=it.quantidade; });
   });
-  getBaixaRows().forEach(r=>{
+  getEfetivaBaixaRows().forEach(r=>{
     if(r.materialId!==materialId || r.data.slice(0,4)!==String(year)) return;
     const mIdx = Number(r.data.slice(5,7))-1;
     producao[mIdx]+=r.quantidade;
@@ -2351,8 +2579,10 @@ function renderDashboardScreen(){
   const anoAtual = new Date().getFullYear();
   const anos = [String(anoAtual-1), String(anoAtual), String(anoAtual+1)];
 
-  const pedidosFiltrados = STATE.pedidos.filter(p=>matchesDateFilters(p.dataProg, f));
-  const baixasFiltradas = getBaixaRows().filter(r=>matchesDateFilters(r.data, f));
+  /* Só entra no dashboard o que já passou pela etapa de Perfilar (produção real, não apenas programada). */
+  const pedidosFiltrados = STATE.pedidos.filter(p=>matchesDateFilters(p.dataProg, f) && stageConcluido(p,"perfilar"));
+  const pedidosConcluidosIds = new Set(pedidosFiltrados.map(p=>p.id));
+  const baixasFiltradas = getEfetivaBaixaRows().filter(r=>matchesDateFilters(r.data, f) && pedidosConcluidosIds.has(r.pedidoId));
 
   const porCidade = {};
   pedidosFiltrados.forEach(p=>{ if(!p.cidadeId) return; porCidade[p.cidadeId] = (porCidade[p.cidadeId]||0) + Number(p.metragem||0); });
@@ -2369,7 +2599,7 @@ function renderDashboardScreen(){
   });
   const corItems = Object.keys(porCor).map(mid=>{
     const m = STATE.materiais.find(x=>x.id===mid);
-    return {label: m?m.nome:"?", labelHtml: coilSwatchHtml(m?m.nome:"?"), value: porCor[mid]};
+    return {label: m?m.nome:"?", value: porCor[mid]};
   }).sort((a,b)=>b.value-a.value);
 
   const porEps = {};
@@ -2386,9 +2616,9 @@ function renderDashboardScreen(){
   const totalMetragem = pedidosFiltrados.reduce((s,p)=>s+Number(p.metragem||0),0);
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("barChart","Dashboard","Visão geral de produção por cidade, cor e tipo de EPS")+
+    screenHeaderHtml("barChart","Dashboard","Produção por cidade, cor e tipo de EPS — considera apenas pedidos com a etapa Perfilar já concluída")+
     '<div class="stat-row">'+
-      statCardHtml("Pedidos no Filtro", pedidosFiltrados.length, "dashboard")+
+      statCardHtml("Pedidos Concluídos (Perfilar)", pedidosFiltrados.length, "dashboard")+
       statCardHtml("Metragem Total", fmtNum(totalMetragem)+" m", "package", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadeItems.length, "mapPin", COLORS.green)+
     '</div>'+
@@ -2403,9 +2633,9 @@ function renderDashboardScreen(){
       '<button class="btn btn-ghost" onclick="clearDashFiltro()">Limpar filtros</button>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px,1fr));gap:16px">'+
-      '<div class="pcp-card"><div class="preview-title">Produção por Cidade</div>'+(cidadeItems.length?barListHtml(cidadeItems):emptyStateHtml("Sem dados para o filtro selecionado."))+'</div>'+
-      '<div class="pcp-card"><div class="preview-title">Quantidade por Cor (Bobinas)</div>'+(corItems.length?barListHtml(corItems):emptyStateHtml("Sem dados para o filtro selecionado."))+'</div>'+
-      '<div class="pcp-card"><div class="preview-title">Quantidade por Tipo de EPS</div>'+(epsItems.length?barListHtml(epsItems):emptyStateHtml("Sem dados para o filtro selecionado."))+'</div>'+
+      '<div class="pcp-card"><div class="preview-title">Produção por Cidade (m)</div>'+categoryBarChartHtml(cidadeItems, COLORS.brand)+'</div>'+
+      '<div class="pcp-card"><div class="preview-title">Quantidade por Cor — Bobinas (m)</div>'+categoryBarChartHtml(corItems, COLORS.green)+'</div>'+
+      '<div class="pcp-card"><div class="preview-title">Quantidade por Tipo de EPS (m)</div>'+categoryBarChartHtml(epsItems, "#C98A00")+'</div>'+
     '</div>';
 }
 
@@ -2620,7 +2850,7 @@ function renderNotasScreen(){
 /* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
 function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
 function clearAcompFiltro(){
-  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"prog"};
+  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"};
   renderScreen();
 }
 function stageConcluido(p, stage){

@@ -158,6 +158,20 @@ button,input,select{font-family:'Inter',sans-serif;}
   .screen-fixed-body{overflow:visible !important;}
   .screen-fixed-body .pcp-table thead th{position:static !important;}
   #sidebar-float-btn{display:none !important;}
+
+  /* Acompanhamento da Produção — compactado para caber em 1 folha A4 */
+  .acomp-print-page{display:block;}
+  .acomp-print-page .chart-card{margin-bottom:6px !important;page-break-inside:avoid;break-inside:avoid;}
+  .acomp-print-page .chart-card-header{margin-bottom:4px !important;}
+  .acomp-print-page .chart-card-title{font-size:12px !important;}
+  .acomp-print-page .chart-stats-row{gap:12px !important;margin-bottom:6px !important;}
+  .acomp-print-page .chart-stat .stat-label{font-size:7px !important;}
+  .acomp-print-page .chart-stat-value{font-size:12px !important;}
+  .acomp-print-page .chart-wrap{height:130px !important;}
+  .acomp-print-page .chart-days{margin-top:3px !important;}
+  .acomp-print-page .chart-day{font-size:6.5px !important;}
+  .acomp-print-page .chart-meta-tag{font-size:7.5px !important;}
+  .acomp-print-page .print-only{margin-bottom:6px !important;}
 }
 
 @media (max-width:860px){
@@ -431,6 +445,11 @@ function statusPillHtml(statusId){
   return '<span class="status-pill" style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.02em;background:'+st.cor+'22;color:'+st.cor+';border:1px solid '+st.cor+'55;white-space:nowrap">'+
     '<span class="status-pill-dot" style="width:6px;height:6px;border-radius:50%;background:'+st.cor+'"></span>'+st.nome.toUpperCase()+'</span>';
 }
+function fixedStatusPillHtml(label){
+  const c = COLORS.green;
+  return '<span class="status-pill" style="display:inline-flex;align-items:center;gap:6px;padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.02em;background:'+c+'22;color:'+c+';border:1px solid '+c+'55;white-space:nowrap">'+
+    '<span class="status-pill-dot" style="width:6px;height:6px;border-radius:50%;background:'+c+'"></span>'+escapeHtml(label.toUpperCase())+'</span>';
+}
 function situacaoSelectHtml(p){
   const st = STATE.statusOptions.find(s=>s.id===p.situacaoId);
   const c = st ? st.cor : COLORS.textMuted;
@@ -507,10 +526,10 @@ function newId(prefix){ idCounter++; return prefix+"-"+idCounter; }
 
 const STAGES = ["perfilar","pintura","colagem","entrega"];
 const STAGE_DEFS = {
-  perfilar: {label:"Programação Perfiladeira", short:"Perfilar", icon:"calendar", concludeLabel:"Concluir Perfilagem"},
-  pintura:  {label:"Programação Pintura",  short:"Pintura",  icon:"droplet",  concludeLabel:"Concluir Pintura"},
-  colagem:  {label:"Programação Coladeira",  short:"Colagem",  icon:"layers",   concludeLabel:"Concluir Colagem"},
-  entrega:  {label:"Programação Entregas",       short:"Entrega",  icon:"truck",    concludeLabel:"Confirmar Entrega"},
+  perfilar: {label:"Prog. Perfiladeira", short:"Perfilar", icon:"calendar", concludeLabel:"Concluir Perfilagem"},
+  pintura:  {label:"Prog. Pintura",  short:"Pintura",  icon:"droplet",  concludeLabel:"Concluir Pintura"},
+  colagem:  {label:"Prog. Coladeira",  short:"Colagem",  icon:"layers",   concludeLabel:"Concluir Colagem"},
+  entrega:  {label:"Prog. Entregas",       short:"Entrega",  icon:"truck",    concludeLabel:"Confirmar Entrega"},
 };
 function defaultStageFilterState(){
   return {
@@ -1897,9 +1916,11 @@ function pedidoCellHtml(key, p, opts){
     case "cliente": return '<td>'+escapeHtml(p.cliente||"—")+'</td>';
     case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+'</td>';
     case "situacao": {
-      const inner = opts.editableSituacao
-        ? '<span class="no-print">'+situacaoSelectHtml(p)+'</span><span class="print-only">'+statusPillHtml(p.situacaoId)+'</span>'
-        : statusPillHtml(p.situacaoId);
+      const inner = opts.fixedStatusLabel
+        ? fixedStatusPillHtml(opts.fixedStatusLabel)
+        : opts.editableSituacao
+          ? '<span class="no-print">'+situacaoSelectHtml(p)+'</span><span class="print-only">'+statusPillHtml(p.situacaoId)+'</span>'
+          : statusPillHtml(p.situacaoId);
       return '<td>'+inner+'</td>';
     }
     case "material": {
@@ -1921,10 +1942,10 @@ function pedidoCellHtml(key, p, opts){
   }
   return "";
 }
-function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml){
+function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel){
   const cols = visibleCols || PEDIDO_COLUMNS.map(c=>c.key);
   const dragAttrs = draggable ? ' draggable="true" ondragstart="handleDragStart(event,\''+p.id+'\')" ondragend="handleDragEnd(event)"' : '';
-  const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista})).join("");
+  const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista, fixedStatusLabel})).join("");
   const timerCell = showTimer ? '<td class="no-print">'+producaoCellHtml(p)+'</td>' : '';
   const rowClasses = [];
   if(draggable) rowClasses.push("pedido-row-draggable");
@@ -1985,9 +2006,9 @@ function headerRowHtml(visibleCols, showTimer, sortableHeaders){
   }).join("");
   return '<tr>'+ths+(showTimer?'<th class="no-print" style="width:150px">Produção</th>':'')+'<th class="no-print" style="width:84px">Ações</th></tr>';
 }
-function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml){
+function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel){
   if(pedidos.length===0) return emptyStateHtml(draggable ? "Nenhum pedido programado. Arraste um pedido para cá." : undefined);
-  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml)).join("");
+  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel)).join("");
   const headRow = headerRowHtml(visibleCols, showTimer, sortableHeaders);
   return '<table class="pcp-table"><thead>'+headRow+'</thead><tbody>'+rows+'</tbody></table>';
 }
@@ -2235,7 +2256,7 @@ function renderStageScreen(stage){
         '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.brand+';padding:2px 8px;border-radius:10px;font-weight:700;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(b.metros)+' m</span>'+
       '</div>'+
       '<div class="pcp-card drag-target" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleDrop(event,\''+b.date+'\')">'+
-        pedidoTableHtml(b.items, true, true, true, false, visibleCols, true, editableMotorista)+
+        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null)+
       '</div>'+
     '</div>';
   }).join('<div style="height:2px"></div>');
@@ -2330,7 +2351,7 @@ function renderEntreguesScreen(){
 
   document.getElementById("content").innerHTML =
     '<div class="screen-fixed"><div class="screen-fixed-head">'+
-    screenHeaderHtml("checkCircle","Pedidos Entregues Concluídos","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
+    screenHeaderHtml("checkCircle","Pedidos Entregues","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
       statCardHtml("Metragem Total", fmtNum(metragemTotal)+" m", "package", COLORS.brand)+
@@ -2945,18 +2966,18 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     ? '<div class="chart-meta-line" style="bottom:'+Math.min(99,(meta/escala)*100)+'%"><span class="chart-meta-tag">Meta '+fmtNum(meta)+' m</span></div>'
     : '';
 
-  return '<div class="pcp-card" style="margin-bottom:16px">'+
-    '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
-        '<h3 style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+
       '<div class="no-print"><button class="btn" onclick="openMetaDiariaModal(\''+stage+'\')">'+icon("target",14)+' '+(meta>0?"Editar meta":"Adicionar meta")+'</button></div>'+
     '</div>'+
-    '<div style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
-      '<div><div class="stat-label">Total no mês</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
-      '<div><div class="stat-label">Média por dia produzido</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
-      '<div><div class="stat-label">Dias com produção</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+diasComProd+'</div></div>'+
-      (meta>0 ? '<div><div class="stat-label">Dias que bateram a meta</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
-                '<div><div class="stat-label">% da meta do mês</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctMeta>=100?COLORS.green:(pctMeta>=60?COLORS.brand:COLORS.red))+'">'+pctMeta+'%</div></div>' : '')+
+    '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div class="chart-stat"><div class="stat-label">Total no mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Média por dia produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Dias com produção</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+diasComProd+'</div></div>'+
+      (meta>0 ? '<div class="chart-stat"><div class="stat-label">Dias que bateram a meta</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
+                '<div class="chart-stat"><div class="stat-label">% da meta do mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctMeta>=100?COLORS.green:(pctMeta>=60?COLORS.brand:COLORS.red))+'">'+pctMeta+'%</div></div>' : '')+
     '</div>'+
     '<div class="chart-wrap">'+metaLinha+barras+'</div>'+
     '<div class="chart-days">'+rotulos+'</div>'+
@@ -2971,7 +2992,7 @@ function renderAcompanhamentoScreen(){
   '</div>';
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("activity","Acompanhamento da Produção","Produção diária por etapa — dias 1 a 31, com meta configurável", acoes)+
+    screenHeaderHtml("activity","Acompanhamento da Produção","Produção diária por etapa — dias 1 a 31, com meta configurável", acoes, true)+
     '<div class="pcp-card filter-bar no-print">'+
       '<div style="min-width:150px"><label class="field-label">Mês</label><select class="field-select" onchange="updateAcompFiltro(\'mes\', this.value)">'+
         MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
@@ -2985,9 +3006,11 @@ function renderAcompanhamentoScreen(){
         '</select></div>'+
       '<button class="btn btn-ghost" onclick="clearAcompFiltro()">Limpar filtros</button>'+
     '</div>'+
-    '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Acompanhamento da Produção — '+MESES[Number(f.mes)-1]+'/'+f.ano+'</div></div>'+
-    producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand)+
-    producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00");
+    '<div class="acomp-print-page">'+
+      '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Acompanhamento da Produção — '+MESES[Number(f.mes)-1]+'/'+f.ano+'</div></div>'+
+      producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand)+
+      producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00")+
+    '</div>';
 }
 
 /* ============================== NAV / LOGIN / INIT ============================== */
@@ -2997,11 +3020,11 @@ const NAV_GROUPS = [
   ]},
   { id:"programacao", title:"Programação", items:[
     {id:"pedidos", label:"Lançamentos", icon:"dashboard"},
-    {id:"prog-perfilar", label:"Programação Perfiladeira", icon:"calendar"},
-    {id:"prog-pintura", label:"Programação Pintura", icon:"droplet"},
-    {id:"prog-colagem", label:"Programação Coladeira", icon:"layers"},
-    {id:"prog-entrega", label:"Programação Entregas", icon:"truck"},
-    {id:"entregues", label:"Pedidos Entregues Concluídos", icon:"checkCircle"},
+    {id:"prog-perfilar", label:"Prog. Perfiladeira", icon:"calendar"},
+    {id:"prog-pintura", label:"Prog. Pintura", icon:"droplet"},
+    {id:"prog-colagem", label:"Prog. Coladeira", icon:"layers"},
+    {id:"prog-entrega", label:"Prog. Entregas", icon:"truck"},
+    {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
     {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
   ]},

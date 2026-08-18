@@ -249,6 +249,7 @@ const DEFAULT_CONFIG_VALUES = {
   metas_entrega: [800,800,800,800,800,400],
   meta_diaria_colagem: 800,
   meta_diaria_perfilar: 800,
+  fatores_producao_perfilar: {},
 };
 async function configGet(key){
   const { data, error } = await sb.from("app_config").select("value").eq("key", key).maybeSingle();
@@ -583,6 +584,8 @@ const STATE = {
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false},
   fatorConversaoFiltro:{tipo:"",produto:""},
+  notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
+  precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
   sidebarHidden:false,
   acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"},
   metasDiarias:{colagem:800, perfilar:800},
@@ -592,7 +595,7 @@ const STATE = {
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
   baixasManual:[], transferencias:[], fatorConversaoHistorico:[],
-  tipoOptions:[], cumeeiraOptions:[],
+  tipoOptions:[], cumeeiraOptions:[], fatoresProducaoPerfilar:{},
 };
 function initLocalDefaults(){
   const ws = toISO(mondayOfCurrentWeek());
@@ -637,9 +640,10 @@ async function loadAllData(){
   STATE.transferencias = (transfR.data||[]).map(mapTransferenciaFromRow);
   STATE.fatorConversaoHistorico = (fatorHistR.data||[]).map(mapFatorHistoricoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
+    configGet("fatores_producao_perfilar"),
   ]);
   const [metaDiaColagem, metaDiaPerfilar] = await Promise.all([
     configGet("meta_diaria_colagem"), configGet("meta_diaria_perfilar"),
@@ -654,6 +658,7 @@ async function loadAllData(){
   STATE.stageState.pintura.metas = metasPintura || DEFAULT_CONFIG_VALUES.metas_pintura;
   STATE.stageState.colagem.metas = metasColagem || DEFAULT_CONFIG_VALUES.metas_colagem;
   STATE.stageState.entrega.metas = metasEntrega || DEFAULT_CONFIG_VALUES.metas_entrega;
+  STATE.fatoresProducaoPerfilar = (fatoresProducaoPerfilar && typeof fatoresProducaoPerfilar==="object") ? fatoresProducaoPerfilar : DEFAULT_CONFIG_VALUES.fatores_producao_perfilar;
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   STATE.dataLoaded = true;
@@ -1747,6 +1752,21 @@ async function submitQuickAdd(type){
     }
     newObj={id:val}; selectId="f-motivoPerda";
   }
+  else if(type==="tipoPedido"){
+    if(!STATE.tipoOptions.includes(val)){
+      STATE.tipoOptions.push(val);
+      const ok = await configSet("tipo_options", STATE.tipoOptions);
+      if(!ok){ STATE.tipoOptions.pop(); return; }
+    }
+    const tipoInput = document.getElementById("f-pedido-tipo");
+    if(tipoInput) tipoInput.value = val;
+    const dl = document.getElementById("tipo-list");
+    if(dl && !Array.from(dl.options).some(o=>o.value===val)){
+      const opt2 = document.createElement("option"); opt2.value = val; dl.appendChild(opt2);
+    }
+    cancelQuickAdd(type);
+    return;
+  }
   else if(type==="tipoMaterial"){
     if(!STATE.materialTipos.includes(val)){
       STATE.materialTipos.push(val);
@@ -1812,8 +1832,9 @@ function openPedidoModal(mode, id){
       '<form id="pedido-form" onsubmit="return submitPedidoForm(event,\''+mode+'\',\''+(id||"")+'\')">'+
         '<div class="grid-3">'+
 
-          '<div><label class="field-label">Tipo</label><input class="field-input" list="tipo-list" name="tipo" value="'+escapeAttr(f.tipo)+'" placeholder="Ex: Sanduíche"/>'+
-            '<datalist id="tipo-list">'+STATE.tipoOptions.map(t=>'<option value="'+escapeAttr(t)+'">').join("")+'</datalist></div>'+
+          '<div><label class="field-label">Tipo</label><input class="field-input" id="f-pedido-tipo" list="tipo-list" name="tipo" value="'+escapeAttr(f.tipo)+'" placeholder="Ex: Sanduíche"/>'+
+            '<datalist id="tipo-list">'+STATE.tipoOptions.map(t=>'<option value="'+escapeAttr(t)+'">').join("")+'</datalist>'+
+            '<div id="qa-tipoPedido">'+quickAddButtonHtml("tipoPedido")+'</div></div>'+
           '<div><label class="field-label">OP (nº do pedido)</label><input class="field-input" name="op" value="'+escapeAttr(f.op)+'"/></div>'+
           '<div><label class="field-label">Data de Entrega</label><input class="field-input" type="date" name="dataEntrega" value="'+(f.dataEntrega||"")+'"/></div>'+
 
@@ -2780,20 +2801,41 @@ async function addNota(nota){
   }).select().single();
   if(error){ sbErrorToast("lançar nota de entrada", error); return false; }
   STATE.notas.unshift(mapNotaFromRow(row));
-  const writes = [];
+  // Agrupa itens por material (uma nota pode ter mais de uma linha do mesmo material) para
+  // evitar leituras concorrentes do mesmo m.estoque/m.valorUnitario e calcular o custo médio corretamente.
+  const porMaterial = {};
   nota.itens.forEach(it=>{
-    const m = STATE.materiais.find(x=>x.id===it.materialId);
+    const k = it.materialId;
+    if(!porMaterial[k]) porMaterial[k] = {qtd:0, valorTotal:0, temValor:false};
+    porMaterial[k].qtd += Number(it.quantidade||0);
+    if(Number(it.valorUnitario)>0){
+      porMaterial[k].valorTotal += Number(it.quantidade||0)*Number(it.valorUnitario||0);
+      porMaterial[k].temValor = true;
+    }
+  });
+  const writes = [];
+  Object.keys(porMaterial).forEach(materialId=>{
+    const m = STATE.materiais.find(x=>x.id===materialId);
     if(!m) return;
-    const novoEstoque = Math.round((m.estoque+it.quantidade)*100)/100;
+    const agg = porMaterial[materialId];
+    const estoqueAnterior = Number(m.estoque||0);
+    const custoAnterior = Number(m.valorUnitario||0);
+    const novoEstoque = Math.round((estoqueAnterior+agg.qtd)*100)/100;
     const patch = {estoque:novoEstoque};
-    if(it.valorUnitario>0) patch.valor_unitario = it.valorUnitario;
+    let novoCustoMedio = custoAnterior;
+    if(agg.temValor){
+      const valorTotalAnterior = estoqueAnterior*custoAnterior;
+      novoCustoMedio = novoEstoque>0 ? (valorTotalAnterior+agg.valorTotal)/novoEstoque : custoAnterior;
+      novoCustoMedio = Math.round(novoCustoMedio*10000)/10000;
+      patch.valor_unitario = novoCustoMedio;
+    }
     writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(r=>{
       if(r.error){ sbErrorToast("atualizar estoque de "+m.nome, r.error); }
-      else { m.estoque = novoEstoque; if(it.valorUnitario>0) m.valorUnitario = it.valorUnitario; }
+      else { m.estoque = novoEstoque; if(agg.temValor) m.valorUnitario = novoCustoMedio; }
     }));
   });
   await Promise.all(writes);
-  showToast("success","Nota de entrada lançada, estoque e custo atualizados.");
+  showToast("success","Nota de entrada lançada, estoque atualizado e custo médio recalculado.");
   return true;
 }
 async function updateNota(id, nota){
@@ -2803,30 +2845,51 @@ async function updateNota(id, nota){
     data:nota.data, fornecedor:nota.fornecedor||null, numero_nota:nota.numeroNota||null, itens:nota.itens,
   }).eq("id", id);
   if(error){ sbErrorToast("atualizar nota de entrada", error); return false; }
-  const deltaQtd = {};
-  old.itens.forEach(it=>{ deltaQtd[it.materialId] = (deltaQtd[it.materialId]||0) - Number(it.quantidade||0); });
-  nota.itens.forEach(it=>{ deltaQtd[it.materialId] = (deltaQtd[it.materialId]||0) + Number(it.quantidade||0); });
-  const novoValorPorMaterial = {};
-  nota.itens.forEach(it=>{ if(it.valorUnitario>0) novoValorPorMaterial[it.materialId] = it.valorUnitario; });
-  const materialIds = new Set(Object.keys(deltaQtd).concat(Object.keys(novoValorPorMaterial)));
+  // Custo médio ponderado é cumulativo (estoque × custo médio = valor total em estoque), então
+  // corrigir uma nota já lançada equivale a aplicar só a DIFERENÇA entre os valores antigos e os novos.
+  const oldByMat = {};
+  old.itens.forEach(it=>{
+    const k = it.materialId;
+    if(!oldByMat[k]) oldByMat[k] = {qtd:0, valorTotal:0};
+    oldByMat[k].qtd += Number(it.quantidade||0);
+    oldByMat[k].valorTotal += Number(it.quantidade||0)*Number(it.valorUnitario||0);
+  });
+  const newByMat = {};
+  nota.itens.forEach(it=>{
+    const k = it.materialId;
+    if(!newByMat[k]) newByMat[k] = {qtd:0, valorTotal:0};
+    newByMat[k].qtd += Number(it.quantidade||0);
+    newByMat[k].valorTotal += Number(it.quantidade||0)*Number(it.valorUnitario||0);
+  });
+  const materialIds = new Set(Object.keys(oldByMat).concat(Object.keys(newByMat)));
   const writes = [];
   materialIds.forEach(materialId=>{
     const m = STATE.materiais.find(x=>x.id===materialId);
     if(!m) return;
-    const diff = deltaQtd[materialId]||0;
-    const patch = {};
-    let novoEstoque = m.estoque;
-    if(diff){ novoEstoque = Math.round((m.estoque+diff)*100)/100; patch.estoque = novoEstoque; }
-    if(novoValorPorMaterial[materialId]!=null) patch.valor_unitario = novoValorPorMaterial[materialId];
-    if(Object.keys(patch).length===0) return;
+    const o = oldByMat[materialId] || {qtd:0, valorTotal:0};
+    const nw = newByMat[materialId] || {qtd:0, valorTotal:0};
+    const diffQtd = nw.qtd - o.qtd;
+    const diffValorTotal = nw.valorTotal - o.valorTotal;
+    if(!diffQtd && !diffValorTotal) return;
+    const estoqueAnterior = Number(m.estoque||0);
+    const custoAnterior = Number(m.valorUnitario||0);
+    const novoEstoque = Math.round((estoqueAnterior+diffQtd)*100)/100;
+    const patch = {estoque:novoEstoque};
+    let novoCustoMedio = custoAnterior;
+    if(diffValorTotal){
+      const valorTotalAtual = estoqueAnterior*custoAnterior;
+      novoCustoMedio = novoEstoque>0 ? (valorTotalAtual+diffValorTotal)/novoEstoque : custoAnterior;
+      novoCustoMedio = Math.round(novoCustoMedio*10000)/10000;
+      patch.valor_unitario = novoCustoMedio;
+    }
     writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(r=>{
       if(r.error){ sbErrorToast("ajustar estoque/custo de "+m.nome, r.error); }
-      else { if(patch.estoque!=null) m.estoque = novoEstoque; if(patch.valor_unitario!=null) m.valorUnitario = patch.valor_unitario; }
+      else { m.estoque = novoEstoque; if(diffValorTotal) m.valorUnitario = novoCustoMedio; }
     }));
   });
   await Promise.all(writes);
   old.data = nota.data; old.fornecedor = nota.fornecedor; old.numeroNota = nota.numeroNota; old.itens = nota.itens;
-  showToast("success","Nota atualizada e estoque ajustado pela diferença.");
+  showToast("success","Nota atualizada e custo médio recalculado pela diferença.");
   return true;
 }
 function confirmDeleteNota(id){
@@ -2929,7 +2992,14 @@ function notaItemRowHtml(item){
   const quantidade = item.quantidade!=null && item.quantidade!=="" ? item.quantidade : "";
   const unidade = item.unidade || "";
   const valorUnitario = item.valorUnitario ? item.valorUnitario : "";
+  const kgTotais = item.kgTotais ? item.kgTotais : "";
+  const custoPorKg = item.custoPorKg ? item.custoPorKg : "";
+  const conversaoAtiva = Number(item.kgTotais||0) > 0;
   const fatorAtual = materialId ? fatorVigenteDoMaterial(materialId) : 0;
+  const fatorExibido = (conversaoAtiva && Number(quantidade)>0) ? (Number(kgTotais)/Number(quantidade)) : fatorAtual;
+  const readonlyAttr = conversaoAtiva ? 'readonly style="background:var(--panel-alt)"' : '';
+  const qtdPreviewTxt = quantidade ? fmtNum(Number(quantidade))+" m" : "0,00 m";
+  const valorPreviewTxt = valorUnitario ? fmtBRL(Number(valorUnitario))+"/m" : "R$ 0,00/m";
   return '<div class="nota-item-row pcp-card" style="padding:12px;margin-bottom:0">'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
       '<select class="field-select nota-item-material" onchange="onNotaItemMaterialChange(this)" style="flex:1">'+
@@ -2939,21 +3009,21 @@ function notaItemRowHtml(item){
       '<button type="button" class="icon-btn" onclick="this.closest(\'.nota-item-row\').remove()">'+icon("x",14)+'</button>'+
     '</div>'+
     '<label class="nota-item-conv-check-label" style="display:flex;align-items:center;gap:7px;font-size:12px;color:'+COLORS.textMuted+';cursor:pointer;margin-bottom:6px">'+
-      '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" '+(fatorAtual<=0?"disabled":"")+'/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
-    '<p class="nota-item-conv-hint" style="display:'+(materialId && fatorAtual<=0 ? "block":"none")+';font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
-    '<div class="nota-item-conv-fields" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding:10px;background:var(--panel-alt);border-radius:6px">'+
-      '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="0.01" placeholder="0" oninput="recalcNotaItemConversao(this)"/></div>'+
-      '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="0.01" placeholder="0,00" oninput="recalcNotaItemConversao(this)"/></div>'+
-      '<div><label class="field-label">Fator de conversão (kg/m)</label><input class="field-input nota-item-fator-kg" type="number" step="0.0001" placeholder="0" readonly title="Vem do cadastro em Fator de Conversão — não editável aqui" style="background:var(--panel-alt);cursor:not-allowed"/></div>'+
+      '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" '+(conversaoAtiva?"checked":"")+' '+(fatorAtual<=0 && !conversaoAtiva?"disabled":"")+'/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
+    '<p class="nota-item-conv-hint" style="display:'+(materialId && fatorAtual<=0 && !conversaoAtiva ? "block":"none")+';font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
+    '<div class="nota-item-conv-fields" style="display:'+(conversaoAtiva?"grid":"none")+';grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding:10px;background:var(--panel-alt);border-radius:6px">'+
+      '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="0.01" placeholder="0" value="'+kgTotais+'" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="0.01" placeholder="0,00" value="'+custoPorKg+'" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Fator de conversão (kg/m)</label><input class="field-input nota-item-fator-kg" type="number" step="0.0001" placeholder="0" value="'+(fatorExibido||"")+'" readonly title="Vem do cadastro em Fator de Conversão — não editável aqui" style="background:var(--panel-alt);cursor:not-allowed"/></div>'+
       '<div style="grid-column:1 / -1;display:flex;gap:18px;font-size:12px;color:'+COLORS.text+';padding-top:6px;border-top:1px dashed var(--steel-border)">'+
-        '<div>Quantidade convertida: <strong class="nota-item-conv-qtd" style="font-family:\'IBM Plex Mono\',monospace">0,00 m</strong></div>'+
-        '<div>Custo calculado: <strong class="nota-item-conv-valor" style="font-family:\'IBM Plex Mono\',monospace">R$ 0,00/m</strong></div>'+
+        '<div>Quantidade convertida: <strong class="nota-item-conv-qtd" style="font-family:\'IBM Plex Mono\',monospace">'+qtdPreviewTxt+'</strong></div>'+
+        '<div>Custo calculado: <strong class="nota-item-conv-valor" style="font-family:\'IBM Plex Mono\',monospace">'+valorPreviewTxt+'</strong></div>'+
       '</div>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'+
-      '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0" value="'+quantidade+'"/></div>'+
+      '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0" value="'+quantidade+'" '+readonlyAttr+'/></div>'+
       '<div><label class="field-label">Unidade</label><input class="field-input nota-item-unidade" type="text" placeholder="m" value="'+escapeAttr(unidade)+'"/></div>'+
-      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="0.01" placeholder="0,00" value="'+valorUnitario+'"/></div>'+
+      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="0.01" placeholder="0,00" value="'+valorUnitario+'" '+readonlyAttr+'/></div>'+
     '</div>'+
   '</div>';
 }
@@ -2995,7 +3065,11 @@ async function submitNotaForm(event, editId){
     const quantidade = Number(r.querySelector(".nota-item-qtd").value||0);
     const unidade = r.querySelector(".nota-item-unidade").value.trim();
     const valorUnitario = Number(r.querySelector(".nota-item-valor").value||0);
-    if(materialId && quantidade>0) itens.push({materialId, quantidade, unidade, valorUnitario});
+    const kgInput = r.querySelector(".nota-item-kg");
+    const custoKgInput = r.querySelector(".nota-item-custo-kg");
+    const kgTotais = kgInput ? Number(kgInput.value||0) : 0;
+    const custoPorKg = custoKgInput ? Number(custoKgInput.value||0) : 0;
+    if(materialId && quantidade>0) itens.push({materialId, quantidade, unidade, valorUnitario, kgTotais, custoPorKg});
   });
   if(itens.length===0) return false;
   const ok = editId ? await updateNota(editId, {data, fornecedor, numeroNota, itens}) : await addNota({data, fornecedor, numeroNota, itens});
@@ -3004,8 +3078,63 @@ async function submitNotaForm(event, editId){
   renderScreen();
   return false;
 }
+function updateNotasFiltro(key, val){ STATE.notasFiltro[key]=val; renderScreen(); }
+function clearNotasFiltro(){ STATE.notasFiltro = {produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""}; renderScreen(); }
+function notaMatchesFiltro(n, f){
+  if(f.dIni && n.data<f.dIni) return false;
+  if(f.dFim && n.data>f.dFim) return false;
+  if(f.mes && n.data.slice(5,7)!==f.mes) return false;
+  if(f.ano && n.data.slice(0,4)!==f.ano) return false;
+  if(f.produto || f.tipo){
+    const matchItem = n.itens.some(it=>{
+      const m = STATE.materiais.find(x=>x.id===it.materialId);
+      if(!m) return false;
+      if(f.tipo && m.tipo!==f.tipo) return false;
+      if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
+      return true;
+    });
+    if(!matchItem) return false;
+  }
+  return true;
+}
+function notasAggregateStats(notas){
+  let totalKg=0, totalM=0, totalValor=0;
+  notas.forEach(n=>{
+    n.itens.forEach(it=>{
+      totalKg += Number(it.kgTotais||0);
+      const unidade = it.unidade || "m";
+      if(unidade==="m") totalM += Number(it.quantidade||0);
+      totalValor += Number(it.quantidade||0)*Number(it.valorUnitario||0);
+    });
+  });
+  const custoMedio = totalM>0 ? totalValor/totalM : 0;
+  return {totalKg, totalM, totalValor, custoMedio};
+}
 function renderNotasScreen(){
-  const rows = STATE.notas.map(n=>{
+  const f = STATE.notasFiltro;
+  const notasFiltradas = STATE.notas.filter(n=>notaMatchesFiltro(n, f));
+  const stats = notasAggregateStats(notasFiltradas);
+  const anos = Array.from(new Set(STATE.notas.map(n=>n.data?n.data.slice(0,4):null).filter(Boolean).concat([String(new Date().getFullYear())]))).sort();
+  const statsHtml = '<div class="stat-row">'+
+    statCardHtml("Total Comprado (Kg)", fmtNum(stats.totalKg)+" kg", "package", COLORS.brand)+
+    statCardHtml("Total Comprado (m)", fmtNum(stats.totalM)+" m", "boxes", COLORS.green)+
+    statCardHtml("Valor Total Comprado", fmtBRL(stats.totalValor), "trendingUp", COLORS.brand)+
+    statCardHtml("Custo Médio por Metro", fmtBRL(stats.custoMedio)+"/m", "target")+
+  '</div>';
+  const filterBar = '<div class="pcp-card filter-bar no-print">'+
+    '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" value="'+escapeAttr(f.produto)+'" placeholder="Buscar produto…" onchange="updateNotasFiltro(\'produto\', this.value)"/></div>'+
+    '<div style="min-width:160px"><label class="field-label">Tipo de Material</label><select class="field-select" onchange="updateNotasFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
+      uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
+      '</select></div>'+
+    '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updateNotasFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
+      MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
+    '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateNotasFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
+      anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
+    '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateNotasFiltro(\'dIni\', this.value)"/></div>'+
+    '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateNotasFiltro(\'dFim\', this.value)"/></div>'+
+    '<button class="btn btn-ghost" onclick="clearNotasFiltro()">Limpar filtros</button>'+
+  '</div>';
+  const rows = notasFiltradas.map(n=>{
     const itensStr = n.itens.map(it=>{
       const m=STATE.materiais.find(x=>x.id===it.materialId);
       const unidade = it.unidade || (m?m.unidade:"m");
@@ -3016,13 +3145,183 @@ function renderNotasScreen(){
       '<td class="no-print"><div style="display:flex;gap:6px"><button class="icon-btn" title="Editar nota" onclick="openNotaModal(\''+n.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" title="Remover nota" onclick="confirmDeleteNota(\''+n.id+'\')">'+icon("trash",13)+'</button></div></td>'+
     '</tr>';
   }).join("");
-  const table = STATE.notas.length===0
-    ? emptyStateHtml('Nenhuma nota de entrada lançada. Clique em "Nova Nota" para adicionar.')
+  const table = notasFiltradas.length===0
+    ? emptyStateHtml(STATE.notas.length===0 ? 'Nenhuma nota de entrada lançada. Clique em "Nova Nota" para adicionar.' : 'Nenhuma nota encontrada para os filtros selecionados.')
     : '<table class="pcp-table"><thead><tr><th>Data</th><th>Fornecedor</th><th>Nº Nota</th><th>Itens</th><th>Valor Total</th><th class="no-print" style="width:90px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
   document.getElementById("content").innerHTML =
     screenHeaderHtml("package","Notas Fiscais","Lançamentos que somam ao estoque de matéria-prima",
       '<button class="btn btn-primary" onclick="openNotaModal()">'+icon("plus",14)+' Nova Nota</button>')+
+    statsHtml +
+    filterBar +
     '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+
+/* ============================== ACOMPANHAMENTO DE PREÇO POR PRODUTO (INFLAÇÃO INTERNA) ============================== */
+const MESES_ABREV = MESES.map(function(n){ return n.slice(0,3).toLowerCase(); });
+function fmtMesAno(mesAno){
+  const parts = mesAno.split("-");
+  const y = parts[0], m = Number(parts[1]);
+  return MESES_ABREV[m-1]+"/"+y.slice(2);
+}
+function monthRangeList(startMesAno, endMesAno){
+  const out = [];
+  const sp = startMesAno.split("-"); let y = Number(sp[0]), m = Number(sp[1]);
+  const ep = endMesAno.split("-"); const ey = Number(ep[0]), em = Number(ep[1]);
+  let guard = 0;
+  while((y<ey || (y===ey && m<=em)) && guard<600){
+    out.push(y+"-"+pad2(m));
+    m++; if(m>12){ m=1; y++; }
+    guard++;
+  }
+  return out;
+}
+function variacaoPct(de, para){ return de>0 ? ((para-de)/de)*100 : 0; }
+function fmtPct(v){ return (v>=0?"+":"")+v.toFixed(1).replace(".",",")+"%"; }
+function itensPrecoDoMaterial(materialId, dIni, dFim){
+  const out = [];
+  STATE.notas.forEach(n=>{
+    if(!n.data) return;
+    if(dIni && n.data<dIni) return;
+    if(dFim && n.data>dFim) return;
+    n.itens.forEach(it=>{
+      if(it.materialId!==materialId) return;
+      if(!(Number(it.valorUnitario)>0)) return;
+      out.push({data:n.data, valorUnitario:Number(it.valorUnitario), quantidade:Number(it.quantidade||0)});
+    });
+  });
+  return out.sort(function(a,b){ return a.data.localeCompare(b.data); });
+}
+function precoMensalDoMaterial(materialId, dIni, dFim){
+  const itens = itensPrecoDoMaterial(materialId, dIni, dFim);
+  const porMes = {};
+  itens.forEach(it=>{
+    const mesAno = it.data.slice(0,7);
+    if(!porMes[mesAno]) porMes[mesAno] = {somaValor:0, somaQtd:0};
+    const qtd = it.quantidade>0 ? it.quantidade : 1;
+    porMes[mesAno].somaValor += it.valorUnitario*qtd;
+    porMes[mesAno].somaQtd += qtd;
+  });
+  return Object.keys(porMes).sort().map(function(mesAno){
+    const d = porMes[mesAno];
+    return {mesAno:mesAno, precoMedio: d.somaQtd>0 ? d.somaValor/d.somaQtd : 0, qtd: d.somaQtd};
+  });
+}
+function precoRankingPorPeriodo(tipo, dIni, dFim){
+  const out = [];
+  STATE.materiais.forEach(function(m){
+    if(tipo && m.tipo!==tipo) return;
+    const mensal = precoMensalDoMaterial(m.id, dIni, dFim);
+    if(mensal.length<1) return;
+    const inicial = mensal[0].precoMedio;
+    const final = mensal[mensal.length-1].precoMedio;
+    out.push({material:m, inicial:inicial, final:final, variacao:variacaoPct(inicial,final), pontos:mensal.length});
+  });
+  return out.sort(function(a,b){ return b.variacao-a.variacao; });
+}
+function priceTrendChartHtml(mensal, cor){
+  if(mensal.length===0) return '<p style="font-size:12.5px;color:'+COLORS.textMuted+';padding:20px 0;text-align:center">Nenhum preço registrado neste período.</p>';
+  const meses = monthRangeList(mensal[0].mesAno, mensal[mensal.length-1].mesAno);
+  const porMes = {}; mensal.forEach(function(x){ porMes[x.mesAno]=x; });
+  const valores = meses.map(function(mesAno){ return porMes[mesAno] ? porMes[mesAno].precoMedio : null; });
+  const maxValor = Math.max.apply(null, valores.filter(function(v){ return v!=null; }).concat([1]));
+  const escala = maxValor*1.15;
+  let anterior = null;
+  const barras = meses.map(function(mesAno,i){
+    const v = valores[i];
+    const alturaPct = (v!=null && escala>0) ? Math.min(100,(v/escala)*100) : 0;
+    let variacaoTxt = "";
+    if(v!=null && anterior!=null) variacaoTxt = " · "+fmtPct(variacaoPct(anterior,v))+" vs mês anterior";
+    const corBarra = v==null ? "var(--steel-border)" : cor;
+    const tip = fmtMesAno(mesAno)+" — "+(v!=null?fmtBRL(v):"sem compra")+variacaoTxt;
+    if(v!=null) anterior = v;
+    return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
+      (v!=null ? '<div style="font-size:7.5px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+fmtNum(v)+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+'"></div>'+
+    '</div>';
+  }).join("");
+  const rotulos = meses.map(function(mesAno){ return '<div class="chart-day" style="font-size:8px">'+fmtMesAno(mesAno)+'</div>'; }).join("");
+  return '<div class="chart-wrap">'+barras+'</div><div class="chart-days">'+rotulos+'</div>';
+}
+function updatePrecoFiltro(key, val){ STATE.precoFiltro[key]=val; renderScreen(); }
+function clearPrecoFiltro(){ STATE.precoFiltro = {materialId:"",tipo:"",dIni:"",dFim:""}; renderScreen(); }
+function renderPrecoDetalheMaterial(materialId, dIni, dFim){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return emptyStateHtml("Material não encontrado.");
+  const mensal = precoMensalDoMaterial(materialId, dIni, dFim);
+  const unidade = m.unidade||"m";
+  if(mensal.length===0){
+    return '<div class="pcp-card" style="margin-top:14px">'+emptyStateHtml('Nenhuma compra com valor registrado para "'+escapeHtml(m.nome)+'" no período selecionado.')+'</div>';
+  }
+  const inicial = mensal[0].precoMedio;
+  const final = mensal[mensal.length-1].precoMedio;
+  const variacao = variacaoPct(inicial, final);
+  const corVariacao = variacao>0 ? COLORS.red : (variacao<0 ? COLORS.green : COLORS.textMuted);
+  const statsHtml = '<div class="stat-row" style="margin-top:14px">'+
+    statCardHtml("Preço em "+fmtMesAno(mensal[0].mesAno), fmtBRL(inicial)+"/"+unidade, "calendar")+
+    statCardHtml("Preço em "+fmtMesAno(mensal[mensal.length-1].mesAno), fmtBRL(final)+"/"+unidade, "calendar", COLORS.brand)+
+    statCardHtml("Variação no período", fmtPct(variacao), "trendingUp", corVariacao)+
+  '</div>';
+  const chart = '<div class="pcp-card" style="margin-top:14px">'+
+    '<div style="display:flex;align-items:center;gap:9px;margin-bottom:14px">'+icon("trendingUp",17,COLORS.brand)+
+      '<h3 style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+escapeHtml(m.nome)+' — preço médio por mês (R$/'+unidade+')</h3></div>'+
+    priceTrendChartHtml(mensal, COLORS.brand)+
+  '</div>';
+  let anterior = null;
+  const rows = mensal.map(function(x){
+    const variacaoMes = anterior!=null ? variacaoPct(anterior, x.precoMedio) : null;
+    anterior = x.precoMedio;
+    const variacaoCell = variacaoMes==null
+      ? '<span style="color:'+COLORS.textMuted+'">—</span>'
+      : '<span style="color:'+(variacaoMes>0?COLORS.red:(variacaoMes<0?COLORS.green:COLORS.textMuted))+';font-weight:600">'+fmtPct(variacaoMes)+'</span>';
+    return '<tr><td>'+fmtMesAno(x.mesAno)+'</td><td style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(x.qtd)+' '+unidade+'</td><td style="font-family:\'IBM Plex Mono\',monospace;font-weight:600">'+fmtBRL(x.precoMedio)+'</td><td>'+variacaoCell+'</td></tr>';
+  }).join("");
+  const table = '<div class="pcp-card" style="padding:0;overflow:auto;margin-top:14px"><table class="pcp-table"><thead><tr><th>Mês</th><th>Qtd Comprada</th><th>Preço Médio</th><th>Variação vs mês anterior</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  return statsHtml + chart + table;
+}
+function renderPrecoRanking(tipo, dIni, dFim){
+  const ranking = precoRankingPorPeriodo(tipo, dIni, dFim);
+  if(ranking.length===0){
+    return '<div class="pcp-card" style="margin-top:14px">'+emptyStateHtml('Nenhuma compra com valor registrado no período selecionado.')+'</div>';
+  }
+  const rows = ranking.map(function(r){
+    const variacaoCell = r.pontos>=2
+      ? '<span style="color:'+(r.variacao>0?COLORS.red:(r.variacao<0?COLORS.green:COLORS.textMuted))+';font-weight:700">'+fmtPct(r.variacao)+'</span>'
+      : '<span style="color:'+COLORS.textMuted+'">—</span>';
+    return '<tr>'+
+      '<td>'+(r.material.tipo==="Bobina"?coilSwatchHtml(r.material.nome):escapeHtml(r.material.nome))+'</td>'+
+      '<td>'+escapeHtml(r.material.tipo||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(r.inicial)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(r.final)+'</td>'+
+      '<td>'+variacaoCell+'</td>'+
+      '<td style="color:'+COLORS.textMuted+'">'+r.pontos+' mês(es)</td>'+
+      '<td class="no-print"><button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="updatePrecoFiltro(\'materialId\',\''+r.material.id+'\')">Ver detalhe</button></td>'+
+    '</tr>';
+  }).join("");
+  const table = '<div class="pcp-card" style="padding:0;overflow:auto;margin-top:14px"><table class="pcp-table"><thead><tr><th>Material</th><th>Tipo</th><th>Preço Inicial</th><th>Preço Final</th><th>Variação</th><th>Amostras</th><th class="no-print">Ações</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  const hint = '<p class="no-print" style="font-size:12px;color:'+COLORS.textMuted+';margin:14px 0 0;line-height:1.5">Ordenado do maior para o menor aumento de preço no período — ajuda a identificar quais matérias-primas mais pesaram na inflação interna. Selecione um produto no filtro acima para ver o gráfico mês a mês.</p>';
+  return table + hint;
+}
+function renderPrecoProdutoScreen(){
+  const f = STATE.precoFiltro;
+  const printHeader = '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de Acompanhamento de Preço — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>';
+  const actions = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button></div>';
+  const filterBar = '<div class="pcp-card filter-bar no-print">'+
+    '<div style="min-width:220px"><label class="field-label">Produto</label><select class="field-select" onchange="updatePrecoFiltro(\'materialId\', this.value)"><option value="">Todos (ranking de variação)</option>'+
+      STATE.materiais.slice().sort(function(a,b){ return (a.nome||"").localeCompare(b.nome||""); }).map(m=>'<option value="'+m.id+'" '+(f.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' ('+m.tipo+')</option>').join("")+
+      '</select></div>'+
+    '<div style="min-width:160px"><label class="field-label">Tipo</label><select class="field-select" onchange="updatePrecoFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
+      uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
+      '</select></div>'+
+    '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updatePrecoFiltro(\'dIni\', this.value)"/></div>'+
+    '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updatePrecoFiltro(\'dFim\', this.value)"/></div>'+
+    '<button class="btn btn-ghost" onclick="clearPrecoFiltro()">Limpar filtros</button>'+
+  '</div>';
+  const body = f.materialId ? renderPrecoDetalheMaterial(f.materialId, f.dIni, f.dFim) : renderPrecoRanking(f.tipo, f.dIni, f.dFim);
+  document.getElementById("content").innerHTML =
+    printHeader +
+    screenHeaderHtml("trendingUp","Acompanhamento de Preço","Inflação interna por produto — quanto o custo de compra subiu ou caiu ao longo dos meses, com base nas Notas Fiscais lançadas", actions, true)+
+    filterBar +
+    body;
 }
 
 /* ============================== FATOR DE CONVERSÃO (KG → METRO) — COM VIGÊNCIAS ============================== */
@@ -3183,6 +3482,68 @@ function renderFatorConversaoScreen(){
 }
 
 
+/* ============================== FATOR DE PRODUÇÃO — PERFILAR (multiplicador por tipo de produto) ============================== */
+async function saveFatorProducaoPerfilar(tipo, valor){
+  const novo = Object.assign({}, STATE.fatoresProducaoPerfilar);
+  const fatorNum = Number(valor);
+  if(fatorNum>0) novo[tipo] = fatorNum; else delete novo[tipo];
+  const ok = await configSet("fatores_producao_perfilar", novo);
+  if(!ok) return;
+  STATE.fatoresProducaoPerfilar = novo;
+  showToast("success","Fator de produção atualizado.");
+}
+function openAdicionarTipoProducaoModal(){
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Novo Tipo de Produto</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Tipo de produto</label><input class="field-input" id="novo-tipo-producao-nome" placeholder="Ex.: Telha Sanduíche"/></div>'+
+        '<div style="margin-top:12px"><label class="field-label">Fator de multiplicação</label><input class="field-input" type="number" step="0.1" min="0.1" id="novo-tipo-producao-fator" value="1" placeholder="Ex.: 2"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">A metragem de cada pedido desse tipo será multiplicada por este fator apenas no gráfico de Acompanhamento — Perfilar.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="submitNovoTipoProducao()">Adicionar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function submitNovoTipoProducao(){
+  const nomeInput = document.getElementById("novo-tipo-producao-nome");
+  const fatorInput = document.getElementById("novo-tipo-producao-fator");
+  const nome = (nomeInput.value||"").trim();
+  const fator = Number(fatorInput.value||1);
+  if(!nome){ showToast("error","Informe o tipo de produto."); return; }
+  if(!STATE.tipoOptions.some(t=>normTipoStr(t)===normTipoStr(nome))){
+    STATE.tipoOptions.push(nome);
+    await configSet("tipo_options", STATE.tipoOptions);
+  }
+  await saveFatorProducaoPerfilar(nome, fator);
+  closeModal();
+  renderScreen();
+}
+function renderFatorProducaoPerfilarScreen(){
+  const tipos = Array.from(new Set(STATE.tipoOptions.concat(Object.keys(STATE.fatoresProducaoPerfilar||{})))).sort(function(a,b){ return a.localeCompare(b); });
+  const rows = tipos.map(function(tipo){
+    const fatorAtual = fatorProducaoPerfilarPara(tipo);
+    const exemplo = fatorAtual!==1
+      ? '<span style="color:'+COLORS.textMuted+'">100 m de pedido → '+fmtNum(100*fatorAtual)+' m no gráfico</span>'
+      : '<span style="color:'+COLORS.textMuted+'">Sem multiplicação (1x)</span>';
+    return '<tr>'+
+      '<td>'+escapeHtml(tipo)+'</td>'+
+      '<td style="max-width:160px"><input class="field-input" type="number" step="0.1" min="0.1" style="max-width:120px;font-family:\'IBM Plex Mono\',monospace" value="'+fatorAtual+'" onchange="saveFatorProducaoPerfilar(\''+escapeAttr(tipo)+'\', this.value)"/></td>'+
+      '<td>'+exemplo+'</td>'+
+    '</tr>';
+  }).join("");
+  const table = tipos.length===0
+    ? emptyStateHtml('Nenhum tipo de produto cadastrado ainda.')
+    : '<table class="pcp-table"><thead><tr><th>Tipo de Produto</th><th>Fator de Multiplicação</th><th>Exemplo</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("sliders","Fator Produção Perfilar","Multiplicador por tipo de produto — aplicado apenas ao gráfico de Acompanhamento da Produção (Perfilar)",
+      '<button class="btn btn-primary" onclick="openAdicionarTipoProducaoModal()">'+icon("plus",14)+' Novo Tipo</button>')+
+    '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 14px;line-height:1.5">Exemplo: cadastrando "Telha Sanduíche" com fator 2, todo pedido desse tipo passa a contar em dobro no gráfico "Perfilar — produção por dia" (Acompanhamento da Produção). Os demais gráficos, a Programação Perfiladeira e o estoque não são afetados — o fator só entra nesse acompanhamento.</p>'+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+
+
 /* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
 function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
 function clearAcompFiltro(){
@@ -3198,6 +3559,15 @@ function stageConcluido(p, stage){
   if(iAtual===-1) return false;
   return iAtual > iStage;
 }
+function normTipoStr(s){ return (s||"").trim().toLowerCase(); }
+function fatorProducaoPerfilarPara(tipo){
+  if(!tipo) return 1;
+  const alvo = normTipoStr(tipo);
+  const mapa = STATE.fatoresProducaoPerfilar || {};
+  const chave = Object.keys(mapa).find(function(k){ return normTipoStr(k)===alvo; });
+  const val = chave ? Number(mapa[chave]) : 1;
+  return val>0 ? val : 1;
+}
 function producaoDiariaPorEtapa(stage){
   const f = STATE.acompFiltro;
   const dias = new Array(31).fill(0);
@@ -3211,7 +3581,8 @@ function producaoDiariaPorEtapa(stage){
     if(f.base==="concl" && !stageConcluido(p, stage)) return;
     const d = Number(p.dataProg.slice(8,10));
     if(!(d>=1 && d<=31)) return;
-    dias[d-1] += Number(p.metragem||0);
+    const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
+    dias[d-1] += Number(p.metragem||0)*fator;
     pedidosDia[d-1] += 1;
   });
   return {dias:dias, pedidos:pedidosDia};
@@ -3356,12 +3727,18 @@ function producaoChartHtml(stage, titulo, iconName, cor){
         }).join("")+
       '</div>';
 
+  const temFatorAplicado = stage==="perfilar" && Object.keys(STATE.fatoresProducaoPerfilar||{}).length>0;
+  const fatorNotaHtml = temFatorAplicado
+    ? '<p class="no-print" style="font-size:11px;color:'+COLORS.textMuted+';margin:-6px 0 14px;line-height:1.4">Inclui fatores de multiplicação por tipo de produto cadastrados em <a href="#" onclick="setScreen(\'fatorProducaoPerfilar\');return false" style="color:'+COLORS.brand+'">Fator Produção Perfilar</a>.</p>'
+    : '';
+
   return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
         '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+
       '<div class="no-print"><button class="btn" onclick="openMetaDiariaModal(\''+stage+'\')">'+icon("target",14)+' '+(meta>0?"Editar meta":"Adicionar meta")+'</button></div>'+
     '</div>'+
+    fatorNotaHtml+
     '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div class="chart-stat"><div class="stat-label">Total no mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
       '<div class="chart-stat"><div class="stat-label">Média por dia produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
@@ -3428,10 +3805,12 @@ const NAV_GROUPS = [
     {id:"transferencia", label:"Transferência de Estoque", icon:"repeat"},
     {id:"movimentacao", label:"Movimentação de Estoque", icon:"trendingUp"},
     {id:"notas", label:"Notas Fiscais", icon:"package"},
+    {id:"precoProduto", label:"Acompanhamento de Preço", icon:"trendingUp"},
   ]},
   { id:"cadastros", title:"Cadastros", items:[
     {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
     {id:"fatorConversao", label:"Fator de Conversão", icon:"repeat"},
+    {id:"fatorProducaoPerfilar", label:"Fator Produção Perfilar", icon:"sliders"},
     {id:"motoristas", label:"Motoristas", icon:"truck"},
     {id:"cidades", label:"Cidades", icon:"mapPin"},
     {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
@@ -3528,8 +3907,10 @@ function renderScreen(){
   else if(STATE.screen==="transferencia") renderTransferenciaScreen();
   else if(STATE.screen==="movimentacao") renderMovimentacaoScreen();
   else if(STATE.screen==="notas") renderNotasScreen();
+  else if(STATE.screen==="precoProduto") renderPrecoProdutoScreen();
   else if(STATE.screen==="materiais") renderGenericScreen("material");
   else if(STATE.screen==="fatorConversao") renderFatorConversaoScreen();
+  else if(STATE.screen==="fatorProducaoPerfilar") renderFatorProducaoPerfilarScreen();
   else if(STATE.screen==="motoristas") renderGenericScreen("motorista");
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");

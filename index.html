@@ -2794,6 +2794,79 @@ async function addNota(nota){
   });
   await Promise.all(writes);
   showToast("success","Nota de entrada lançada, estoque e custo atualizados.");
+  return true;
+}
+async function updateNota(id, nota){
+  const old = STATE.notas.find(x=>x.id===id);
+  if(!old) return false;
+  const { error } = await sb.from("notas").update({
+    data:nota.data, fornecedor:nota.fornecedor||null, numero_nota:nota.numeroNota||null, itens:nota.itens,
+  }).eq("id", id);
+  if(error){ sbErrorToast("atualizar nota de entrada", error); return false; }
+  const deltaQtd = {};
+  old.itens.forEach(it=>{ deltaQtd[it.materialId] = (deltaQtd[it.materialId]||0) - Number(it.quantidade||0); });
+  nota.itens.forEach(it=>{ deltaQtd[it.materialId] = (deltaQtd[it.materialId]||0) + Number(it.quantidade||0); });
+  const novoValorPorMaterial = {};
+  nota.itens.forEach(it=>{ if(it.valorUnitario>0) novoValorPorMaterial[it.materialId] = it.valorUnitario; });
+  const materialIds = new Set(Object.keys(deltaQtd).concat(Object.keys(novoValorPorMaterial)));
+  const writes = [];
+  materialIds.forEach(materialId=>{
+    const m = STATE.materiais.find(x=>x.id===materialId);
+    if(!m) return;
+    const diff = deltaQtd[materialId]||0;
+    const patch = {};
+    let novoEstoque = m.estoque;
+    if(diff){ novoEstoque = Math.round((m.estoque+diff)*100)/100; patch.estoque = novoEstoque; }
+    if(novoValorPorMaterial[materialId]!=null) patch.valor_unitario = novoValorPorMaterial[materialId];
+    if(Object.keys(patch).length===0) return;
+    writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(r=>{
+      if(r.error){ sbErrorToast("ajustar estoque/custo de "+m.nome, r.error); }
+      else { if(patch.estoque!=null) m.estoque = novoEstoque; if(patch.valor_unitario!=null) m.valorUnitario = patch.valor_unitario; }
+    }));
+  });
+  await Promise.all(writes);
+  old.data = nota.data; old.fornecedor = nota.fornecedor; old.numeroNota = nota.numeroNota; old.itens = nota.itens;
+  showToast("success","Nota atualizada e estoque ajustado pela diferença.");
+  return true;
+}
+function confirmDeleteNota(id){
+  const n = STATE.notas.find(x=>x.id===id);
+  if(!n) return;
+  const itensStr = n.itens.map(it=>{
+    const m = STATE.materiais.find(x=>x.id===it.materialId);
+    return (m?escapeHtml(m.nome):"?")+" (-"+fmtNum(it.quantidade)+" "+(it.unidade||"m")+")";
+  }).join(", ");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Remover Nota de Entrada</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0 0 8px">Remover a nota Nº '+escapeHtml(n.numeroNota||"—")+' de '+fmtDateBR(n.data)+(n.fornecedor?(" ("+escapeHtml(n.fornecedor)+")"):"")+'?</p>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:12.5px;line-height:1.5;margin:0">O estoque será estornado: '+itensStr+'.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-danger" onclick="doDeleteNota(\''+id+'\')">Remover</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function doDeleteNota(id){
+  const n = STATE.notas.find(x=>x.id===id);
+  if(!n){ closeModal(); return; }
+  const { error } = await sb.from("notas").delete().eq("id", id);
+  if(error){ sbErrorToast("remover nota", error); return; }
+  const writes = [];
+  n.itens.forEach(it=>{
+    const m = STATE.materiais.find(x=>x.id===it.materialId);
+    if(!m) return;
+    const novoEstoque = Math.round((m.estoque - Number(it.quantidade||0))*100)/100;
+    writes.push(sb.from("materiais").update({estoque:novoEstoque}).eq("id", m.id).then(r=>{
+      if(r.error){ sbErrorToast("estornar estoque de "+m.nome, r.error); }
+      else { m.estoque = novoEstoque; }
+    }));
+  });
+  await Promise.all(writes);
+  STATE.notas = STATE.notas.filter(x=>x.id!==id);
+  closeModal();
+  renderScreen();
+  showToast("info","Nota removida e estoque estornado.");
 }
 function onNotaItemMaterialChange(select){
   const opt = select.selectedOptions[0];
@@ -2850,18 +2923,24 @@ function recalcNotaItemConversao(el){
   if(valorInput) valorInput.value = valorM>0 ? valorM.toFixed(2) : "";
   if(unidadeInput && !unidadeInput.value) unidadeInput.value = "m";
 }
-function notaItemRowHtml(){
+function notaItemRowHtml(item){
+  item = item || {};
+  const materialId = item.materialId || "";
+  const quantidade = item.quantidade!=null && item.quantidade!=="" ? item.quantidade : "";
+  const unidade = item.unidade || "";
+  const valorUnitario = item.valorUnitario ? item.valorUnitario : "";
+  const fatorAtual = materialId ? fatorVigenteDoMaterial(materialId) : 0;
   return '<div class="nota-item-row pcp-card" style="padding:12px;margin-bottom:0">'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
       '<select class="field-select nota-item-material" onchange="onNotaItemMaterialChange(this)" style="flex:1">'+
         '<option value="">Selecione o material…</option>'+
-        STATE.materiais.map(m=>'<option value="'+m.id+'" data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'" data-fator-kg="'+fatorVigenteDoMaterial(m.id)+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+'</option>').join("")+
+        STATE.materiais.map(m=>'<option value="'+m.id+'" '+(m.id===materialId?"selected":"")+' data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'" data-fator-kg="'+fatorVigenteDoMaterial(m.id)+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+'</option>').join("")+
       '</select>'+
       '<button type="button" class="icon-btn" onclick="this.closest(\'.nota-item-row\').remove()">'+icon("x",14)+'</button>'+
     '</div>'+
     '<label class="nota-item-conv-check-label" style="display:flex;align-items:center;gap:7px;font-size:12px;color:'+COLORS.textMuted+';cursor:pointer;margin-bottom:6px">'+
-      '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" disabled/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
-    '<p class="nota-item-conv-hint" style="display:none;font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
+      '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" '+(fatorAtual<=0?"disabled":"")+'/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
+    '<p class="nota-item-conv-hint" style="display:'+(materialId && fatorAtual<=0 ? "block":"none")+';font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
     '<div class="nota-item-conv-fields" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding:10px;background:var(--panel-alt);border-radius:6px">'+
       '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="0.01" placeholder="0" oninput="recalcNotaItemConversao(this)"/></div>'+
       '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="0.01" placeholder="0,00" oninput="recalcNotaItemConversao(this)"/></div>'+
@@ -2872,35 +2951,38 @@ function notaItemRowHtml(){
       '</div>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'+
-      '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0"/></div>'+
-      '<div><label class="field-label">Unidade</label><input class="field-input nota-item-unidade" type="text" placeholder="m"/></div>'+
-      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="0.01" placeholder="0,00"/></div>'+
+      '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0" value="'+quantidade+'"/></div>'+
+      '<div><label class="field-label">Unidade</label><input class="field-input nota-item-unidade" type="text" placeholder="m" value="'+escapeAttr(unidade)+'"/></div>'+
+      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="0.01" placeholder="0,00" value="'+valorUnitario+'"/></div>'+
     '</div>'+
   '</div>';
 }
 function addNotaItemRow(){ document.getElementById("nota-itens").insertAdjacentHTML("beforeend", notaItemRowHtml()); }
-function openNotaModal(){
+function openNotaModal(editId){
+  const nota = editId ? STATE.notas.find(x=>x.id===editId) : null;
+  const isEdit = !!nota;
+  const itemsHtml = isEdit && nota.itens.length ? nota.itens.map(function(it){ return notaItemRowHtml(it); }).join("") : notaItemRowHtml();
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
       '<div class="modal-card" style="max-width:700px">'+
-        '<div class="modal-header"><h3>Nova Nota de Entrada</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
-        '<form onsubmit="return submitNotaForm(event)">'+
+        '<div class="modal-header"><h3>'+(isEdit?"Editar Nota de Entrada":"Nova Nota de Entrada")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<form onsubmit="return submitNotaForm(event'+(isEdit?",'"+editId+"'":"")+')">'+
           '<div class="grid-3">'+
-            '<div><label class="field-label">Data</label><input class="field-input" type="date" name="data" value="'+todayStr()+'" required/></div>'+
-            '<div><label class="field-label">Fornecedor</label><input class="field-input" name="fornecedor"/></div>'+
-            '<div><label class="field-label">Nº da Nota</label><input class="field-input" name="numeroNota"/></div>'+
+            '<div><label class="field-label">Data</label><input class="field-input" type="date" name="data" value="'+(isEdit?nota.data:todayStr())+'" required/></div>'+
+            '<div><label class="field-label">Fornecedor</label><input class="field-input" name="fornecedor" value="'+(isEdit?escapeAttr(nota.fornecedor):"")+'"/></div>'+
+            '<div><label class="field-label">Nº da Nota</label><input class="field-input" name="numeroNota" value="'+(isEdit?escapeAttr(nota.numeroNota):"")+'"/></div>'+
           '</div>'+
           '<label class="field-label" style="margin-top:14px">Itens recebidos</label>'+
-          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:0 0 8px">O valor unitário informado aqui atualiza o custo de referência do material. Para itens recebidos em Kg, marque a conversão para calcular a metragem e o custo por metro automaticamente a partir do fator cadastrado em "Fator de Conversão".</p>'+
-          '<div id="nota-itens" style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px">'+notaItemRowHtml()+'</div>'+
+          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:0 0 8px">'+(isEdit?"Ao salvar, o estoque é ajustado pela diferença entre os valores antigos e os novos.":'O valor unitário informado aqui atualiza o custo de referência do material.')+' Para itens recebidos em Kg, marque a conversão para calcular a metragem e o custo por metro automaticamente a partir do fator cadastrado em "Fator de Conversão".</p>'+
+          '<div id="nota-itens" style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px">'+itemsHtml+'</div>'+
           '<button type="button" class="btn btn-ghost" onclick="addNotaItemRow()">'+icon("plus",13)+' Adicionar item</button>'+
-          '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">Lançar Entrada</button></div>'+
+          '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">'+(isEdit?"Salvar Alterações":"Lançar Entrada")+'</button></div>'+
         '</form>'+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
-async function submitNotaForm(event){
+async function submitNotaForm(event, editId){
   event.preventDefault();
   const form = event.target;
   const data = form.querySelector('input[name="data"]').value;
@@ -2916,7 +2998,7 @@ async function submitNotaForm(event){
     if(materialId && quantidade>0) itens.push({materialId, quantidade, unidade, valorUnitario});
   });
   if(itens.length===0) return false;
-  const ok = await addNota({data, fornecedor, numeroNota, itens});
+  const ok = editId ? await updateNota(editId, {data, fornecedor, numeroNota, itens}) : await addNota({data, fornecedor, numeroNota, itens});
   if(ok===false) return false;
   closeModal();
   renderScreen();
@@ -2930,11 +3012,13 @@ function renderNotasScreen(){
       return (m?escapeHtml(m.nome):"?")+" (+"+fmtNum(it.quantidade)+" "+unidade+(it.valorUnitario?" · "+fmtBRL(it.valorUnitario)+"/"+unidade:"")+")";
     }).join(", ");
     const valorTotalNota = n.itens.reduce((s,it)=>s+(Number(it.quantidade||0)*Number(it.valorUnitario||0)),0);
-    return '<tr><td style="font-family:\'IBM Plex Mono\',monospace">'+fmtDateBR(n.data)+'</td><td>'+escapeHtml(n.fornecedor||"—")+'</td><td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(n.numeroNota||"—")+'</td><td>'+itensStr+'</td><td style="font-family:\'IBM Plex Mono\',monospace;font-weight:600">'+fmtBRL(valorTotalNota)+'</td></tr>';
+    return '<tr><td style="font-family:\'IBM Plex Mono\',monospace">'+fmtDateBR(n.data)+'</td><td>'+escapeHtml(n.fornecedor||"—")+'</td><td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(n.numeroNota||"—")+'</td><td>'+itensStr+'</td><td style="font-family:\'IBM Plex Mono\',monospace;font-weight:600">'+fmtBRL(valorTotalNota)+'</td>'+
+      '<td class="no-print"><div style="display:flex;gap:6px"><button class="icon-btn" title="Editar nota" onclick="openNotaModal(\''+n.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" title="Remover nota" onclick="confirmDeleteNota(\''+n.id+'\')">'+icon("trash",13)+'</button></div></td>'+
+    '</tr>';
   }).join("");
   const table = STATE.notas.length===0
     ? emptyStateHtml('Nenhuma nota de entrada lançada. Clique em "Nova Nota" para adicionar.')
-    : '<table class="pcp-table"><thead><tr><th>Data</th><th>Fornecedor</th><th>Nº Nota</th><th>Itens</th><th>Valor Total</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    : '<table class="pcp-table"><thead><tr><th>Data</th><th>Fornecedor</th><th>Nº Nota</th><th>Itens</th><th>Valor Total</th><th class="no-print" style="width:90px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
   document.getElementById("content").innerHTML =
     screenHeaderHtml("package","Notas Fiscais","Lançamentos que somam ao estoque de matéria-prima",
       '<button class="btn btn-primary" onclick="openNotaModal()">'+icon("plus",14)+' Nova Nota</button>')+

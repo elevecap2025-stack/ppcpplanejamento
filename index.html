@@ -247,8 +247,6 @@ const DEFAULT_CONFIG_VALUES = {
   metas_pintura: [800,800,800,800,800,400],
   metas_colagem: [800,800,800,800,800,400],
   metas_entrega: [800,800,800,800,800,400],
-  meta_diaria_colagem: 800,
-  meta_diaria_perfilar: 800,
   fatores_producao_perfilar: {},
 };
 async function configGet(key){
@@ -587,8 +585,7 @@ const STATE = {
   notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
   precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
   sidebarHidden:false,
-  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"},
-  metasDiarias:{colagem:800, perfilar:800},
+  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia"},
   obsProducao:{}, obsProducaoLoading:{},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
@@ -596,6 +593,8 @@ const STATE = {
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
   baixasManual:[], transferencias:[], fatorConversaoHistorico:[],
   tipoOptions:[], cumeeiraOptions:[], fatoresProducaoPerfilar:{},
+  metasDiaOverride:{colagem:{}, perfilar:{}}, feriadosCustom:[], feriadosRemovidos:[],
+  metasCalStage:"perfilar", metasCalMonth:new Date().getMonth(), metasCalYear:new Date().getFullYear(),
 };
 function initLocalDefaults(){
   const ws = toISO(mondayOfCurrentWeek());
@@ -640,16 +639,13 @@ async function loadAllData(){
   STATE.transferencias = (transfR.data||[]).map(mapTransferenciaFromRow);
   STATE.fatorConversaoHistorico = (fatorHistR.data||[]).map(mapFatorHistoricoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
+    configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
+    configGet("feriados_custom"), configGet("feriados_removidos"),
   ]);
-  const [metaDiaColagem, metaDiaPerfilar] = await Promise.all([
-    configGet("meta_diaria_colagem"), configGet("meta_diaria_perfilar"),
-  ]);
-  STATE.metasDiarias.colagem = Number(metaDiaColagem != null ? metaDiaColagem : DEFAULT_CONFIG_VALUES.meta_diaria_colagem);
-  STATE.metasDiarias.perfilar = Number(metaDiaPerfilar != null ? metaDiaPerfilar : DEFAULT_CONFIG_VALUES.meta_diaria_perfilar);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
   STATE.tipoOptions = tipoOptions || DEFAULT_CONFIG_VALUES.tipo_options;
@@ -659,6 +655,10 @@ async function loadAllData(){
   STATE.stageState.colagem.metas = metasColagem || DEFAULT_CONFIG_VALUES.metas_colagem;
   STATE.stageState.entrega.metas = metasEntrega || DEFAULT_CONFIG_VALUES.metas_entrega;
   STATE.fatoresProducaoPerfilar = (fatoresProducaoPerfilar && typeof fatoresProducaoPerfilar==="object") ? fatoresProducaoPerfilar : DEFAULT_CONFIG_VALUES.fatores_producao_perfilar;
+  STATE.metasDiaOverride.colagem = (metasDiaColagem && typeof metasDiaColagem==="object") ? metasDiaColagem : {};
+  STATE.metasDiaOverride.perfilar = (metasDiaPerfilar && typeof metasDiaPerfilar==="object") ? metasDiaPerfilar : {};
+  STATE.feriadosCustom = Array.isArray(feriadosCustom) ? feriadosCustom : [];
+  STATE.feriadosRemovidos = Array.isArray(feriadosRemovidos) ? feriadosRemovidos : [];
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   STATE.dataLoaded = true;
@@ -2794,6 +2794,174 @@ function renderCalendarioScreen(){
     '</div>';
 }
 
+/* ============================== METAS POR DIA (CALENDÁRIO — FERIADOS/SÁBADOS/DOMINGOS) ============================== */
+function shiftMetasCalMonth(n){
+  let m = STATE.metasCalMonth + n, y = STATE.metasCalYear;
+  if(m<0){ m=11; y--; } else if(m>11){ m=0; y++; }
+  STATE.metasCalMonth = m; STATE.metasCalYear = y;
+  renderScreen();
+}
+function updateMetasCalStage(stage){ STATE.metasCalStage = stage; renderScreen(); }
+async function saveMetaDiaOverride(stage, dataStr, valorStr){
+  const valor = (valorStr==null || valorStr==="") ? null : Number(valorStr);
+  const mapa = Object.assign({}, (STATE.metasDiaOverride[stage]||{}));
+  if(valor==null || isNaN(valor)) delete mapa[dataStr]; else mapa[dataStr] = valor;
+  const ok = await configSet("metas_dia_"+stage, mapa);
+  if(!ok) return;
+  STATE.metasDiaOverride[stage] = mapa;
+  renderScreen();
+  showToast("success","Meta do dia "+fmtDateBR(dataStr)+" atualizada.");
+}
+async function clearMetaDiaOverride(stage, dataStr){
+  const mapa = Object.assign({}, (STATE.metasDiaOverride[stage]||{}));
+  delete mapa[dataStr];
+  const ok = await configSet("metas_dia_"+stage, mapa);
+  if(!ok) return;
+  STATE.metasDiaOverride[stage] = mapa;
+  renderScreen();
+  showToast("info","Meta do dia "+fmtDateBR(dataStr)+" voltou ao padrão.");
+}
+function openAdicionarFeriadoModal(){
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Novo Feriado</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Data</label><input class="field-input" type="date" id="novo-feriado-data" value="'+todayStr()+'"/></div>'+
+        '<div style="margin-top:12px"><label class="field-label">Nome do feriado</label><input class="field-input" id="novo-feriado-nome" placeholder="Ex.: Aniversário da cidade"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Feriados customizados valem para Colagem e Perfilar. A meta padrão do dia fica 0 — se precisar produzir nesse dia, edite a meta normalmente na célula do calendário.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="submitNovoFeriado()">Adicionar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function submitNovoFeriado(){
+  const dataInput = document.getElementById("novo-feriado-data");
+  const nomeInput = document.getElementById("novo-feriado-nome");
+  const data = dataInput.value;
+  const nome = (nomeInput.value||"").trim();
+  if(!data || !nome){ showToast("error","Informe a data e o nome do feriado."); return; }
+  const lista = (STATE.feriadosCustom||[]).slice();
+  lista.push({data:data, nome:nome});
+  const ok = await configSet("feriados_custom", lista);
+  if(!ok) return;
+  STATE.feriadosCustom = lista;
+  closeModal();
+  renderScreen();
+  showToast("success","Feriado adicionado.");
+}
+async function removerFeriado(dataStr, isCustom){
+  if(isCustom){
+    const lista = (STATE.feriadosCustom||[]).filter(function(f){ return f.data!==dataStr; });
+    const ok = await configSet("feriados_custom", lista);
+    if(!ok) return;
+    STATE.feriadosCustom = lista;
+  } else {
+    const lista = (STATE.feriadosRemovidos||[]).slice();
+    if(lista.indexOf(dataStr)===-1) lista.push(dataStr);
+    const ok = await configSet("feriados_removidos", lista);
+    if(!ok) return;
+    STATE.feriadosRemovidos = lista;
+  }
+  renderScreen();
+  showToast("info","Feriado removido da lista.");
+}
+function metaDiaCellHtml(stage, dataStr, dayNum, isCurrentMonth){
+  const parts = dataStr.split("-");
+  const ano = Number(parts[0]), mes = Number(parts[1]), dia = Number(parts[2]);
+  const wd = new Date(ano, mes-1, dia).getDay();
+  const isSabado = wd===6, isDomingo = wd===0;
+  const feriado = feriadoInfo(dataStr);
+  const overrides = (STATE.metasDiaOverride[stage]||{});
+  const temOverride = overrides[dataStr]!=null;
+  const metaEfetiva = metaDoDia(stage, ano, mes, dia);
+  const isToday = dataStr===todayStr();
+
+  let bg = "var(--panel)";
+  let badge = "";
+  if(feriado){ bg = "#C9820022"; badge = '<span title="'+escapeAttr(feriado.nome)+'" style="font-size:8.5px;font-weight:700;color:#C98200;background:#C9820022;padding:1px 5px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">'+escapeHtml(feriado.nome)+'</span>'; }
+  else if(isDomingo){ bg = "var(--panel-alt)"; badge = '<span style="font-size:8.5px;font-weight:700;color:'+COLORS.textMuted+'">DOM</span>'; }
+  else if(isSabado){ bg = COLORS.brand+"14"; badge = '<span style="font-size:8.5px;font-weight:700;color:'+COLORS.brand+'">SÁB</span>'; }
+
+  const removerBtn = feriado
+    ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover feriado" onclick="removerFeriado(\''+dataStr+'\','+(feriado.custom?"true":"false")+')">'+icon("x",9)+'</button>'
+    : '';
+  const resetBtn = temOverride
+    ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Voltar ao padrão" onclick="clearMetaDiaOverride(\''+stage+'\',\''+dataStr+'\')">'+icon("undo",9)+'</button>'
+    : '';
+
+  return '<div style="min-height:78px;border:1px solid var(--steel-border);border-radius:6px;padding:5px;background:'+(isCurrentMonth?bg:"var(--panel-alt)")+';opacity:'+(isCurrentMonth?1:0.45)+';'+(isToday?"box-shadow:inset 0 0 0 2px "+COLORS.brand+";":"")+'">'+
+    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px;gap:3px">'+
+      '<span style="font-size:11px;font-weight:700">'+dia+'</span>'+
+      '<div style="display:flex;align-items:center;gap:2px">'+resetBtn+removerBtn+'</div>'+
+    '</div>'+
+    (badge?'<div style="margin-bottom:3px;overflow:hidden">'+badge+'</div>':'')+
+    '<input class="field-input" type="number" step="1" min="0" value="'+metaEfetiva+'" style="font-size:11px;padding:4px 6px;font-family:\'IBM Plex Mono\',monospace;'+(temOverride?"border-color:"+COLORS.brand+";font-weight:700":"")+'" onchange="saveMetaDiaOverride(\''+stage+'\',\''+dataStr+'\', this.value)"/>'+
+  '</div>';
+}
+function renderMetasCalendarioScreen(){
+  const stage = STATE.metasCalStage;
+  const year = STATE.metasCalYear, month = STATE.metasCalMonth;
+  const firstOfMonth = new Date(year, month, 1);
+  const startWeekday = firstOfMonth.getDay();
+  const daysInMonth = new Date(year, month+1, 0).getDate();
+  const prevMonthDays = new Date(year, month, 0).getDate();
+
+  const cells = [];
+  for(let i=0;i<startWeekday;i++){
+    const dayNum = prevMonthDays - startWeekday + 1 + i;
+    const d = new Date(year, month-1, dayNum);
+    cells.push({dateStr: toISO(d), dayNum, currentMonth:false});
+  }
+  for(let d=1; d<=daysInMonth; d++){
+    cells.push({dateStr: toISO(new Date(year,month,d)), dayNum: d, currentMonth:true});
+  }
+  while(cells.length % 7 !== 0){
+    const last = cells[cells.length-1];
+    const nd = addDays(new Date(last.dateStr+"T00:00:00"), 1);
+    cells.push({dateStr: toISO(nd), dayNum: nd.getDate(), currentMonth:false});
+  }
+
+  const weekdayHeaders = DIAS_SEMANA_CURTO.map(d=>'<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700;text-align:center;padding:4px">'+d+'</div>').join("");
+  const cellsHtml = cells.map(c=>metaDiaCellHtml(stage, c.dateStr, c.dayNum, c.currentMonth)).join("");
+  const monthLabel = MESES[month]+" de "+year;
+
+  const feriadosDoAno = feriadosEfetivosDoAno(year);
+  const feriadosListHtml = feriadosDoAno.length===0
+    ? '<p style="font-size:12px;color:'+COLORS.textMuted+'">Nenhum feriado cadastrado para '+year+'.</p>'
+    : '<div style="display:flex;flex-wrap:wrap;gap:6px">'+feriadosDoAno.map(function(f){
+        return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;background:var(--panel-alt);padding:4px 8px;border-radius:14px">'+
+          '<strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtDateBR(f.data)+'</strong> '+escapeHtml(f.nome)+
+          '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover" onclick="removerFeriado(\''+f.data+'\','+(f.custom?"true":"false")+')">'+icon("x",9)+'</button>'+
+        '</span>';
+      }).join("")+'</div>';
+
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("target","Metas por Dia","Metas de produção dia a dia, com destaque para feriados, sábados e domingos — Colagem e Perfilar",
+      '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
+        '<div style="display:flex;gap:4px;background:var(--panel-alt);padding:3px;border-radius:8px">'+
+          '<button class="btn '+(stage==="perfilar"?"btn-primary":"btn-ghost")+'" style="padding:6px 12px;font-size:12.5px" onclick="updateMetasCalStage(\'perfilar\')">Perfilar</button>'+
+          '<button class="btn '+(stage==="colagem"?"btn-primary":"btn-ghost")+'" style="padding:6px 12px;font-size:12.5px" onclick="updateMetasCalStage(\'colagem\')">Colagem</button>'+
+        '</div>'+
+        '<button class="icon-btn" onclick="shiftMetasCalMonth(-1)">'+icon("chevronLeft",15)+'</button>'+
+        '<span style="font-family:\'Space Grotesk\',sans-serif;font-size:14px;font-weight:700;color:'+COLORS.brand+';white-space:nowrap;text-transform:capitalize">'+monthLabel+'</span>'+
+        '<button class="icon-btn" onclick="shiftMetasCalMonth(1)">'+icon("chevronRight",15)+'</button>'+
+      '</div>')+
+    '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 14px;line-height:1.5">Cada dia usa a meta padrão do dia da semana (editável em "Editar metas" no gráfico de Acompanhamento), mas fica '+
+      '<strong style="color:'+COLORS.text+'">0 automaticamente em domingos e feriados</strong>. Clique no número de qualquer dia pra sobrescrever a meta daquele dia específico — útil pra um feriado trabalhado ou um sábado especial. O ícone '+icon("undo",10)+' aparece quando um dia tem uma meta sobrescrita, pra voltar ao padrão.</p>'+
+    '<div class="pcp-card" style="margin-bottom:16px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">'+
+        '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Feriados de '+year+'</div>'+
+        '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openAdicionarFeriadoModal()">'+icon("plus",12)+' Adicionar feriado</button>'+
+      '</div>'+
+      feriadosListHtml+
+    '</div>'+
+    '<div class="pcp-card">'+
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px;margin-bottom:6px">'+weekdayHeaders+'</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(7,1fr);gap:6px">'+cellsHtml+'</div>'+
+    '</div>';
+}
+
 /* ============================== NOTAS DE ENTRADA ============================== */
 async function addNota(nota){
   const { data:row, error } = await sb.from("notas").insert({
@@ -3547,7 +3715,7 @@ function renderFatorProducaoPerfilarScreen(){
 /* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
 function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
 function clearAcompFiltro(){
-  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"};
+  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia"};
   renderScreen();
 }
 function stageConcluido(p, stage){
@@ -3591,30 +3759,6 @@ function diasNoMes(ano, mes){
   const y = Number(ano), m = Number(mes);
   if(!y || !m) return 31;
   return new Date(y, m, 0).getDate();
-}
-function openMetaDiariaModal(stage){
-  const label = stage==="colagem" ? "Colagem" : "Perfilar";
-  const html =
-    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:400px">'+
-        '<div class="modal-header"><h3>Meta diária — '+label+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
-        '<div><label class="field-label">Meta por dia (m)</label>'+
-        '<input class="field-input" type="number" step="1" min="0" id="meta-diaria-input" value="'+Number(STATE.metasDiarias[stage]||0)+'"/></div>'+
-        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">A meta é aplicada a todos os dias do gráfico e fica salva para todos os usuários.</p>'+
-        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
-        '<button type="button" class="btn btn-primary" onclick="saveMetaDiaria(\''+stage+'\')">Salvar</button></div>'+
-      '</div>'+
-    '</div>';
-  document.getElementById("modal-root").innerHTML = html;
-}
-async function saveMetaDiaria(stage){
-  const val = Number(document.getElementById("meta-diaria-input").value||0);
-  const ok = await configSet("meta_diaria_"+stage, val);
-  if(!ok) return;
-  STATE.metasDiarias[stage] = val;
-  closeModal();
-  renderScreen();
-  showToast("success","Meta diária atualizada.");
 }
 
 /* ============================== OBSERVAÇÕES DIÁRIAS DE PRODUÇÃO ============================== */
@@ -3668,18 +3812,110 @@ async function saveObsDia(stage, dia){
   showToast("success", texto ? "Observação salva." : "Observação removida.");
 }
 
+function acumularArray(arr){
+  let acc = 0;
+  return arr.map(function(v){ acc += Number(v||0); return acc; });
+}
+function weekdayIdxForDate(ano, mes, dia){
+  const d = new Date(Number(ano), Number(mes)-1, dia);
+  const wd = d.getDay();
+  return wd===0 ? -1 : wd-1;
+}
+/* ---- Feriados nacionais (fixos + móveis via algoritmo de Meeus/Jones/Butcher p/ Páscoa) ---- */
+function feriadosNacionaisDoAno(ano){
+  const y = Number(ano);
+  const fixos = [
+    {md:"01-01", nome:"Confraternização Universal"},
+    {md:"04-21", nome:"Tiradentes"},
+    {md:"05-01", nome:"Dia do Trabalho"},
+    {md:"09-07", nome:"Independência do Brasil"},
+    {md:"10-12", nome:"Nossa Senhora Aparecida"},
+    {md:"11-02", nome:"Finados"},
+    {md:"11-15", nome:"Proclamação da República"},
+    {md:"11-20", nome:"Consciência Negra"},
+    {md:"12-25", nome:"Natal"},
+  ].map(function(f){ return {data:y+"-"+f.md, nome:f.nome, fixo:true}; });
+  const a=y%19, b=Math.floor(y/100), c=y%100, d=Math.floor(b/4), e=b%4, f=Math.floor((b+8)/25), g=Math.floor((b-f+1)/3),
+    h=(19*a+b-d-g+15)%30, i=Math.floor(c/4), k=c%4, l=(32+2*e+2*i-h-k)%7, m=Math.floor((a+11*h+22*l)/451),
+    mesP=Math.floor((h+l-7*m+114)/31), diaP=((h+l-7*m+114)%31)+1;
+  const pascoa = new Date(y, mesP-1, diaP);
+  const moveis = [
+    {off:-48, nome:"Carnaval (segunda)"},
+    {off:-47, nome:"Carnaval (terça)"},
+    {off:-2, nome:"Sexta-feira Santa"},
+    {off:60, nome:"Corpus Christi"},
+  ].map(function(f){ return {data:toISO(addDays(pascoa,f.off)), nome:f.nome, fixo:false}; });
+  return fixos.concat(moveis);
+}
+function feriadosEfetivosDoAno(ano){
+  const removidos = STATE.feriadosRemovidos||[];
+  const nacionais = feriadosNacionaisDoAno(ano).filter(function(f){ return removidos.indexOf(f.data)===-1; });
+  const customDoAno = (STATE.feriadosCustom||[]).filter(function(f){ return f.data && f.data.slice(0,4)===String(ano); }).map(function(f){ return {data:f.data, nome:f.nome, fixo:false, custom:true}; });
+  return nacionais.concat(customDoAno).sort(function(a,b){ return a.data.localeCompare(b.data); });
+}
+function feriadoInfo(dataStr){
+  if(!dataStr) return null;
+  const ano = dataStr.slice(0,4);
+  const lista = feriadosEfetivosDoAno(ano);
+  return lista.find(function(f){ return f.data===dataStr; }) || null;
+}
+function metaDoDia(stage, ano, mes, dia){
+  const dataStr = ano+"-"+pad2(mes)+"-"+pad2(dia);
+  const overrides = (STATE.metasDiaOverride && STATE.metasDiaOverride[stage]) || {};
+  if(overrides[dataStr]!=null) return Number(overrides[dataStr]||0);
+  const idx = weekdayIdxForDate(ano, mes, dia);
+  if(idx<0) return 0;
+  if(feriadoInfo(dataStr)) return 0;
+  const s = STATE.stageState[stage];
+  const metas = (s && s.metas) || [];
+  return Number(metas[idx]||0);
+}
+function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias){
+  const metaAcum = acumularArray(metasPorDia.slice(0,maxDia));
+  const realAcum = acumularArray(dadosDias.slice(0,maxDia));
+  const maxValor = Math.max.apply(null, metaAcum.concat(realAcum).concat([1]));
+  const W = 1000, H = 200, padTop = 12, padBottom = 12, padX = 8;
+  const plotH = H - padTop - padBottom;
+  const xFor = function(dia){ return padX + ((dia-0.5)/31)*(W-2*padX); };
+  const yFor = function(v){ return padTop + plotH - (maxValor>0 ? (v/maxValor)*plotH : 0); };
+  const metaPts = metaAcum.map(function(v,i){ return xFor(i+1).toFixed(1)+','+yFor(v).toFixed(1); }).join(' ');
+  const realPts = realAcum.map(function(v,i){ return xFor(i+1).toFixed(1)+','+yFor(v).toFixed(1); }).join(' ');
+  const metaCircles = metaAcum.map(function(v,i){
+    const dia=i+1;
+    return '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="2.5" fill="'+COLORS.red+'"><title>Dia '+pad2(dia)+' — Meta acumulada: '+fmtNum(v)+' m</title></circle>';
+  }).join('');
+  const realCircles = realAcum.map(function(v,i){
+    const dia=i+1;
+    return '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="3" fill="'+cor+'"><title>Dia '+pad2(dia)+' — Real acumulado: '+fmtNum(v)+' m</title></circle>';
+  }).join('');
+  return '<div>'+
+    '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:200px;display:block;overflow:visible" preserveAspectRatio="none">'+
+      '<line x1="'+padX+'" y1="'+(padTop+plotH)+'" x2="'+(W-padX)+'" y2="'+(padTop+plotH)+'" stroke="'+COLORS.steelBorder+'" stroke-width="1"/>'+
+      '<polyline points="'+metaPts+'" fill="none" stroke="'+COLORS.red+'" stroke-width="2.5" stroke-dasharray="8,5"/>'+
+      '<polyline points="'+realPts+'" fill="none" stroke="'+cor+'" stroke-width="3"/>'+
+      metaCircles+realCircles+
+    '</svg>'+
+    '<div style="display:flex;gap:18px;margin-top:8px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
+      '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta Acumulada (dias úteis)</div>'+
+      '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;height:3px;background:'+cor+';display:inline-block;border-radius:2px"></span> Real Acumulado</div>'+
+    '</div>'+
+  '</div>';
+}
 function producaoChartHtml(stage, titulo, iconName, cor){
   const f = STATE.acompFiltro;
   const dados = producaoDiariaPorEtapa(stage);
-  const meta = Number(STATE.metasDiarias[stage]||0);
   const maxDia = diasNoMes(f.ano, f.mes);
-  const maxValor = Math.max.apply(null, dados.dias.concat([meta, 1]));
+  const modoAcumulado = f.modo==="acumulado";
+  const metasPorDia = [];
+  for(let d=1; d<=31; d++){ metasPorDia.push(d<=maxDia ? metaDoDia(stage, f.ano, f.mes, d) : 0); }
+  const temMetaConfigurada = (STATE.stageState[stage].metas||[]).some(function(v){ return Number(v)>0; });
+  const maxValor = Math.max.apply(null, dados.dias.concat(metasPorDia).concat([1]));
   const escala = maxValor * 1.15;
   const total = dados.dias.reduce(function(a,b){return a+b;},0);
   const diasComProd = dados.dias.filter(function(v,i){ return v>0 && (i+1)<=maxDia; }).length;
-  const diasNaMeta = meta>0 ? dados.dias.filter(function(v,i){ return (i+1)<=maxDia && v>=meta; }).length : 0;
+  const diasNaMeta = metasPorDia.filter(function(mv,i){ return (i+1)<=maxDia && mv>0 && dados.dias[i]>=mv; }).length;
   const media = diasComProd>0 ? total/diasComProd : 0;
-  const metaMes = meta * maxDia;
+  const metaMes = metasPorDia.slice(0,maxDia).reduce(function(a,b){return a+b;},0);
   const pctMeta = metaMes>0 ? Math.round((total/metaMes)*100) : 0;
 
   ensureObsProducaoLoaded(stage, f.ano, f.mes);
@@ -3689,13 +3925,18 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     const dia = i+1;
     const diaStr = pad2(dia);
     const foraDoMes = dia>maxDia;
+    const metaDia = metasPorDia[i];
     const alturaPct = escala>0 ? Math.min(100, (v/escala)*100) : 0;
-    const bateuMeta = meta>0 && v>=meta;
+    const bateuMeta = metaDia>0 && v>=metaDia;
     const corBarra = foraDoMes ? "var(--steel-border)" : (v===0 ? "var(--steel-border)" : (bateuMeta ? COLORS.green : cor));
     const temObs = !!(obsMes[diaStr] && obsMes[diaStr].trim());
-    const tip = "Dia "+diaStr+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(meta>0?(" · meta "+fmtNum(meta)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
+    const metaTick = (!foraDoMes && metaDia>0 && escala>0)
+      ? '<div style="position:absolute;left:8%;right:8%;bottom:'+Math.min(99,(metaDia/escala)*100)+'%;border-top:2px dashed '+COLORS.red+'"></div>'
+      : '';
+    const tip = "Dia "+diaStr+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
     return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
       (v>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
+      metaTick+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
     '</div>';
   }).join("");
@@ -3710,9 +3951,9 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     return '<div class="chart-day chart-day-clickable" style="opacity:'+(foraDoMes?0.35:1)+'"'+clickAttr+' title="'+titleAttr+'">'+dia+(temObs?'<span class="chart-day-obs-dot" style="background:'+cor+'"></span>':'')+'</div>';
   }).join("");
 
-  const metaLinha = meta>0 && escala>0
-    ? '<div class="chart-meta-line" style="bottom:'+Math.min(99,(meta/escala)*100)+'%"><span class="chart-meta-tag">Meta '+fmtNum(meta)+' m</span></div>'
-    : '';
+  const graficoHtml = modoAcumulado
+    ? cumulativeLineChartHtml(cor, maxDia, metasPorDia, dados.dias)
+    : '<div class="chart-wrap">'+barras+'</div>';
 
   const diasComObs = Object.keys(obsMes).filter(function(d){ return obsMes[d] && obsMes[d].trim(); }).sort();
   const obsListHtml = diasComObs.length===0
@@ -3735,18 +3976,22 @@ function producaoChartHtml(stage, titulo, iconName, cor){
   return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
-        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+
-      '<div class="no-print"><button class="btn" onclick="openMetaDiariaModal(\''+stage+'\')">'+icon("target",14)+' '+(meta>0?"Editar meta":"Adicionar meta")+'</button></div>'+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+(modoAcumulado?"Acumulado":"Por dia")+'</span></div>'+
+      '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn" onclick="openMetasModal(\''+stage+'\')">'+icon("target",14)+' '+(temMetaConfigurada?"Editar metas (por dia útil)":"Adicionar metas (por dia útil)")+'</button>'+
+        '<button class="btn btn-ghost" onclick="STATE.metasCalStage=\''+stage+'\';setScreen(\'metasCalendario\')">'+icon("calendar",14)+' Feriados e exceções</button>'+
+      '</div>'+
     '</div>'+
     fatorNotaHtml+
     '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
       '<div class="chart-stat"><div class="stat-label">Total no mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
       '<div class="chart-stat"><div class="stat-label">Média por dia produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
       '<div class="chart-stat"><div class="stat-label">Dias com produção</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+diasComProd+'</div></div>'+
-      (meta>0 ? '<div class="chart-stat"><div class="stat-label">Dias que bateram a meta</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
+      (temMetaConfigurada ? '<div class="chart-stat"><div class="stat-label">Dias que bateram a meta</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
                 '<div class="chart-stat"><div class="stat-label">% da meta do mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctMeta>=100?COLORS.green:(pctMeta>=60?COLORS.brand:COLORS.red))+'">'+pctMeta+'%</div></div>' : '')+
     '</div>'+
-    '<div class="chart-wrap">'+metaLinha+barras+'</div>'+
+    graficoHtml+
     '<div class="chart-days">'+rotulos+'</div>'+
     '<div class="chart-obs-section">'+
       '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700;margin-top:14px;margin-bottom:2px">Observações do mês — por que produziu bem</div>'+
@@ -3775,6 +4020,10 @@ function renderAcompanhamentoScreen(){
         '<option value="prog" '+(f.base==="prog"?"selected":"")+'>Programado (data de prog.)</option>'+
         '<option value="concl" '+(f.base==="concl"?"selected":"")+'>Somente etapas concluídas</option>'+
         '</select></div>'+
+      '<div style="min-width:190px"><label class="field-label">Visualização</label><select class="field-select" onchange="updateAcompFiltro(\'modo\', this.value)">'+
+        '<option value="dia" '+(f.modo!=="acumulado"?"selected":"")+'>Por dia</option>'+
+        '<option value="acumulado" '+(f.modo==="acumulado"?"selected":"")+'>Acumulado no mês</option>'+
+        '</select></div>'+
       '<button class="btn btn-ghost" onclick="clearAcompFiltro()">Limpar filtros</button>'+
     '</div>'+
     '<div class="acomp-print-page">'+
@@ -3798,6 +4047,7 @@ const NAV_GROUPS = [
     {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
     {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
+    {id:"metasCalendario", label:"Metas por Dia", icon:"target"},
   ]},
   { id:"baixaManual", title:"Baixa Manual", items:[
     {id:"baixas", label:"Baixa de Materiais", icon:"arrowDownCircle"},
@@ -3902,6 +4152,7 @@ function renderScreen(){
   else if(STATE.screen==="entregues") renderEntreguesScreen();
   else if(STATE.screen==="calendario") renderCalendarioScreen();
   else if(STATE.screen==="acompanhamento") renderAcompanhamentoScreen();
+  else if(STATE.screen==="metasCalendario") renderMetasCalendarioScreen();
   else if(STATE.screen==="baixas") renderBaixasScreen();
   else if(STATE.screen==="baixaEstoque") renderBaixaEstoqueScreen();
   else if(STATE.screen==="transferencia") renderTransferenciaScreen();

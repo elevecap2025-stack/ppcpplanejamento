@@ -4214,6 +4214,7 @@ const NAV_GROUPS = [
   ]},
   { id:"administracao", title:"Administração", items:[
     {id:"permissoesUsuarios", label:"Permissões de Usuário", icon:"users"},
+    {id:"backup", label:"Backup dos Dados", icon:"arrowDownCircle"},
   ]},
 ];
 const NAV_ITEMS = NAV_GROUPS.reduce((acc,g)=>acc.concat(g.items), []);
@@ -4239,7 +4240,9 @@ function isSuperAdminEmail(email){
   return SUPER_ADMIN_EMAILS.indexOf((email||"").trim().toLowerCase())!==-1;
 }
 function permTelasConfiguraveis(){
-  return NAV_GROUPS.filter(function(g){ return g.id!=="_top" && g.id!=="administracao"; });
+  return NAV_GROUPS.filter(function(g){ return g.id!=="_top"; })
+    .map(function(g){ return Object.assign({}, g, { items: g.items.filter(function(it){ return it.id!=="permissoesUsuarios"; }) }); })
+    .filter(function(g){ return g.items.length>0; });
 }
 function permsForCurrentUser(){
   const email = (STATE.currentUserEmail||"").trim().toLowerCase();
@@ -4404,6 +4407,117 @@ function renderPermissoesUsuariosScreen(){
     '<p class="no-print" style="font-size:11.5px;color:'+COLORS.textMuted+';margin:-6px 0 14px;line-height:1.5">Usuários já cadastrados no Supabase Auth: contato@elevetelhasmetalicas.com.br, contatolucas@elevetelhasmetalicas.com, marcoscoposind@gmail.com.</p>'+
     cardsHtml;
 }
+
+/* ============================== BACKUP AUTOMÁTICO (LOCAL) ==============================
+   Uma vez por dia (por máquina/navegador, controlado via localStorage), ao entrar no
+   sistema é gerado e baixado automaticamente um arquivo .json com uma cópia de todos os
+   dados (pedidos, cadastros e configurações). Não depende de nenhum serviço externo — é
+   só um download local, então quem quiser manter um histórico precisa guardar os arquivos
+   baixados (ex.: numa pasta do Google Drive sincronizada). Também dá pra baixar na hora,
+   a qualquer momento, pela tela "Backup dos Dados". */
+const BACKUP_LOCALSTORAGE_KEY = "eleve_backup_ultima_data";
+function coletarDadosBackup(){
+  return {
+    sistema: "ELEVE — Painel de Produção",
+    geradoEm: new Date().toISOString(),
+    dados: {
+      cidades: STATE.cidades,
+      equipamentos: STATE.equipamentos,
+      motoristas: STATE.motoristas,
+      statusOptions: STATE.statusOptions,
+      materiais: STATE.materiais,
+      pedidos: STATE.pedidos,
+      notas: STATE.notas,
+      baixasManual: STATE.baixasManual,
+      transferencias: STATE.transferencias,
+      fatorConversaoHistorico: STATE.fatorConversaoHistorico,
+    },
+    configuracoes: {
+      materialTipos: STATE.materialTipos,
+      motivosPerda: STATE.motivosPerda,
+      tipoOptions: STATE.tipoOptions,
+      cumeeiraOptions: STATE.cumeeiraOptions,
+      metasPerfilar: (STATE.stageState.perfilar||{}).metas||[],
+      metasPintura: (STATE.stageState.pintura||{}).metas||[],
+      metasColagem: (STATE.stageState.colagem||{}).metas||[],
+      metasEntrega: (STATE.stageState.entrega||{}).metas||[],
+      fatoresProducaoPerfilar: STATE.fatoresProducaoPerfilar,
+      metasDiaOverride: STATE.metasDiaOverride,
+      feriadosCustom: STATE.feriadosCustom,
+      feriadosRemovidos: STATE.feriadosRemovidos,
+      permissoesUsuarios: STATE.permissoesUsuarios,
+    },
+  };
+}
+function baixarArquivoJSON(dados, nomeArquivo){
+  try{
+    const blob = new Blob([JSON.stringify(dados, null, 2)], {type:"application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = nomeArquivo;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    return true;
+  } catch(err){
+    console.error("Erro ao gerar backup", err);
+    return false;
+  }
+}
+function getUltimoBackupData(){
+  try{ return window.localStorage.getItem(BACKUP_LOCALSTORAGE_KEY) || ""; } catch(err){ return ""; }
+}
+function setUltimoBackupData(dataStr){
+  try{ window.localStorage.setItem(BACKUP_LOCALSTORAGE_KEY, dataStr); } catch(err){}
+}
+function executarBackup(manual){
+  const dados = coletarDadosBackup();
+  const nomeArquivo = "backup-eleve-"+todayStr()+".json";
+  const ok = baixarArquivoJSON(dados, nomeArquivo);
+  if(ok){
+    setUltimoBackupData(todayStr());
+    if(manual) showToast("success","Backup baixado: "+nomeArquivo);
+  } else if(manual){
+    showToast("error","Não foi possível gerar o backup neste navegador.");
+  }
+  return ok;
+}
+/* Chamado uma vez, logo após o login, sempre que a data do último backup salva neste
+   navegador não for hoje. Silencioso (sem toast) pra não incomodar no dia a dia — só
+   baixa o arquivo direto na pasta de downloads padrão do navegador. */
+function executarBackupAutomaticoSeNecessario(){
+  try{
+    if(getUltimoBackupData()===todayStr()) return;
+    executarBackup(false);
+  } catch(err){
+    console.error("Backup automático falhou", err);
+  }
+}
+function renderBackupScreen(){
+  const ultima = getUltimoBackupData();
+  const statusHtml = ultima
+    ? '<div class="chart-stat"><div class="stat-label">Último backup baixado neste navegador</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+COLORS.green+'">'+fmtDateBR(ultima)+'</div></div>'
+    : '<div class="chart-stat"><div class="stat-label">Último backup baixado neste navegador</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+COLORS.textMuted+'">Nenhum ainda</div></div>';
+  const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+    '<button class="btn btn-primary" onclick="executarBackup(true)">'+icon("arrowDownCircle",14)+' Baixar backup agora</button>'+
+  '</div>';
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("arrowDownCircle","Backup dos Dados","Uma cópia local (.json) de todos os pedidos, cadastros e configurações do sistema.", acoes)+
+    '<div class="pcp-card" style="margin-bottom:16px">'+
+      '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap">'+statusHtml+'</div>'+
+    '</div>'+
+    '<div class="pcp-card">'+
+      '<div style="font-size:13px;font-weight:700;margin-bottom:8px">Como funciona</div>'+
+      '<ul style="font-size:12.5px;color:'+COLORS.textMuted+';line-height:1.8;margin:0;padding-left:18px">'+
+        '<li>Assim que alguém faz login no sistema <strong style="color:'+COLORS.text+'">neste navegador</strong>, o app confere se já baixou um backup hoje. Se ainda não baixou, gera e baixa automaticamente — sem precisar clicar em nada.</li>'+
+        '<li>O backup é baixado <strong style="color:'+COLORS.text+'">no máximo uma vez por dia</strong>, mesmo que várias pessoas façam login no mesmo dia neste computador.</li>'+
+        '<li>O arquivo (<code>backup-eleve-AAAA-MM-DD.json</code>) inclui pedidos, matéria-prima, cidades, equipamentos, motoristas, notas, baixas de estoque, transferências, metas por dia e permissões de usuário.</li>'+
+        '<li>É um download local — o app não guarda histórico de backups antigos. Para manter um histórico seguro, mova os arquivos baixados pra uma pasta sincronizada (Google Drive, OneDrive etc.) de tempos em tempos.</li>'+
+        '<li>O controle de "já baixei hoje" fica salvo neste navegador/computador — em outro computador, o primeiro login do dia também vai gerar um backup.</li>'+
+      '</ul>'+
+    '</div>';
+}
 function loadSidebarCollapsedGroups(){
   try{
     const raw = window.localStorage.getItem("eleve_sidebar_collapsed");
@@ -4505,6 +4619,7 @@ function renderScreen(){
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");
   else if(STATE.screen==="permissoesUsuarios") renderPermissoesUsuariosScreen();
+  else if(STATE.screen==="backup") renderBackupScreen();
 }
 function showLoginError(msg){
   const el = document.getElementById("login-error");
@@ -4528,6 +4643,7 @@ async function enterApp(userName){
   if(!telaPermitida(STATE.screen)) STATE.screen = primeiraTelaPermitida();
   renderSidebar();
   renderScreen();
+  executarBackupAutomaticoSeNecessario();
 }
 async function handleLogin(event){
   event.preventDefault();

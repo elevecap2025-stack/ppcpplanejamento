@@ -103,6 +103,11 @@ button,input,select{font-family:'Inter',sans-serif;}
 
 .field-input,.field-select{width:100%;background:var(--bg);border:1px solid var(--steel);color:var(--text);border-radius:6px;padding:9px 10px;font-size:13.5px;}
 .field-input:focus,.field-select:focus{outline:none;border-color:var(--brand);}
+/* ---- Campo de meta do dia (calendário Metas por Dia): sem as setinhas do number, que
+   atrapalham o clique em campos pequenos, e seleciona tudo ao focar pra facilitar troca/limpeza. ---- */
+.meta-dia-input{-moz-appearance:textfield;text-align:center;cursor:text;}
+.meta-dia-input::-webkit-outer-spin-button,.meta-dia-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.meta-dia-input:focus{background:var(--panel);box-shadow:0 0 0 2px var(--brand)33;}
 .field-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);margin-bottom:5px;display:block;font-weight:600;}
 
 .modal-overlay{position:fixed;inset:0;background:rgba(8,10,14,0.72);display:flex;align-items:center;justify-content:center;z-index:60;padding:16px;}
@@ -2978,7 +2983,7 @@ function metaDiaCellHtml(stage, dataStr, dayNum, isCurrentMonth){
       '<div style="display:flex;align-items:center;gap:2px">'+resetBtn+removerBtn+'</div>'+
     '</div>'+
     (badge?'<div style="margin-bottom:3px;overflow:hidden">'+badge+'</div>':'')+
-    '<input class="field-input" type="number" step="1" min="0" value="'+metaEfetiva+'" style="font-size:11px;padding:4px 6px;font-family:\'IBM Plex Mono\',monospace;'+(temOverride?"border-color:"+COLORS.brand+";font-weight:700":"")+'" onchange="saveMetaDiaOverride(\''+stage+'\',\''+dataStr+'\', this.value)"/>'+
+    '<input class="field-input meta-dia-input" type="number" step="1" min="0" value="'+metaEfetiva+'" style="font-size:12.5px;padding:5px 6px;font-family:\'IBM Plex Mono\',monospace;'+(temOverride?"border-color:"+COLORS.brand+";font-weight:700":"")+'" onfocus="this.select()" onclick="this.select()" onkeydown="if(event.key===\'Enter\') this.blur();" onchange="saveMetaDiaOverride(\''+stage+'\',\''+dataStr+'\', this.value)"/>'+
   '</div>';
 }
 function renderMetasCalendarioScreen(){

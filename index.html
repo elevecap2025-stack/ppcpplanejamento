@@ -248,6 +248,7 @@ const DEFAULT_CONFIG_VALUES = {
   metas_colagem: [800,800,800,800,800,400],
   metas_entrega: [800,800,800,800,800,400],
   fatores_producao_perfilar: {},
+  permissoes_usuarios: {},
 };
 async function configGet(key){
   const { data, error } = await sb.from("app_config").select("value").eq("key", key).maybeSingle();
@@ -595,6 +596,7 @@ const STATE = {
   tipoOptions:[], cumeeiraOptions:[], fatoresProducaoPerfilar:{},
   metasDiaOverride:{colagem:{}, perfilar:{}}, feriadosCustom:[], feriadosRemovidos:[],
   metasCalStage:"perfilar", metasCalMonth:new Date().getMonth(), metasCalYear:new Date().getFullYear(),
+  permissoesUsuarios:{}, currentUserEmail:"",
 };
 function initLocalDefaults(){
   const ws = toISO(mondayOfCurrentWeek());
@@ -639,12 +641,13 @@ async function loadAllData(){
   STATE.transferencias = (transfR.data||[]).map(mapTransferenciaFromRow);
   STATE.fatorConversaoHistorico = (fatorHistR.data||[]).map(mapFatorHistoricoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
+    configGet("permissoes_usuarios"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -659,6 +662,7 @@ async function loadAllData(){
   STATE.metasDiaOverride.perfilar = (metasDiaPerfilar && typeof metasDiaPerfilar==="object") ? metasDiaPerfilar : {};
   STATE.feriadosCustom = Array.isArray(feriadosCustom) ? feriadosCustom : [];
   STATE.feriadosRemovidos = Array.isArray(feriadosRemovidos) ? feriadosRemovidos : [];
+  STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   STATE.dataLoaded = true;
@@ -2866,6 +2870,84 @@ async function removerFeriado(dataStr, isCustom){
   renderScreen();
   showToast("info","Feriado removido da lista.");
 }
+/* ---- Preenchimento em massa das metas por dia: aplica um valor (ou limpa) em todos os dias
+   de um intervalo que caiam nos dias da semana escolhidos, pulando feriados se marcado.
+   Depois de aplicar em massa, cada dia continua editável individualmente como sempre. ---- */
+function openAplicarMetaEmMassaModal(stage){
+  const year = STATE.metasCalYear, month = STATE.metasCalMonth;
+  const dataIniDefault = toISO(new Date(year, month, 1));
+  const dataFimDefault = toISO(new Date(year, month+1, 0));
+  const dowCheckboxes = DIAS_SEMANA_CURTO.map(function(label, idx){
+    const marcadoPadrao = idx>=1 && idx<=5; // seg a sex marcados por padrão
+    return '<label style="display:flex;flex-direction:column;align-items:center;gap:4px;font-size:10.5px;color:'+COLORS.textMuted+';font-weight:700">'+label+
+      '<input type="checkbox" id="massa-dow-'+idx+'" '+(marcadoPadrao?"checked":"")+' style="width:16px;height:16px"/>'+
+    '</label>';
+  }).join("");
+  const stageLabel = stage==="colagem" ? "Colagem" : "Perfilar";
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:460px">'+
+        '<div class="modal-header"><h3>Aplicar meta em massa — '+stageLabel+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+          '<div style="flex:1;min-width:140px"><label class="field-label">De</label><input class="field-input" type="date" id="massa-data-ini" value="'+dataIniDefault+'"/></div>'+
+          '<div style="flex:1;min-width:140px"><label class="field-label">Até</label><input class="field-input" type="date" id="massa-data-fim" value="'+dataFimDefault+'"/></div>'+
+        '</div>'+
+        '<div style="margin-top:12px"><label class="field-label">Valor da meta (m)</label><input class="field-input" type="number" step="1" min="0" id="massa-valor" placeholder="Ex.: 800"/></div>'+
+        '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:6px 0 0;line-height:1.4">Deixe o valor em branco para limpar as metas sobrescritas no período (os dias voltam à meta padrão do dia da semana).</p>'+
+        '<div style="margin-top:14px"><label class="field-label">Aplicar nestes dias da semana</label>'+
+          '<div style="display:flex;gap:12px;margin-top:4px">'+dowCheckboxes+'</div>'+
+        '</div>'+
+        '<label style="display:flex;align-items:center;gap:7px;margin-top:14px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="massa-pular-feriados" checked/> Pular feriados (mantêm meta 0)</label>'+
+        '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.4">Depois de aplicar, você ainda pode clicar em qualquer dia individualmente pra fazer um ajuste manual — isso não trava a edição dia a dia.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="confirmAplicarMetaEmMassa(\''+stage+'\')">Aplicar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function confirmAplicarMetaEmMassa(stage){
+  const dataIniEl = document.getElementById("massa-data-ini");
+  const dataFimEl = document.getElementById("massa-data-fim");
+  const valorEl = document.getElementById("massa-valor");
+  const pularFeriadosEl = document.getElementById("massa-pular-feriados");
+  const dataIni = dataIniEl ? dataIniEl.value : "";
+  const dataFim = dataFimEl ? dataFimEl.value : "";
+  if(!dataIni || !dataFim){ showToast("error","Informe as datas inicial e final."); return; }
+  if(dataFim < dataIni){ showToast("error","A data final precisa ser igual ou depois da data inicial."); return; }
+  const valorStr = valorEl ? valorEl.value : "";
+  const limpar = valorStr==="" || valorStr==null;
+  const valor = limpar ? null : Number(valorStr);
+  if(!limpar && (isNaN(valor) || valor<0)){ showToast("error","Informe um valor de meta válido."); return; }
+  const diasPermitidos = [];
+  for(let i=0;i<7;i++){
+    const el = document.getElementById("massa-dow-"+i);
+    if(el && el.checked) diasPermitidos.push(i);
+  }
+  if(diasPermitidos.length===0){ showToast("error","Selecione ao menos um dia da semana."); return; }
+  const pularFeriados = !pularFeriadosEl || pularFeriadosEl.checked;
+
+  const mapa = Object.assign({}, (STATE.metasDiaOverride[stage]||{}));
+  let d = new Date(dataIni+"T00:00:00");
+  const fim = new Date(dataFim+"T00:00:00");
+  let contador = 0;
+  while(d<=fim){
+    const dataStr = toISO(d);
+    const wd = d.getDay();
+    const aplicaDia = diasPermitidos.indexOf(wd)!==-1 && !(pularFeriados && feriadoInfo(dataStr));
+    if(aplicaDia){
+      if(limpar) delete mapa[dataStr]; else mapa[dataStr] = valor;
+      contador++;
+    }
+    d = addDays(d,1);
+  }
+  if(contador===0){ showToast("error","Nenhum dia no período corresponde aos filtros escolhidos."); return; }
+  const ok = await configSet("metas_dia_"+stage, mapa);
+  if(!ok) return;
+  STATE.metasDiaOverride[stage] = mapa;
+  closeModal();
+  renderScreen();
+  showToast("success", (limpar?"Meta padrão restaurada em ":"Meta aplicada em ")+contador+" dia(s).");
+}
 function metaDiaCellHtml(stage, dataStr, dayNum, isCurrentMonth){
   const parts = dataStr.split("-");
   const ano = Number(parts[0]), mes = Number(parts[1]), dia = Number(parts[2]);
@@ -2949,6 +3031,11 @@ function renderMetasCalendarioScreen(){
       '</div>')+
     '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 14px;line-height:1.5">Cada dia usa a meta padrão do dia da semana (editável em "Editar metas" no gráfico de Acompanhamento), mas fica '+
       '<strong style="color:'+COLORS.text+'">0 automaticamente em domingos e feriados</strong>. Clique no número de qualquer dia pra sobrescrever a meta daquele dia específico — útil pra um feriado trabalhado ou um sábado especial. O ícone '+icon("undo",10)+' aparece quando um dia tem uma meta sobrescrita, pra voltar ao padrão.</p>'+
+    '<div class="pcp-card no-print" style="margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">'+
+      '<div><div style="font-size:13px;font-weight:700">Preencher metas em massa</div>'+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:2px;max-width:520px">Escolha um período, um valor e os dias da semana — aplica de uma vez em todos os dias úteis do intervalo. Depois é só clicar num dia específico pra ajustar manualmente.</div></div>'+
+      '<button class="btn btn-primary" onclick="openAplicarMetaEmMassaModal(\''+stage+'\')">'+icon("sliders",14)+' Aplicar em massa</button>'+
+    '</div>'+
     '<div class="pcp-card" style="margin-bottom:16px">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">'+
         '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Feriados de '+year+'</div>'+
@@ -3760,6 +3847,17 @@ function diasNoMes(ano, mes){
   if(!y || !m) return 31;
   return new Date(y, m, 0).getDate();
 }
+/* Dia de referência para o cálculo "até hoje": no mês corrente é o dia de hoje (limitado ao
+   tamanho do mês); em mês já encerrado é o mês inteiro (mesmo valor do acumulado do mês);
+   em mês futuro ainda não há dias decorridos. */
+function diaReferenciaAteHoje(ano, mes, maxDia){
+  const hoje = new Date();
+  const anoAtual = hoje.getFullYear(), mesAtual = hoje.getMonth()+1, diaAtual = hoje.getDate();
+  const anoNum = Number(ano), mesNum = Number(mes);
+  if(anoNum < anoAtual || (anoNum===anoAtual && mesNum < mesAtual)) return maxDia;
+  if(anoNum > anoAtual || (anoNum===anoAtual && mesNum > mesAtual)) return 0;
+  return Math.min(diaAtual, maxDia);
+}
 
 /* ============================== OBSERVAÇÕES DIÁRIAS DE PRODUÇÃO ============================== */
 function obsCacheKey(stage, ano, mes){ return stage+"_"+ano+"_"+mes; }
@@ -3870,7 +3968,7 @@ function metaDoDia(stage, ano, mes, dia){
   const metas = (s && s.metas) || [];
   return Number(metas[idx]||0);
 }
-function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias){
+function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes){
   const metaAcum = acumularArray(metasPorDia.slice(0,maxDia));
   const realAcum = acumularArray(dadosDias.slice(0,maxDia));
   const maxValor = Math.max.apply(null, metaAcum.concat(realAcum).concat([1]));
@@ -3880,6 +3978,17 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias){
   const yFor = function(v){ return padTop + plotH - (maxValor>0 ? (v/maxValor)*plotH : 0); };
   const metaPts = metaAcum.map(function(v,i){ return xFor(i+1).toFixed(1)+','+yFor(v).toFixed(1); }).join(' ');
   const realPts = realAcum.map(function(v,i){ return xFor(i+1).toFixed(1)+','+yFor(v).toFixed(1); }).join(' ');
+  const areaPts = realAcum.length ? (xFor(1).toFixed(1)+','+yFor(0).toFixed(1)+' '+realPts+' '+xFor(realAcum.length).toFixed(1)+','+yFor(0).toFixed(1)) : '';
+  const gridHtml = [0.25,0.5,0.75,1].map(function(f){
+    const valor = maxValor*f;
+    const y = yFor(valor);
+    return '<line x1="'+padX+'" y1="'+y.toFixed(1)+'" x2="'+(W-padX)+'" y2="'+y.toFixed(1)+'" stroke="'+COLORS.steelBorder+'" stroke-width="1" stroke-dasharray="4,4"/>'+
+      '<text x="'+(W-padX-4)+'" y="'+(y-3).toFixed(1)+'" font-size="12" text-anchor="end" fill="'+COLORS.textMuted+'">'+Math.round(valor)+'</text>';
+  }).join('');
+  const diaRef = diaReferenciaAteHoje(ano, mes, maxDia);
+  const hojeLineHtml = (diaRef>0 && diaRef<=maxDia)
+    ? '<line x1="'+xFor(diaRef).toFixed(1)+'" y1="'+padTop+'" x2="'+xFor(diaRef).toFixed(1)+'" y2="'+(padTop+plotH)+'" stroke="'+COLORS.brand+'" stroke-width="1.5" stroke-dasharray="3,3" opacity="0.65"><title>Hoje — dia '+pad2(diaRef)+'</title></line>'
+    : '';
   const metaCircles = metaAcum.map(function(v,i){
     const dia=i+1;
     return '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="2.5" fill="'+COLORS.red+'"><title>Dia '+pad2(dia)+' — Meta acumulada: '+fmtNum(v)+' m</title></circle>';
@@ -3890,15 +3999,37 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias){
   }).join('');
   return '<div>'+
     '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:200px;display:block;overflow:visible" preserveAspectRatio="none">'+
+      gridHtml+
       '<line x1="'+padX+'" y1="'+(padTop+plotH)+'" x2="'+(W-padX)+'" y2="'+(padTop+plotH)+'" stroke="'+COLORS.steelBorder+'" stroke-width="1"/>'+
+      (areaPts?'<polygon points="'+areaPts+'" fill="'+cor+'" opacity="0.12"/>':'')+
+      hojeLineHtml+
       '<polyline points="'+metaPts+'" fill="none" stroke="'+COLORS.red+'" stroke-width="2.5" stroke-dasharray="8,5"/>'+
       '<polyline points="'+realPts+'" fill="none" stroke="'+cor+'" stroke-width="3"/>'+
       metaCircles+realCircles+
     '</svg>'+
-    '<div style="display:flex;gap:18px;margin-top:8px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
       '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta Acumulada (dias úteis)</div>'+
       '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;height:3px;background:'+cor+';display:inline-block;border-radius:2px"></span> Real Acumulado</div>'+
+      (hojeLineHtml ? '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.brand+'"></span> Hoje</div>' : '')+
     '</div>'+
+  '</div>';
+}
+/* Linhas de referência (grid) + rótulos de valor para o gráfico de barras "por dia". */
+function chartGridlinesHtml(escala){
+  if(!(escala>0)) return '';
+  return [0.25,0.5,0.75,1].map(function(f){
+    const valor = Math.round(escala*f);
+    return '<div style="position:absolute;left:0;right:0;bottom:'+(f*100)+'%;border-top:1px dashed '+COLORS.steelBorder+';pointer-events:none">'+
+      '<span style="position:absolute;right:2px;bottom:2px;font-size:8px;color:'+COLORS.textMuted+';background:var(--panel);padding:0 3px;line-height:1.4">'+valor+'</span>'+
+    '</div>';
+  }).join('');
+}
+/* Legenda de cores do gráfico de barras "por dia". */
+function chartBarLegendHtml(cor){
+  return '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:'+COLORS.textMuted+'">'+
+    '<div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+cor+';display:inline-block"></span> Produção do dia</div>'+
+    '<div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+COLORS.green+';display:inline-block"></span> Meta batida</div>'+
+    '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta do dia</div>'+
   '</div>';
 }
 function producaoChartHtml(stage, titulo, iconName, cor){
@@ -3917,6 +4048,13 @@ function producaoChartHtml(stage, titulo, iconName, cor){
   const media = diasComProd>0 ? total/diasComProd : 0;
   const metaMes = metasPorDia.slice(0,maxDia).reduce(function(a,b){return a+b;},0);
   const pctMeta = metaMes>0 ? Math.round((total/metaMes)*100) : 0;
+  const diaRefHoje = diaReferenciaAteHoje(f.ano, f.mes, maxDia);
+  const hojeObj = new Date();
+  const isMesAtual = Number(f.ano)===hojeObj.getFullYear() && Number(f.mes)===(hojeObj.getMonth()+1);
+  const metaAteHoje = metasPorDia.slice(0, diaRefHoje).reduce(function(a,b){return a+b;},0);
+  const totalAteHoje = dados.dias.slice(0, diaRefHoje).reduce(function(a,b){return a+b;},0);
+  const pctAteHoje = metaAteHoje>0 ? Math.round((totalAteHoje/metaAteHoje)*100) : 0;
+  const labelAteHoje = isMesAtual ? ("Atingimento da meta até hoje (dia "+pad2(diaRefHoje)+")") : "Atingimento da meta até o dia "+pad2(diaRefHoje);
 
   ensureObsProducaoLoaded(stage, f.ano, f.mes);
   const obsMes = STATE.obsProducao[obsCacheKey(stage, f.ano, f.mes)] || {};
@@ -3930,11 +4068,13 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     const bateuMeta = metaDia>0 && v>=metaDia;
     const corBarra = foraDoMes ? "var(--steel-border)" : (v===0 ? "var(--steel-border)" : (bateuMeta ? COLORS.green : cor));
     const temObs = !!(obsMes[diaStr] && obsMes[diaStr].trim());
+    const isHoje = isMesAtual && dia===diaRefHoje;
+    const colStyle = isHoje ? "background:"+COLORS.brand+"1F;border-radius:5px 5px 0 0;box-shadow:inset 0 0 0 1px "+COLORS.brand+"55" : "";
     const metaTick = (!foraDoMes && metaDia>0 && escala>0)
       ? '<div style="position:absolute;left:8%;right:8%;bottom:'+Math.min(99,(metaDia/escala)*100)+'%;border-top:2px dashed '+COLORS.red+'"></div>'
       : '';
-    const tip = "Dia "+diaStr+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
-    return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
+    const tip = "Dia "+diaStr+(isHoje?" (hoje)":"")+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
+    return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
       (v>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
       metaTick+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
@@ -3952,8 +4092,8 @@ function producaoChartHtml(stage, titulo, iconName, cor){
   }).join("");
 
   const graficoHtml = modoAcumulado
-    ? cumulativeLineChartHtml(cor, maxDia, metasPorDia, dados.dias)
-    : '<div class="chart-wrap">'+barras+'</div>';
+    ? cumulativeLineChartHtml(cor, maxDia, metasPorDia, dados.dias, f.ano, f.mes)
+    : '<div class="chart-wrap">'+chartGridlinesHtml(escala)+barras+'</div>'+chartBarLegendHtml(cor);
 
   const diasComObs = Object.keys(obsMes).filter(function(d){ return obsMes[d] && obsMes[d].trim(); }).sort();
   const obsListHtml = diasComObs.length===0
@@ -3988,7 +4128,9 @@ function producaoChartHtml(stage, titulo, iconName, cor){
       '<div class="chart-stat"><div class="stat-label">Total no mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
       '<div class="chart-stat"><div class="stat-label">Média por dia produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
       '<div class="chart-stat"><div class="stat-label">Dias com produção</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+diasComProd+'</div></div>'+
-      (temMetaConfigurada ? '<div class="chart-stat"><div class="stat-label">Dias que bateram a meta</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
+      (temMetaConfigurada ? '<div class="chart-stat"><div class="stat-label">Previsto no mês (meta)</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(metaMes)+' m</div></div>'+
+                '<div class="chart-stat"><div class="stat-label">Dias que bateram a meta</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(diasNaMeta?COLORS.green:COLORS.textMuted)+'">'+diasNaMeta+'</div></div>'+
+                (diaRefHoje>0 ? '<div class="chart-stat"><div class="stat-label">'+labelAteHoje+'</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctAteHoje>=100?COLORS.green:(pctAteHoje>=60?COLORS.brand:COLORS.red))+'">'+pctAteHoje+'%</div></div>' : '')+
                 '<div class="chart-stat"><div class="stat-label">% da meta do mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(pctMeta>=100?COLORS.green:(pctMeta>=60?COLORS.brand:COLORS.red))+'">'+pctMeta+'%</div></div>' : '')+
     '</div>'+
     graficoHtml+
@@ -4065,11 +4207,197 @@ const NAV_GROUPS = [
     {id:"cidades", label:"Cidades", icon:"mapPin"},
     {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
   ]},
+  { id:"administracao", title:"Administração", items:[
+    {id:"permissoesUsuarios", label:"Permissões de Usuário", icon:"users"},
+  ]},
 ];
 const NAV_ITEMS = NAV_GROUPS.reduce((acc,g)=>acc.concat(g.items), []);
 function findNavGroupFor(screenId){
   for(const g of NAV_GROUPS){ if(g.items.some(it=>it.id===screenId)) return g.id; }
   return null;
+}
+
+/* ============================== PERMISSÕES DE USUÁRIO ==============================
+   Os usuários são criados diretamente no Supabase Auth (fora deste app). Aqui apenas
+   controlamos, por e-mail, quais telas cada um pode acessar. Um usuário sem cadastro
+   nesta lista mantém acesso total (comportamento atual), evitando bloquear alguém por
+   esquecimento. Marcar "Administrador" dá acesso total, incluindo esta própria tela.
+
+   SUPERADMINISTRADOR: os e-mails abaixo têm acesso total garantido pelo próprio código,
+   independente do que estiver salvo em app_config. Isso é uma trava de segurança para
+   nunca ficar todo mundo travado para fora do sistema por engano (ex.: alguém remove o
+   próprio admin, ou zera a lista de telas por acidente). Não depende de configuração —
+   mesmo que a tabela de permissões seja apagada ou corrompida, este e-mail continua com
+   acesso total ao logar. */
+const SUPER_ADMIN_EMAILS = ["elevecap2025@gmail.com"];
+function isSuperAdminEmail(email){
+  return SUPER_ADMIN_EMAILS.indexOf((email||"").trim().toLowerCase())!==-1;
+}
+function permTelasConfiguraveis(){
+  return NAV_GROUPS.filter(function(g){ return g.id!=="_top" && g.id!=="administracao"; });
+}
+function permsForCurrentUser(){
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  if(!email) return null;
+  return (STATE.permissoesUsuarios||{})[email] || null;
+}
+function isCurrentUserAdmin(){
+  if(isSuperAdminEmail(STATE.currentUserEmail)) return true;
+  const cfg = permsForCurrentUser();
+  if(cfg) return !!cfg.admin;
+  const todas = STATE.permissoesUsuarios||{};
+  const existeAdmin = Object.keys(todas).some(function(e){ return todas[e] && todas[e].admin; });
+  return !existeAdmin; // bootstrap: sem nenhum admin configurado, qualquer usuário logado pode configurar
+}
+function telaPermitida(screenId){
+  if(screenId==="dashboard") return true;
+  if(isSuperAdminEmail(STATE.currentUserEmail)) return true;
+  if(screenId==="permissoesUsuarios") return isCurrentUserAdmin();
+  const cfg = permsForCurrentUser();
+  if(!cfg) return true;
+  if(cfg.admin) return true;
+  return (cfg.screens||[]).indexOf(screenId)!==-1;
+}
+function primeiraTelaPermitida(){
+  for(const it of NAV_ITEMS){ if(telaPermitida(it.id)) return it.id; }
+  return "dashboard";
+}
+async function savePermissoesUsuarios(){
+  const ok = await configSet("permissoes_usuarios", STATE.permissoesUsuarios);
+  if(!ok) return;
+  renderSidebar();
+  renderScreen();
+}
+function openAddUsuarioPermissaoModal(){
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Adicionar usuário</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">E-mail (o mesmo cadastrado no Supabase Auth)</label>'+
+        '<input class="field-input" type="email" id="perm-usuario-email" placeholder="usuario@exemplo.com"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O usuário precisa já existir no Supabase Auth. Aqui você só define quais telas ele pode ver dentro do sistema.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="confirmAddUsuarioPermissao()">Adicionar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+  setTimeout(function(){ const el=document.getElementById("perm-usuario-email"); if(el) el.focus(); }, 30);
+}
+async function confirmAddUsuarioPermissao(){
+  const input = document.getElementById("perm-usuario-email");
+  const email = (input ? input.value : "").trim().toLowerCase();
+  if(!email || email.indexOf("@")===-1){ showToast("error","Informe um e-mail válido."); return; }
+  if(isSuperAdminEmail(email)){ showToast("error","Este e-mail já tem acesso total garantido pelo sistema — não precisa (e não pode) ser restringido aqui."); return; }
+  const atual = Object.assign({}, STATE.permissoesUsuarios);
+  if(atual[email]){ showToast("error","Este usuário já está na lista."); return; }
+  atual[email] = { admin:false, screens:[] };
+  STATE.permissoesUsuarios = atual;
+  closeModal();
+  await savePermissoesUsuarios();
+  showToast("success","Usuário adicionado. Selecione as telas permitidas.");
+}
+async function removeUsuarioPermissao(email){
+  if(isSuperAdminEmail(email)){ showToast("error","Este e-mail tem acesso garantido pelo sistema e não pode ser removido."); return; }
+  if(!confirm("Remover as permissões de "+email+"? O usuário volta a ter acesso total até ser adicionado novamente.")) return;
+  const atual = Object.assign({}, STATE.permissoesUsuarios);
+  delete atual[email];
+  STATE.permissoesUsuarios = atual;
+  await savePermissoesUsuarios();
+  showToast("success","Usuário removido da lista de permissões.");
+}
+async function toggleUsuarioAdmin(email){
+  if(isSuperAdminEmail(email)) return;
+  const atual = Object.assign({}, STATE.permissoesUsuarios);
+  const cfg = Object.assign({admin:false, screens:[]}, atual[email]);
+  cfg.admin = !cfg.admin;
+  atual[email] = cfg;
+  STATE.permissoesUsuarios = atual;
+  await savePermissoesUsuarios();
+}
+async function toggleUsuarioTela(email, screenId){
+  if(isSuperAdminEmail(email)) return;
+  const atual = Object.assign({}, STATE.permissoesUsuarios);
+  const cfg = Object.assign({admin:false, screens:[]}, atual[email]);
+  const screens = (cfg.screens||[]).slice();
+  const idx = screens.indexOf(screenId);
+  if(idx===-1) screens.push(screenId); else screens.splice(idx,1);
+  cfg.screens = screens;
+  atual[email] = cfg;
+  STATE.permissoesUsuarios = atual;
+  await savePermissoesUsuarios();
+}
+async function marcarTodasTelasUsuario(email, marcar){
+  if(isSuperAdminEmail(email)) return;
+  const atual = Object.assign({}, STATE.permissoesUsuarios);
+  const cfg = Object.assign({admin:false, screens:[]}, atual[email]);
+  cfg.screens = marcar ? NAV_ITEMS.filter(function(it){ return it.id!=="dashboard" && it.id!=="permissoesUsuarios"; }).map(function(it){ return it.id; }) : [];
+  atual[email] = cfg;
+  STATE.permissoesUsuarios = atual;
+  await savePermissoesUsuarios();
+}
+function renderPermissoesUsuariosScreen(){
+  if(!isCurrentUserAdmin()){
+    document.getElementById("content").innerHTML =
+      screenHeaderHtml("users","Permissões de Usuário","Acesso restrito")+
+      '<div class="pcp-card" style="padding:40px;text-align:center;color:'+COLORS.textMuted+'">Apenas administradores podem gerenciar as permissões de usuário.</div>';
+    return;
+  }
+  const grupos = permTelasConfiguraveis();
+  const emails = Object.keys(STATE.permissoesUsuarios||{}).sort();
+  const cardsHtml = emails.length===0
+    ? emptyStateHtml('Nenhum usuário cadastrado ainda. Clique em "Adicionar usuário" — use o mesmo e-mail já criado no Supabase Auth.')
+    : emails.map(function(email){
+        if(isSuperAdminEmail(email)){
+          return '<div class="pcp-card" style="margin-bottom:14px;opacity:.85">'+
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+              '<div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">'+escapeHtml(email)+'</div>'+
+              '<div style="font-size:11.5px;color:'+COLORS.brand+';margin-top:2px">'+icon("checkCircle",12)+' Superadministrador — acesso total garantido pelo sistema, não pode ser alterado ou removido aqui</div>'+
+              '</div>'+
+            '</div>'+
+          '</div>';
+        }
+        const cfg = STATE.permissoesUsuarios[email] || {admin:false, screens:[]};
+        const screens = cfg.screens||[];
+        const gruposHtml = cfg.admin ? '' : grupos.map(function(g){
+          const itemsHtml = g.items.map(function(it){
+            const marcado = screens.indexOf(it.id)!==-1;
+            return '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;padding:4px 0;cursor:pointer">'+
+              '<input type="checkbox" '+(marcado?"checked":"")+' onchange="toggleUsuarioTela(\''+email+'\',\''+it.id+'\')"/> '+it.label+
+            '</label>';
+          }).join("");
+          return '<div style="margin-top:10px"><div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700;margin-bottom:2px">'+g.title+'</div>'+itemsHtml+'</div>';
+        }).join("");
+        return '<div class="pcp-card" style="margin-bottom:14px">'+
+          '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:12px;flex-wrap:wrap">'+
+            '<div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">'+escapeHtml(email)+'</div>'+
+            (cfg.admin ? '<div style="font-size:11.5px;color:'+COLORS.brand+';margin-top:2px">Administrador — acesso total ao sistema</div>' : '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:2px">'+screens.length+' tela(s) liberada(s)</div>')+
+            '</div>'+
+            '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">'+
+              '<label style="display:flex;align-items:center;gap:6px;font-size:12.5px;cursor:pointer"><input type="checkbox" '+(cfg.admin?"checked":"")+' onchange="toggleUsuarioAdmin(\''+email+'\')"/> Administrador</label>'+
+              '<button class="icon-btn" title="Remover" onclick="removeUsuarioPermissao(\''+email+'\')">'+icon("trash",14)+'</button>'+
+            '</div>'+
+          '</div>'+
+          (cfg.admin ? '' :
+            '<div class="no-print" style="display:flex;gap:10px;margin-top:10px">'+
+              '<button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px" onclick="marcarTodasTelasUsuario(\''+email+'\',true)">Marcar todas</button>'+
+              '<button class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px" onclick="marcarTodasTelasUsuario(\''+email+'\',false)">Limpar</button>'+
+            '</div>'+
+            '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px">'+gruposHtml+'</div>')+
+        '</div>';
+      }).join("");
+  const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+    '<button class="btn btn-primary" onclick="openAddUsuarioPermissaoModal()">'+icon("plus",14)+' Adicionar usuário</button>'+
+  '</div>';
+  const avisoSuperAdmin = '<div class="pcp-card no-print" style="margin-bottom:14px;border-left:3px solid '+COLORS.brand+'">'+
+    '<div style="display:flex;align-items:flex-start;gap:10px">'+icon("checkCircle",16,COLORS.brand)+
+      '<div style="font-size:12.5px;line-height:1.5"><strong>'+escapeHtml(SUPER_ADMIN_EMAILS.join(", "))+'</strong> '+(SUPER_ADMIN_EMAILS.length>1?"têm":"tem")+' acesso de administrador garantido diretamente pelo sistema — mesmo que a configuração de permissões seja apagada ou alterada por engano, esse e-mail nunca fica travado para fora do sistema.</div>'+
+    '</div>'+
+  '</div>';
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("users","Permissões de Usuário","Os usuários são criados diretamente no Supabase Auth — aqui você escolhe quais telas cada um pode acessar dentro do sistema. Quem não estiver na lista mantém acesso total.", acoes)+
+    avisoSuperAdmin+
+    '<p class="no-print" style="font-size:11.5px;color:'+COLORS.textMuted+';margin:-6px 0 14px;line-height:1.5">Usuários já cadastrados no Supabase Auth: contato@elevetelhasmetalicas.com.br, contatolucas@elevetelhasmetalicas.com, marcoscoposind@gmail.com.</p>'+
+    cardsHtml;
 }
 function loadSidebarCollapsedGroups(){
   try{
@@ -4107,6 +4435,10 @@ function toggleSidebarGroup(groupId){
   renderSidebar();
 }
 function setScreen(id){
+  if(!telaPermitida(id)){
+    showToast("error","Você não tem permissão para acessar esta tela.");
+    return;
+  }
   STATE.screen=id;
   const groupId = findNavGroupFor(id);
   if(groupId && STATE.sidebarCollapsedGroups[groupId]){
@@ -4118,7 +4450,9 @@ function setScreen(id){
 }
 function renderSidebar(){
   const groupsHtml = NAV_GROUPS.map(g=>{
-    const itemsHtml = g.items.map(it=>'<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+'</button>').join("");
+    const itemsPermitidos = g.items.filter(it=>telaPermitida(it.id));
+    if(itemsPermitidos.length===0) return "";
+    const itemsHtml = itemsPermitidos.map(it=>'<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+'</button>').join("");
     if(g.id==="_top") return itemsHtml;
     const collapsed = !!STATE.sidebarCollapsedGroups[g.id];
     return '<button class="pcp-sidebar-group-header" onclick="toggleSidebarGroup(\''+g.id+'\')">'+
@@ -4165,6 +4499,7 @@ function renderScreen(){
   else if(STATE.screen==="motoristas") renderGenericScreen("motorista");
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");
+  else if(STATE.screen==="permissoesUsuarios") renderPermissoesUsuariosScreen();
 }
 function showLoginError(msg){
   const el = document.getElementById("login-error");
@@ -4178,12 +4513,15 @@ function clearLoginError(){
 }
 async function enterApp(userName){
   STATE.userName = userName || "operador";
+  STATE.currentUserEmail = (userName||"").trim().toLowerCase();
   STATE.loggedIn = true;
   document.getElementById("login-screen").style.display = "none";
   document.getElementById("app-shell").style.display = "flex";
   applySidebarHidden();
   renderSidebar();
   await loadAllData();
+  if(!telaPermitida(STATE.screen)) STATE.screen = primeiraTelaPermitida();
+  renderSidebar();
   renderScreen();
 }
 async function handleLogin(event){

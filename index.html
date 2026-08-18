@@ -270,6 +270,7 @@ function mapMaterialFromRow(r){
     id:r.id, tipo:r.tipo, nome:r.nome, cor:r.cor||"N", unidade:r.unidade||"m",
     estoque:Number(r.estoque||0), estoqueMinimo:Number(r.estoque_minimo||0), loteMinimo:Number(r.lote_minimo||0),
     fator:Number(r.fator||1), valorUnitario:Number(r.valor_unitario||0), atencao:!!r.atencao,
+    fatorConversaoKg:Number(r.fator_conversao_kg||0),
     dataCadastro:r.data_cadastro, ultimoAcerto:r.ultimo_acerto||null,
   };
 }
@@ -296,6 +297,7 @@ function pedidoToRow(p){
   };
 }
 function mapNotaFromRow(r){ return {id:r.id, data:r.data, fornecedor:r.fornecedor||"", numeroNota:r.numero_nota||"", itens:r.itens||[]}; }
+function mapFatorHistoricoFromRow(r){ return {id:r.id, materialId:r.material_id, fator:Number(r.fator||0), vigenciaDesde:r.vigencia_desde, criadoEm:r.criado_em}; }
 function mapBaixaManualFromRow(r){ return {id:r.id, materialId:r.material_id, quantidade:Number(r.quantidade||0), motivo:r.motivo||"", observacao:r.observacao||"", data:r.data}; }
 function mapTransferenciaFromRow(r){ return {id:r.id, materialOrigemId:r.material_origem_id, materialDestinoId:r.material_destino_id, quantidade:Number(r.quantidade||0), observacao:r.observacao||"", data:r.data}; }
 
@@ -580,6 +582,7 @@ const STATE = {
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false},
+  fatorConversaoFiltro:{tipo:"",produto:""},
   sidebarHidden:false,
   acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl"},
   metasDiarias:{colagem:800, perfilar:800},
@@ -588,7 +591,7 @@ const STATE = {
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
-  baixasManual:[], transferencias:[],
+  baixasManual:[], transferencias:[], fatorConversaoHistorico:[],
   tipoOptions:[], cumeeiraOptions:[],
 };
 function initLocalDefaults(){
@@ -608,7 +611,7 @@ function initLocalDefaults(){
 async function loadAllData(){
   const content = document.getElementById("content");
   if(content) content.innerHTML = '<div style="padding:60px;text-align:center;color:'+COLORS.textMuted+'">Carregando dados do Supabase…</div>';
-  const [cidadesR, equipamentosR, motoristasR, statusR, materiaisR, pedidosR, notasR, baixasR, transfR] = await Promise.all([
+  const [cidadesR, equipamentosR, motoristasR, statusR, materiaisR, pedidosR, notasR, baixasR, transfR, fatorHistR] = await Promise.all([
     sb.from("cidades").select("*").order("nome"),
     sb.from("equipamentos").select("*").order("nome"),
     sb.from("motoristas").select("*").order("nome"),
@@ -618,8 +621,9 @@ async function loadAllData(){
     sb.from("notas").select("*").order("data", {ascending:false}),
     sb.from("baixas_manual").select("*").order("data", {ascending:false}),
     sb.from("transferencias").select("*").order("data", {ascending:false}),
+    sb.from("fator_conversao_historico").select("*").order("vigencia_desde", {ascending:false}),
   ]);
-  [["cidades",cidadesR],["equipamentos",equipamentosR],["motoristas",motoristasR],["situações",statusR],["matéria-prima",materiaisR],["pedidos",pedidosR],["notas",notasR],["baixas de estoque",baixasR],["transferências",transfR]].forEach(function(pair){
+  [["cidades",cidadesR],["equipamentos",equipamentosR],["motoristas",motoristasR],["situações",statusR],["matéria-prima",materiaisR],["pedidos",pedidosR],["notas",notasR],["baixas de estoque",baixasR],["transferências",transfR],["histórico de fator de conversão",fatorHistR]].forEach(function(pair){
     if(pair[1].error) sbErrorToast("carregar "+pair[0], pair[1].error);
   });
   STATE.cidades = (cidadesR.data||[]).map(mapCidadeFromRow);
@@ -631,6 +635,7 @@ async function loadAllData(){
   STATE.notas = (notasR.data||[]).map(mapNotaFromRow);
   STATE.baixasManual = (baixasR.data||[]).map(mapBaixaManualFromRow);
   STATE.transferencias = (transfR.data||[]).map(mapTransferenciaFromRow);
+  STATE.fatorConversaoHistorico = (fatorHistR.data||[]).map(mapFatorHistoricoFromRow);
 
   const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
@@ -2798,15 +2803,73 @@ function onNotaItemMaterialChange(select){
   const valorInput = row.querySelector(".nota-item-valor");
   if(unidadeInput && !unidadeInput.value) unidadeInput.value = opt.getAttribute("data-unidade")||"";
   if(valorInput && !valorInput.value) valorInput.value = opt.getAttribute("data-valor")||"";
+  const fatorKg = Number(opt.getAttribute("data-fator-kg")||0);
+  const fatorInput = row.querySelector(".nota-item-fator-kg");
+  if(fatorInput) fatorInput.value = fatorKg>0 ? fatorKg : "";
+  const checkbox = row.querySelector(".nota-item-conv-toggle");
+  const hint = row.querySelector(".nota-item-conv-hint");
+  if(checkbox){
+    checkbox.disabled = fatorKg<=0;
+    if(fatorKg>0 && !checkbox.checked){ checkbox.checked = true; toggleNotaItemConversao(checkbox); }
+    else if(fatorKg<=0 && checkbox.checked){ checkbox.checked = false; toggleNotaItemConversao(checkbox); }
+  }
+  if(hint) hint.style.display = fatorKg<=0 ? "block" : "none";
+}
+function irParaFatorConversao(){ closeModal(); setScreen("fatorConversao"); }
+function toggleNotaItemConversao(checkbox){
+  const row = checkbox.closest(".nota-item-row");
+  const convFields = row.querySelector(".nota-item-conv-fields");
+  const qtdInput = row.querySelector(".nota-item-qtd");
+  const valorInput = row.querySelector(".nota-item-valor");
+  if(checkbox.checked){
+    convFields.style.display = "grid";
+    if(qtdInput){ qtdInput.readOnly = true; qtdInput.style.background = "var(--panel-alt)"; }
+    if(valorInput){ valorInput.readOnly = true; valorInput.style.background = "var(--panel-alt)"; }
+    recalcNotaItemConversao(checkbox);
+  } else {
+    convFields.style.display = "none";
+    if(qtdInput){ qtdInput.readOnly = false; qtdInput.style.background = ""; }
+    if(valorInput){ valorInput.readOnly = false; valorInput.style.background = ""; }
+  }
+}
+function recalcNotaItemConversao(el){
+  const row = el.closest(".nota-item-row");
+  const kg = Number(row.querySelector(".nota-item-kg").value||0);
+  const custoKg = Number(row.querySelector(".nota-item-custo-kg").value||0);
+  const fatorKg = Number(row.querySelector(".nota-item-fator-kg").value||0);
+  const qtdM = fatorKg>0 ? kg/fatorKg : 0;
+  const valorM = custoKg * fatorKg;
+  const qtdOut = row.querySelector(".nota-item-conv-qtd");
+  const valorOut = row.querySelector(".nota-item-conv-valor");
+  if(qtdOut) qtdOut.textContent = fmtNum(qtdM)+" m";
+  if(valorOut) valorOut.textContent = fmtBRL(valorM)+"/m";
+  const qtdInput = row.querySelector(".nota-item-qtd");
+  const valorInput = row.querySelector(".nota-item-valor");
+  const unidadeInput = row.querySelector(".nota-item-unidade");
+  if(qtdInput) qtdInput.value = qtdM>0 ? qtdM.toFixed(2) : "";
+  if(valorInput) valorInput.value = valorM>0 ? valorM.toFixed(2) : "";
+  if(unidadeInput && !unidadeInput.value) unidadeInput.value = "m";
 }
 function notaItemRowHtml(){
   return '<div class="nota-item-row pcp-card" style="padding:12px;margin-bottom:0">'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
       '<select class="field-select nota-item-material" onchange="onNotaItemMaterialChange(this)" style="flex:1">'+
         '<option value="">Selecione o material…</option>'+
-        STATE.materiais.map(m=>'<option value="'+m.id+'" data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+'</option>').join("")+
+        STATE.materiais.map(m=>'<option value="'+m.id+'" data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'" data-fator-kg="'+fatorVigenteDoMaterial(m.id)+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+'</option>').join("")+
       '</select>'+
       '<button type="button" class="icon-btn" onclick="this.closest(\'.nota-item-row\').remove()">'+icon("x",14)+'</button>'+
+    '</div>'+
+    '<label class="nota-item-conv-check-label" style="display:flex;align-items:center;gap:7px;font-size:12px;color:'+COLORS.textMuted+';cursor:pointer;margin-bottom:6px">'+
+      '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" disabled/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
+    '<p class="nota-item-conv-hint" style="display:none;font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
+    '<div class="nota-item-conv-fields" style="display:none;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding:10px;background:var(--panel-alt);border-radius:6px">'+
+      '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="0.01" placeholder="0" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="0.01" placeholder="0,00" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Fator de conversão (kg/m)</label><input class="field-input nota-item-fator-kg" type="number" step="0.0001" placeholder="0" readonly title="Vem do cadastro em Fator de Conversão — não editável aqui" style="background:var(--panel-alt);cursor:not-allowed"/></div>'+
+      '<div style="grid-column:1 / -1;display:flex;gap:18px;font-size:12px;color:'+COLORS.text+';padding-top:6px;border-top:1px dashed var(--steel-border)">'+
+        '<div>Quantidade convertida: <strong class="nota-item-conv-qtd" style="font-family:\'IBM Plex Mono\',monospace">0,00 m</strong></div>'+
+        '<div>Custo calculado: <strong class="nota-item-conv-valor" style="font-family:\'IBM Plex Mono\',monospace">R$ 0,00/m</strong></div>'+
+      '</div>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'+
       '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0"/></div>'+
@@ -2819,7 +2882,7 @@ function addNotaItemRow(){ document.getElementById("nota-itens").insertAdjacentH
 function openNotaModal(){
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:660px">'+
+      '<div class="modal-card" style="max-width:700px">'+
         '<div class="modal-header"><h3>Nova Nota de Entrada</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
         '<form onsubmit="return submitNotaForm(event)">'+
           '<div class="grid-3">'+
@@ -2828,7 +2891,7 @@ function openNotaModal(){
             '<div><label class="field-label">Nº da Nota</label><input class="field-input" name="numeroNota"/></div>'+
           '</div>'+
           '<label class="field-label" style="margin-top:14px">Itens recebidos</label>'+
-          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:0 0 8px">O valor unitário informado aqui atualiza o custo de referência do material.</p>'+
+          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:0 0 8px">O valor unitário informado aqui atualiza o custo de referência do material. Para itens recebidos em Kg, marque a conversão para calcular a metragem e o custo por metro automaticamente a partir do fator cadastrado em "Fator de Conversão".</p>'+
           '<div id="nota-itens" style="display:flex;flex-direction:column;gap:10px;margin-bottom:10px">'+notaItemRowHtml()+'</div>'+
           '<button type="button" class="btn btn-ghost" onclick="addNotaItemRow()">'+icon("plus",13)+' Adicionar item</button>'+
           '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">Lançar Entrada</button></div>'+
@@ -2875,6 +2938,163 @@ function renderNotasScreen(){
   document.getElementById("content").innerHTML =
     screenHeaderHtml("package","Notas Fiscais","Lançamentos que somam ao estoque de matéria-prima",
       '<button class="btn btn-primary" onclick="openNotaModal()">'+icon("plus",14)+' Nova Nota</button>')+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+
+/* ============================== FATOR DE CONVERSÃO (KG → METRO) — COM VIGÊNCIAS ============================== */
+function updateFatorConversaoFiltro(key, val){ STATE.fatorConversaoFiltro[key]=val; renderScreen(); }
+function clearFatorConversaoFiltro(){ STATE.fatorConversaoFiltro = {tipo:"",produto:""}; renderScreen(); }
+function historicoDoMaterial(materialId){
+  return STATE.fatorConversaoHistorico
+    .filter(h=>h.materialId===materialId)
+    .sort(function(a,b){
+      if(a.vigenciaDesde!==b.vigenciaDesde) return a.vigenciaDesde<b.vigenciaDesde?1:-1;
+      return (b.criadoEm||"").localeCompare(a.criadoEm||"");
+    });
+}
+function fatorVigenteInfo(materialId){
+  const hoje = todayStr();
+  const hist = historicoDoMaterial(materialId).filter(h=>h.vigenciaDesde<=hoje);
+  return hist.length ? hist[0] : null;
+}
+function fatorVigenteDoMaterial(materialId){
+  const info = fatorVigenteInfo(materialId);
+  return info ? Number(info.fator||0) : 0;
+}
+async function addVigenciaFator(materialId, fator, vigenciaDesde){
+  const { data:row, error } = await sb.from("fator_conversao_historico").insert({
+    material_id:materialId, fator:Number(fator), vigencia_desde:vigenciaDesde,
+  }).select().single();
+  if(error){ sbErrorToast("cadastrar vigência do fator de conversão", error); return false; }
+  STATE.fatorConversaoHistorico.unshift(mapFatorHistoricoFromRow(row));
+  return true;
+}
+async function deleteVigenciaFator(id, materialId){
+  const { error } = await sb.from("fator_conversao_historico").delete().eq("id", id);
+  if(error){ sbErrorToast("remover vigência", error); return; }
+  STATE.fatorConversaoHistorico = STATE.fatorConversaoHistorico.filter(h=>h.id!==id);
+  showToast("success","Vigência removida.");
+  renderScreen();
+  openHistoricoVigenciasModal(materialId);
+}
+function openNovaVigenciaModal(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const atual = fatorVigenteInfo(materialId);
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Nova Vigência — '+escapeHtml(m.nome)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        (atual ? '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 12px;line-height:1.5">Fator vigente atualmente: <strong style="color:'+COLORS.text+'">'+fmtFator(atual.fator)+' kg/m</strong> (desde '+fmtDateBR(atual.vigenciaDesde)+')</p>' : '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 12px;line-height:1.5">Este material ainda não tem nenhuma vigência cadastrada.</p>')+
+        '<div><label class="field-label">Novo fator (kg por metro)</label><input class="field-input" type="number" step="0.0001" min="0" id="nova-vigencia-fator" placeholder="Ex.: 3,8"/></div>'+
+        '<div style="margin-top:12px"><label class="field-label">Vigente a partir de</label><input class="field-input" type="date" id="nova-vigencia-data" value="'+todayStr()+'"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Lançamentos de notas já feitos não são alterados — a nova vigência passa a valer apenas a partir da data informada.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="submitNovaVigencia(\''+materialId+'\')">Salvar vigência</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function submitNovaVigencia(materialId){
+  const fatorInput = document.getElementById("nova-vigencia-fator");
+  const dataInput = document.getElementById("nova-vigencia-data");
+  const fator = Number(fatorInput.value||0);
+  const vigenciaDesde = dataInput.value||todayStr();
+  if(fator<=0){ showToast("error","Informe um fator de conversão maior que zero."); return; }
+  const ok = await addVigenciaFator(materialId, fator, vigenciaDesde);
+  if(!ok) return;
+  closeModal();
+  renderScreen();
+  showToast("success","Nova vigência cadastrada.");
+}
+function openHistoricoVigenciasModal(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const hist = historicoDoMaterial(materialId);
+  const hoje = todayStr();
+  const infoAtual = fatorVigenteInfo(materialId);
+  const rows = hist.length===0
+    ? '<p style="font-size:12.5px;color:'+COLORS.textMuted+';padding:12px 0">Nenhuma vigência cadastrada ainda.</p>'
+    : hist.map(function(h){
+        const vigente = !!(infoAtual && infoAtual.id===h.id);
+        return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--steel-border)">'+
+          '<div style="flex:1"><div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+fmtFator(h.fator)+' kg/m</div>'+
+          '<div style="font-size:11px;color:'+COLORS.textMuted+'">desde '+fmtDateBR(h.vigenciaDesde)+(vigente?' · <span style="color:'+COLORS.green+';font-weight:700">VIGENTE</span>':(h.vigenciaDesde>hoje?' · <span style="color:'+COLORS.brand+'">futura</span>':''))+'</div></div>'+
+          '<button type="button" class="icon-btn" title="Remover vigência" onclick="confirmDeleteVigencia(\''+h.id+'\',\''+materialId+'\')">'+icon("trash",13)+'</button>'+
+        '</div>';
+      }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:460px">'+
+        '<div class="modal-header"><h3>Histórico de Vigências — '+escapeHtml(m.nome)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div id="historico-vigencias-modal-body">'+rows+'</div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="openNovaVigenciaModal(\''+materialId+'\')">'+icon("plus",13)+' Nova vigência</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function confirmDeleteVigencia(id, materialId){
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:380px">'+
+        '<div class="modal-header"><h3>Remover vigência</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Remover esta vigência do histórico? Notas já lançadas não são afetadas.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-danger" onclick="deleteVigenciaFator(\''+id+'\',\''+materialId+'\')">Remover</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function fmtFator(n){ return Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:4}); }
+function renderFatorConversaoScreen(){
+  const f = STATE.fatorConversaoFiltro;
+  const items = STATE.materiais.filter(m=>{
+    if(f.tipo && m.tipo!==f.tipo) return false;
+    if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
+    return true;
+  }).sort((a,b)=>(a.nome||"").localeCompare(b.nome||""));
+  const rows = items.map(m=>{
+    const info = fatorVigenteInfo(m.id);
+    const qtdVigencias = historicoDoMaterial(m.id).length;
+    const fatorCell = info
+      ? '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+fmtFator(info.fator)+' kg/m</span>'
+      : '<span style="color:'+COLORS.textMuted+'">Não cadastrado</span>';
+    const vigenteDesdeCell = info
+      ? '<span style="color:'+COLORS.textMuted+'">'+fmtDateBR(info.vigenciaDesde)+'</span>'
+      : '<span style="color:'+COLORS.textMuted+'">—</span>';
+    const exemplo = info
+      ? '<span style="color:'+COLORS.textMuted+'">1.000 kg ≈ '+fmtNum(1000/info.fator)+' m</span>'
+      : '<span style="color:'+COLORS.textMuted+'">—</span>';
+    return '<tr>'+
+      '<td>'+(m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : escapeHtml(m.nome))+'</td>'+
+      '<td>'+escapeHtml(m.tipo||"—")+'</td>'+
+      '<td>'+fatorCell+'</td>'+
+      '<td>'+vigenteDesdeCell+'</td>'+
+      '<td>'+exemplo+'</td>'+
+      '<td class="no-print"><div style="display:flex;gap:6px">'+
+        '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openNovaVigenciaModal(\''+m.id+'\')">'+icon("plus",12)+' Vigência</button>'+
+        '<button class="icon-btn" title="Ver histórico ('+qtdVigencias+')" onclick="openHistoricoVigenciasModal(\''+m.id+'\')">'+icon("activity",13)+'</button>'+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+  const table = items.length===0
+    ? emptyStateHtml('Nenhuma matéria-prima cadastrada ainda. Cadastre em "Matéria-Prima".')
+    : '<table class="pcp-table"><thead><tr><th>Material</th><th>Tipo</th><th>Fator Vigente (kg/m)</th><th>Vigente desde</th><th>Exemplo</th><th class="no-print" style="width:170px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  const printHeader = '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de Fator de Conversão — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>';
+  const actions = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+    '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button>'+
+  '</div>';
+  document.getElementById("content").innerHTML =
+    printHeader +
+    screenHeaderHtml("repeat","Fator de Conversão","Quantos quilos equivalem a 1 metro de cada produto, com vigências e histórico — usado para converter o peso da Nota de Entrada em metragem de estoque", actions, true)+
+    '<div class="pcp-card filter-bar no-print">'+
+      '<div style="min-width:160px"><label class="field-label">Tipo</label><select class="field-select" onchange="updateFatorConversaoFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
+        uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
+        '</select></div>'+
+      '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" value="'+escapeAttr(f.produto)+'" placeholder="Buscar produto…" onchange="updateFatorConversaoFiltro(\'produto\', this.value)"/></div>'+
+      '<button class="btn btn-ghost" onclick="clearFatorConversaoFiltro()">Limpar filtros</button>'+
+    '</div>'+
+    '<p class="no-print" style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 14px;line-height:1.5">Exemplo: uma bobina com fator 3,8 significa que 1.000 kg recebidos na nota equivalem a 1.000 ÷ 3,8 = 263,15 m em estoque, e um custo de R$ 8,78/kg equivale a R$ 8,78 × 3,8 = R$ 33,36/m. O fator usado no lançamento de notas é sempre o vigente na data — para mudar, cadastre uma nova vigência, o histórico fica registrado e notas já lançadas não mudam.</p>'+
     '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
 }
 
@@ -3127,6 +3347,7 @@ const NAV_GROUPS = [
   ]},
   { id:"cadastros", title:"Cadastros", items:[
     {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
+    {id:"fatorConversao", label:"Fator de Conversão", icon:"repeat"},
     {id:"motoristas", label:"Motoristas", icon:"truck"},
     {id:"cidades", label:"Cidades", icon:"mapPin"},
     {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
@@ -3224,6 +3445,7 @@ function renderScreen(){
   else if(STATE.screen==="movimentacao") renderMovimentacaoScreen();
   else if(STATE.screen==="notas") renderNotasScreen();
   else if(STATE.screen==="materiais") renderGenericScreen("material");
+  else if(STATE.screen==="fatorConversao") renderFatorConversaoScreen();
   else if(STATE.screen==="motoristas") renderGenericScreen("motorista");
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");

@@ -1262,10 +1262,17 @@ async function efetivarBaixaAvulso(item){
 }
 async function estornarBaixaAvulso(item){
   const m = STATE.materiais.find(function(x){ return x.id===item.materialId; });
-  if(item.baixaManualId){
-    const { error:delErr } = await sb.from("baixas_manual").delete().eq("id", item.baixaManualId);
+  const baixaManualIdAnterior = item.baixaManualId;
+  // Ordem importa: materiais_avulsos.baixa_manual_id referencia baixas_manual.id, então
+  // primeiro desvincula (senão o delete abaixo esbarra na constraint de chave estrangeira).
+  const { error:updAvErr } = await sb.from("materiais_avulsos").update({ baixado:false, baixa_manual_id:null }).eq("id", item.id);
+  if(updAvErr){ sbErrorToast("desmarcar separação como baixada", updAvErr); return false; }
+  item.baixado = false;
+  item.baixaManualId = null;
+  if(baixaManualIdAnterior){
+    const { error:delErr } = await sb.from("baixas_manual").delete().eq("id", baixaManualIdAnterior);
     if(delErr){ sbErrorToast("estornar baixa da separação avulsa", delErr); return false; }
-    STATE.baixasManual = STATE.baixasManual.filter(function(b){ return b.id!==item.baixaManualId; });
+    STATE.baixasManual = STATE.baixasManual.filter(function(b){ return b.id!==baixaManualIdAnterior; });
   }
   if(m){
     const novoEstoque = Math.round((m.estoque + Number(item.quantidade||0))*100)/100;
@@ -1273,10 +1280,6 @@ async function estornarBaixaAvulso(item){
     if(updErr){ sbErrorToast("devolver estoque da separação avulsa", updErr); return false; }
     m.estoque = novoEstoque;
   }
-  item.baixado = false;
-  item.baixaManualId = null;
-  const { error:updAvErr } = await sb.from("materiais_avulsos").update({ baixado:false, baixa_manual_id:null }).eq("id", item.id);
-  if(updAvErr) sbErrorToast("desmarcar separação como baixada", updAvErr);
   return true;
 }
 async function updateAvulsoStatus(id, novoStatus){
@@ -2623,7 +2626,7 @@ function pedidoCellHtml(key, p, opts){
   }
   return "";
 }
-function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel){
+function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir){
   const cols = visibleCols || PEDIDO_COLUMNS.map(c=>c.key);
   const dragAttrs = draggable ? ' draggable="true" ondragstart="handleDragStart(event,\''+p.id+'\')" ondragend="handleDragEnd(event)"' : '';
   const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista, fixedStatusLabel})).join("");
@@ -2633,9 +2636,10 @@ function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, h
   if(pedidoTemAtencao(p)) rowClasses.push("row-atencao");
   const classAttr = rowClasses.length ? ' class="'+rowClasses.join(" ")+'"' : '';
   const extraAction = extraActionHtml ? extraActionHtml(p) : '';
+  const excluirBtn = permitirExcluir===false ? '' : '<button class="icon-btn" title="Excluir" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button>';
   return '<tr'+classAttr+dragAttrs+'>'+
     cellsHtml+timerCell+
-    '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+'<button class="icon-btn" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button></div></td>'+
+    '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+'<button class="icon-btn" title="Editar" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button>'+excluirBtn+'</div></td>'+
   '</tr>';
 }
 function setPedidosSort(campo){
@@ -2687,9 +2691,9 @@ function headerRowHtml(visibleCols, showTimer, sortableHeaders){
   }).join("");
   return '<tr>'+ths+(showTimer?'<th class="no-print" style="width:150px">Produção</th>':'')+'<th class="no-print" style="width:84px">Ações</th></tr>';
 }
-function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel){
+function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir){
   if(pedidos.length===0) return emptyStateHtml(draggable ? "Nenhum pedido programado. Arraste um pedido para cá." : undefined);
-  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel)).join("");
+  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir)).join("");
   const headRow = headerRowHtml(visibleCols, showTimer, sortableHeaders);
   return '<table class="pcp-table"><thead>'+headRow+'</thead><tbody>'+rows+'</tbody></table>';
 }
@@ -2937,7 +2941,7 @@ function renderStageScreen(stage){
         '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.brand+';padding:2px 8px;border-radius:10px;font-weight:700;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(b.metros)+' m</span>'+
       '</div>'+
       '<div class="pcp-card drag-target" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleDrop(event,\''+b.date+'\')">'+
-        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null)+
+        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null, isCurrentUserAdmin())+
       '</div>'+
     '</div>';
   }).join('<div style="height:2px"></div>');

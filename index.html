@@ -210,7 +210,7 @@ button,input,select{font-family:'Inter',sans-serif;}
   .cal-grid-outer{overflow-x:auto;}
   .cal-grid{min-width:640px;}
 }
-/* ---- Campo de busca de matéria-prima (Separação de Material) ---- */
+/* ---- Campo de busca de matéria-prima (Lanç.de Pedidos) ---- */
 .avulso-material-option:hover{background:var(--row-hover);}
 </style>
 </head>
@@ -619,9 +619,9 @@ const STATE = {
   tipoOptions:[], cumeeiraOptions:[], fatoresProducaoPerfilar:{},
   metasDiaOverride:{colagem:{}, perfilar:{}}, feriadosCustom:[], feriadosRemovidos:[],
   metasCalStage:"perfilar", metasCalMonth:new Date().getMonth(), metasCalYear:new Date().getFullYear(),
-  permissoesUsuarios:{}, currentUserEmail:"",
-  materiaisAvulsos:[], avulsoFiltro:{op:"",materialId:"",status:""}, avulsoConcluidosFiltro:{op:"",materialId:"",dIni:"",dFim:""},
-  avulsoStageState:{weekStart:toISO(mondayOfCurrentWeek()), dIni:toISO(mondayOfCurrentWeek()), dFim:toISO(addDays(mondayOfCurrentWeek(),5)), materialId:"", op:"", status:"", diasVisiveis:[true,true,true,true,true,true]},
+  permissoesUsuarios:{}, currentUserEmail:"", screenAnterior:"",
+  materiaisAvulsos:[], avulsoFiltro:{op:"",materialId:"",status:"",tipo:""}, avulsoConcluidosFiltro:{op:"",materialId:"",dIni:"",dFim:""},
+  avulsoStageState:{weekStart:toISO(mondayOfCurrentWeek()), dIni:toISO(mondayOfCurrentWeek()), dFim:toISO(addDays(mondayOfCurrentWeek(),5)), materialId:"", op:"", status:"", tipo:"", diasVisiveis:[true,true,true,true,true,true]},
 };
 function initLocalDefaults(){
   const ws = toISO(mondayOfCurrentWeek());
@@ -712,9 +712,21 @@ function closeModal(){ document.getElementById("modal-root").innerHTML=""; }
 function showToast(type, text){
   const root = document.getElementById("toast-root");
   const color = type==="success" ? COLORS.green : (type==="error" ? COLORS.red : COLORS.brand);
-  root.innerHTML = '<div class="toast" style="border-left:4px solid '+color+'">'+escapeHtml(text)+'</div>';
+  const voltarBtn = (type==="error" && STATE.loggedIn)
+    ? '<button type="button" onclick="voltarTelaAnterior()" style="margin-left:10px;flex-shrink:0;background:transparent;border:1px solid '+color+'66;color:'+color+';border-radius:6px;padding:4px 10px;font-size:11.5px;font-weight:700;cursor:pointer;white-space:nowrap">Voltar</button>'
+    : '';
+  root.innerHTML = '<div class="toast" style="border-left:4px solid '+color+';display:flex;align-items:center;gap:4px"><span style="flex:1">'+escapeHtml(text)+'</span>'+voltarBtn+'</div>';
   clearTimeout(window.__toastTimer);
-  window.__toastTimer = setTimeout(()=>{ root.innerHTML=""; }, type==="error" ? 5000 : 3200);
+  window.__toastTimer = setTimeout(()=>{ root.innerHTML=""; }, type==="error" ? 7000 : 3200);
+}
+/* Botão "Voltar" que aparece nos toasts de erro — leva pra última tela que estava funcionando
+   (ou pro Dashboard, se não tiver uma tela anterior conhecida), pra nunca ficar travado. */
+function voltarTelaAnterior(){
+  const root = document.getElementById("toast-root");
+  if(root) root.innerHTML = "";
+  clearTimeout(window.__toastTimer);
+  const alvo = (STATE.screenAnterior && STATE.screenAnterior!==STATE.screen) ? STATE.screenAnterior : "dashboard";
+  setScreen(alvo);
 }
 
 /* ============================== GENERIC ENTITY CRUD ============================== */
@@ -1040,26 +1052,27 @@ function statusAvulsoCor(id){
   return COLORS.textMuted;
 }
 function updateAvulsoFiltro(key, val){ STATE.avulsoFiltro[key]=val; renderScreen(); }
-function clearAvulsoFiltro(){ STATE.avulsoFiltro = {op:"",materialId:""}; renderScreen(); }
+function clearAvulsoFiltro(){ STATE.avulsoFiltro = {op:"",materialId:"",status:"",tipo:""}; renderScreen(); }
 function updateAvulsoConcluidosFiltro(key, val){ STATE.avulsoConcluidosFiltro[key]=val; renderScreen(); }
 function clearAvulsoConcluidosFiltro(){ STATE.avulsoConcluidosFiltro = {op:"",materialId:"",dIni:"",dFim:""}; renderScreen(); }
 
 function avulsoMaterialDisplay(m){ return m.tipo+" — "+m.nome+" (estoque: "+fmtNum(m.estoque)+" "+m.unidade+")"; }
 /* Campo de matéria-prima com busca por texto (digita qualquer parte do nome ou tipo, não só
-   o começo) — troca o <select> simples, que ficava ruim de usar com a lista grande. */
-function materialBuscaFieldHtml(selectedId, disabled){
+   o começo) — troca o <select> simples, que ficava ruim de usar com a lista grande.
+   Indexado (idx) porque o lançamento agora pode ter vários itens na mesma tela. */
+function materialBuscaFieldHtml(idx, selectedId, disabled){
   const selecionado = selectedId ? STATE.materiais.find(function(m){ return m.id===selectedId; }) : null;
   return '<div style="position:relative">'+
-    '<input class="field-input" type="text" id="avulso-material-input" autocomplete="off" placeholder="Digite pra buscar (nome ou tipo)…" '+
+    '<input class="field-input" type="text" id="avulso-material-input-'+idx+'" autocomplete="off" placeholder="Digite pra buscar (nome ou tipo)…" '+
       'value="'+(selecionado?escapeAttr(avulsoMaterialDisplay(selecionado)):"")+'" '+(disabled?"disabled":"")+' '+
-      'oninput="filterAvulsoMaterialOptions(this.value)" onfocus="filterAvulsoMaterialOptions(this.value)" '+
-      'onblur="setTimeout(hideAvulsoMaterialOptions,150)"/>'+
-    '<input type="hidden" name="materialId" id="avulso-material-id" value="'+(selectedId||"")+'"/>'+
-    '<div id="avulso-material-options" style="display:none;position:absolute;z-index:20;top:100%;left:0;right:0;max-height:230px;overflow-y:auto;background:var(--panel);border:1px solid var(--steel);border-radius:6px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.35)"></div>'+
+      'oninput="filterAvulsoMaterialOptions('+idx+', this.value)" onfocus="filterAvulsoMaterialOptions('+idx+', this.value)" '+
+      'onblur="setTimeout(function(){hideAvulsoMaterialOptions('+idx+');},150)"/>'+
+    '<input type="hidden" id="avulso-material-id-'+idx+'" value="'+(selectedId||"")+'"/>'+
+    '<div id="avulso-material-options-'+idx+'" style="display:none;position:absolute;z-index:20;top:100%;left:0;right:0;max-height:230px;overflow-y:auto;background:var(--panel);border:1px solid var(--steel);border-radius:6px;margin-top:4px;box-shadow:0 8px 24px rgba(0,0,0,.35)"></div>'+
   '</div>';
 }
-function filterAvulsoMaterialOptions(query){
-  const box = document.getElementById("avulso-material-options");
+function filterAvulsoMaterialOptions(idx, query){
+  const box = document.getElementById("avulso-material-options-"+idx);
   if(!box) return;
   const q = (query||"").trim().toLowerCase();
   const matches = STATE.materiais.filter(function(m){
@@ -1067,41 +1080,81 @@ function filterAvulsoMaterialOptions(query){
     return (m.nome||"").toLowerCase().indexOf(q)!==-1 || (m.tipo||"").toLowerCase().indexOf(q)!==-1;
   }).slice(0,60);
   box.innerHTML = matches.length
-    ? matches.map(function(m){ return '<div class="avulso-material-option" style="padding:8px 10px;font-size:13px;cursor:pointer" onmousedown="selectAvulsoMaterial(\''+m.id+'\')">'+escapeHtml(avulsoMaterialDisplay(m))+'</div>'; }).join("")
+    ? matches.map(function(m){ return '<div class="avulso-material-option" style="padding:8px 10px;font-size:13px;cursor:pointer" onmousedown="selectAvulsoMaterial('+idx+',\''+m.id+'\')">'+escapeHtml(avulsoMaterialDisplay(m))+'</div>'; }).join("")
     : '<div style="padding:8px 10px;font-size:12.5px;color:'+COLORS.textMuted+'">Nenhuma matéria-prima encontrada.</div>';
   box.style.display = "block";
 }
-function hideAvulsoMaterialOptions(){
-  const box = document.getElementById("avulso-material-options");
+function hideAvulsoMaterialOptions(idx){
+  const box = document.getElementById("avulso-material-options-"+idx);
   if(box) box.style.display = "none";
 }
-function selectAvulsoMaterial(id){
+function selectAvulsoMaterial(idx, id){
   const m = STATE.materiais.find(function(x){ return x.id===id; });
-  const input = document.getElementById("avulso-material-input");
-  const hidden = document.getElementById("avulso-material-id");
+  const input = document.getElementById("avulso-material-input-"+idx);
+  const hidden = document.getElementById("avulso-material-id-"+idx);
   if(input && m) input.value = avulsoMaterialDisplay(m);
   if(hidden) hidden.value = id;
-  hideAvulsoMaterialOptions();
+  hideAvulsoMaterialOptions(idx);
+}
+/* ---- Itens dinâmicos do lançamento (só no modo "Novo" — editar continua sendo 1 item por vez,
+   já que cada linha do banco é um registro/material separado). ---- */
+let avulsoLinhaSeq = 0;
+function avulsoLinhaHtml(idx){
+  return '<div class="avulso-linha pcp-card" data-idx="'+idx+'" style="padding:10px;margin-bottom:10px;position:relative;padding-right:38px">'+
+    '<div class="grid-2">'+
+      '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima *</label>'+materialBuscaFieldHtml(idx,"",false)+'</div>'+
+      '<div style="grid-column:1/-1"><label class="field-label">Quantidade a baixar *</label><input class="field-input" type="number" step="0.01" min="0.01" id="avulso-qtd-'+idx+'"/></div>'+
+    '</div>'+
+    '<button type="button" class="icon-btn" title="Remover item" style="position:absolute;top:8px;right:8px" onclick="removerAvulsoLinha('+idx+')">'+icon("trash",13)+'</button>'+
+  '</div>';
+}
+function adicionarAvulsoLinha(){
+  const container = document.getElementById("avulso-linhas");
+  if(!container) return;
+  avulsoLinhaSeq++;
+  container.insertAdjacentHTML("beforeend", avulsoLinhaHtml(avulsoLinhaSeq));
+}
+function removerAvulsoLinha(idx){
+  const container = document.getElementById("avulso-linhas");
+  if(!container) return;
+  if(container.children.length<=1){ showToast("info","Mantenha ao menos um item."); return; }
+  const el = container.querySelector('.avulso-linha[data-idx="'+idx+'"]');
+  if(el) el.remove();
 }
 function openAvulsoModal(editId){
   const item = editId ? STATE.materiaisAvulsos.find(function(a){ return a.id===editId; }) : null;
   const bloqueado = !!(item && item.baixado);
+  let corpoItens;
+  if(item){
+    corpoItens =
+      '<div class="grid-2">'+
+        '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima *</label>'+materialBuscaFieldHtml(0, item.materialId, bloqueado)+'</div>'+
+        '<div><label class="field-label">Quantidade a baixar *</label><input class="field-input" type="number" step="0.01" min="0.01" id="avulso-qtd-0" value="'+item.quantidade+'" '+(bloqueado?"disabled":"")+'/></div>'+
+      '</div>';
+  } else {
+    avulsoLinhaSeq = 0;
+    corpoItens =
+      '<label class="field-label">Itens (matéria-prima + quantidade)</label>'+
+      '<div id="avulso-linhas">'+avulsoLinhaHtml(0)+'</div>'+
+      '<button type="button" class="btn btn-ghost" style="margin-bottom:14px" onclick="adicionarAvulsoLinha()">'+icon("plus",13)+' Adicionar item</button>';
+  }
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:480px">'+
+      '<div class="modal-card" style="max-width:560px">'+
         '<div class="modal-header"><h3>'+(item?"Editar":"Novo")+' Registro — Material Avulso</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
         (bloqueado ? '<p style="font-size:11.5px;color:'+COLORS.brand+';margin:0 0 12px;line-height:1.5">Este registro já teve a baixa efetivada no estoque. Pra trocar a matéria-prima ou a quantidade, primeiro volte o status pra fora de "Concluído".</p>' : '')+
         '<form onsubmit="return submitAvulsoForm(event'+(item?(",'"+item.id+"'"):"")+')">'+
-          '<div class="grid-2">'+
+          '<div class="grid-2" style="margin-bottom:14px">'+
             '<div><label class="field-label">OP (nº do pedido)</label><input class="field-input" name="op" value="'+(item?escapeAttr(item.op):"")+'" placeholder="Ex: 4521"/></div>'+
             '<div><label class="field-label">Cliente</label><input class="field-input" name="cliente" value="'+(item?escapeAttr(item.cliente):"")+'" placeholder="Opcional"/></div>'+
-            '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima *</label>'+materialBuscaFieldHtml(item?item.materialId:"", bloqueado)+'</div>'+
-            '<div><label class="field-label">Quantidade a baixar *</label><input class="field-input" type="number" step="0.01" min="0.01" name="quantidade" value="'+(item?item.quantidade:"")+'" required '+(bloqueado?"disabled":"")+'/></div>'+
-            '<div><label class="field-label">Data prevista</label><input class="field-input" type="date" name="dataPrevista" value="'+(item?item.dataPrevista:"")+'"/></div>'+
-            '<div style="grid-column:1/-1"><label class="field-label">Observação</label><input class="field-input" name="observacao" value="'+(item?escapeAttr(item.observacao):"")+'" placeholder="Detalhes (opcional)"/></div>'+
           '</div>'+
-          (item ? '' : '<p style="font-size:11px;color:'+COLORS.textMuted+';margin-top:8px">O registro entra em "Aguardando". Depois é só ir na tela "Prog. Pedido Manual" e arrastar (ou trocar no seletor da linha) até "Concluído" — aí a baixa de estoque acontece sozinha.</p>')+
-          '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">'+(item?"Salvar":"Criar Registro")+'</button></div>'+
+          corpoItens+
+          '<div class="grid-2" style="margin-top:14px">'+
+            '<div><label class="field-label">Data prevista</label><input class="field-input" type="date" name="dataPrevista" value="'+(item?item.dataPrevista:"")+'"/></div>'+
+            '<div><label class="field-label">Observação</label><input class="field-input" name="observacao" value="'+(item?escapeAttr(item.observacao):"")+'" placeholder="Opcional"/></div>'+
+          '</div>'+
+          (item ? '' : '<p style="font-size:11px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">Cada item vira um registro separado (todos com a mesma OP/cliente/data), entrando em "Aguardando". Depois é só ir na tela "Prog. Pedido Manual" e avançar cada um até "Concluído" — aí a baixa de estoque acontece sozinha.</p>')+
+          '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">'+(item?"Salvar":"Criar Registro(s)")+'</button></div>'+
         '</form>'+
       '</div>'+
     '</div>';
@@ -1116,10 +1169,11 @@ async function submitAvulsoForm(event, editId){
     if(!item) return false;
     const payload = { op:data.op||"", cliente:data.cliente||"", data_prevista:data.dataPrevista||null, observacao:data.observacao||"" };
     if(!item.baixado){
-      const qtd = Number(data.quantidade||0);
-      if(!data.materialId){ showToast("error","Selecione uma matéria-prima."); return false; }
+      const materialId = (document.getElementById("avulso-material-id-0")||{}).value;
+      const qtd = Number((document.getElementById("avulso-qtd-0")||{}).value||0);
+      if(!materialId){ showToast("error","Selecione uma matéria-prima."); return false; }
       if(qtd<=0){ showToast("error","Informe uma quantidade válida."); return false; }
-      payload.material_id = data.materialId;
+      payload.material_id = materialId;
       payload.quantidade = qtd;
     }
     const { data:row, error } = await sb.from("materiais_avulsos").update(payload).eq("id", editId).select().single();
@@ -1129,18 +1183,28 @@ async function submitAvulsoForm(event, editId){
     renderScreen();
     showToast("success","Registro atualizado.");
   } else {
-    const qtd = Number(data.quantidade||0);
-    if(!data.materialId){ showToast("error","Selecione uma matéria-prima."); return false; }
-    if(qtd<=0){ showToast("error","Informe uma quantidade válida."); return false; }
-    const { data:row, error } = await sb.from("materiais_avulsos").insert({
-      op:data.op||"", cliente:data.cliente||"", material_id:data.materialId, quantidade:qtd,
-      data_prevista:data.dataPrevista||null, observacao:data.observacao||"", status:"aguardando",
-    }).select().single();
-    if(error){ sbErrorToast("criar registro avulso", error); return false; }
-    STATE.materiaisAvulsos.push(mapMaterialAvulsoFromRow(row));
+    const container = document.getElementById("avulso-linhas");
+    const linhaEls = container ? Array.from(container.querySelectorAll(".avulso-linha")) : [];
+    const itens = [];
+    linhaEls.forEach(function(el){
+      const idx = el.getAttribute("data-idx");
+      const materialId = (document.getElementById("avulso-material-id-"+idx)||{}).value;
+      const qtd = Number((document.getElementById("avulso-qtd-"+idx)||{}).value||0);
+      if(materialId && qtd>0) itens.push({material_id:materialId, quantidade:qtd});
+    });
+    if(itens.length===0){ showToast("error","Adicione ao menos um item válido (matéria-prima + quantidade)."); return false; }
+    const rows = itens.map(function(it){
+      return {
+        op:data.op||"", cliente:data.cliente||"", material_id:it.material_id, quantidade:it.quantidade,
+        data_prevista:data.dataPrevista||null, observacao:data.observacao||"", status:"aguardando",
+      };
+    });
+    const { data:inseridos, error } = await sb.from("materiais_avulsos").insert(rows).select();
+    if(error){ sbErrorToast("criar registro(s) avulso(s)", error); return false; }
+    (inseridos||[]).forEach(function(r){ STATE.materiaisAvulsos.push(mapMaterialAvulsoFromRow(r)); });
     closeModal();
     renderScreen();
-    showToast("success","Registro criado em \"Aguardando\".");
+    showToast("success", itens.length>1 ? (itens.length+" itens criados em \"Aguardando\".") : "Registro criado em \"Aguardando\".");
   }
   return false;
 }
@@ -1266,11 +1330,30 @@ function avulsoStatusSelectHtml(item){
     STATUS_AVULSO_DEFS.map(function(s){ return '<option value="'+s.id+'" '+(item.status===s.id?"selected":"")+'>'+s.label+'</option>'; }).join("")+
   '</select>';
 }
-function avulsoRowHtml(item, draggable){
+/* Avança pro próximo status do fluxo (botão ▶). Reaproveita updateAvulsoStatus, que já cuida
+   da baixa automática quando cair em "Concluído". */
+function avancarAvulsoStatus(id){
+  const item = STATE.materiaisAvulsos.find(function(a){ return a.id===id; });
+  if(!item) return;
+  const idx = STATUS_AVULSO_DEFS.findIndex(function(s){ return s.id===item.status; });
+  if(idx===-1 || idx>=STATUS_AVULSO_DEFS.length-1) return;
+  updateAvulsoStatus(id, STATUS_AVULSO_DEFS[idx+1].id);
+}
+/* Marca direto como Concluído (pula etapas intermediárias) e já leva pra tela de conferência. */
+async function marcarAvulsoConcluidoIr(id){
+  await updateAvulsoStatus(id, "concluido");
+  setScreen("avulsoConcluidos");
+}
+function avulsoRowHtml(item, draggable, acoesRapidas){
   const m = STATE.materiais.find(function(x){ return x.id===item.materialId; });
   const dragAttrs = draggable ? ' draggable="true" ondragstart="handleAvulsoDragStart(event,\''+item.id+'\')" ondragend="handleAvulsoDragEnd(event)"' : '';
   const rowClass = draggable ? ' class="pedido-row-draggable"' : '';
   const atrasado = item.dataPrevista && item.dataPrevista<todayStr() && item.status!=="concluido";
+  const podeAvancar = STATUS_AVULSO_DEFS.findIndex(function(s){ return s.id===item.status; }) < STATUS_AVULSO_DEFS.length-1;
+  const acoesRapidasHtml = (acoesRapidas && item.status!=="concluido")
+    ? '<button class="icon-btn" title="Avançar status" style="'+(podeAvancar?"":"opacity:.35;pointer-events:none")+'" onclick="avancarAvulsoStatus(\''+item.id+'\')">'+icon("play",13)+'</button> '+
+      '<button class="icon-btn" title="Marcar como concluído e ver em Pedido Concluído" onclick="marcarAvulsoConcluidoIr(\''+item.id+'\')">'+icon("checkCircle",13,COLORS.green)+'</button> '
+    : '';
   return '<tr'+rowClass+dragAttrs+'>'+
     '<td style="font-weight:700">'+(item.op?escapeHtml(item.op):"—")+'</td>'+
     '<td>'+(item.cliente?escapeHtml(item.cliente):"—")+'</td>'+
@@ -1280,22 +1363,24 @@ function avulsoRowHtml(item, draggable){
     '<td>'+avulsoStatusSelectHtml(item)+'</td>'+
     (item.observacao ? '<td style="color:'+COLORS.textMuted+'">'+escapeHtml(item.observacao)+'</td>' : '<td style="color:'+COLORS.textMuted+'">—</td>')+
     '<td class="no-print" style="white-space:nowrap">'+
+      acoesRapidasHtml+
       '<button class="icon-btn" title="Editar" onclick="openAvulsoModal(\''+item.id+'\')">'+icon("edit",13)+'</button> '+
       '<button class="icon-btn" title="Excluir" onclick="confirmDeleteAvulso(\''+item.id+'\')">'+icon("trash",13)+'</button>'+
     '</td>'+
   '</tr>';
 }
-function avulsoTableHtml(items, draggable){
+function avulsoTableHtml(items, draggable, acoesRapidas){
   if(items.length===0) return emptyStateHtml(draggable ? "Nenhum registro nesse dia. Arraste um registro pra cá." : "Nenhum registro com os filtros atuais.");
-  const rows = items.map(function(i){ return avulsoRowHtml(i, draggable); }).join("");
+  const rows = items.map(function(i){ return avulsoRowHtml(i, draggable, acoesRapidas); }).join("");
   return '<table class="pcp-table"><thead><tr><th>OP</th><th>Cliente</th><th>Matéria-Prima</th><th>Quantidade</th><th>Data Prevista</th><th>Status</th><th>Observação</th><th class="no-print">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
 }
 
-/* ---- Tela 1: Lançamento de Separação (cadastro — igual à tela "Lançamentos" dos pedidos) ---- */
+/* ---- Tela 1: Lanç.de Pedidos (cadastro — igual à tela "Lançamentos" dos pedidos) ---- */
 function renderAvulsoLancamentoScreen(){
   const f = STATE.avulsoFiltro;
   const filtered = STATE.materiaisAvulsos.filter(function(a){
     if(f.materialId && a.materialId!==f.materialId) return false;
+    if(f.tipo){ const m = STATE.materiais.find(function(x){ return x.id===a.materialId; }); if(!m || m.tipo!==f.tipo) return false; }
     if(f.op && !(a.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
     if(f.status && a.status!==f.status) return false;
     return true;
@@ -1304,7 +1389,7 @@ function renderAvulsoLancamentoScreen(){
   const pendentes = filtered.filter(function(a){ return a.status!=="concluido"; }).length;
   document.getElementById("content").innerHTML =
     '<div class="screen-fixed"><div class="screen-fixed-head">'+
-    screenHeaderHtml("arrowDownCircle","Separação de Material","Cadastro dos pedidos de separação de matéria-prima avulsa — fora do fluxo normal de produção",
+    screenHeaderHtml("arrowDownCircle","Lanç.de Pedidos","Cadastro dos pedidos de separação de matéria-prima avulsa — fora do fluxo normal de produção",
       '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
         '<button class="btn btn-ghost" onclick="setScreen(\'avulsoConcluidos\')">'+icon("checkCircle",14)+' Ver Concluídos</button>'+
         '<button class="btn btn-primary" onclick="openAvulsoModal()">'+icon("plus",14)+' Novo Registro</button>'+
@@ -1316,8 +1401,11 @@ function renderAvulsoLancamentoScreen(){
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:140px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateAvulsoFiltro(\'op\', this.value)"/></div>'+
+      '<div style="min-width:160px"><label class="field-label">Tipo *</label><select class="field-select" onchange="updateAvulsoFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
+        uniqueMaterialTipos().map(function(t){ return '<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>'; }).join("")+
+        '</select></div>'+
       '<div style="min-width:200px"><label class="field-label">Matéria-Prima</label><select class="field-select" onchange="updateAvulsoFiltro(\'materialId\', this.value)"><option value="">Todas</option>'+
-        STATE.materiais.map(function(m){ return '<option value="'+m.id+'" '+(f.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>'; }).join("")+
+        STATE.materiais.filter(function(m){ return !f.tipo || m.tipo===f.tipo; }).map(function(m){ return '<option value="'+m.id+'" '+(f.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>'; }).join("")+
         '</select></div>'+
       '<div style="min-width:180px"><label class="field-label">Status</label><select class="field-select" onchange="updateAvulsoFiltro(\'status\', this.value)"><option value="">Todos</option>'+
         STATUS_AVULSO_DEFS.map(function(s){ return '<option value="'+s.id+'" '+(f.status===s.id?"selected":"")+'>'+s.label+'</option>'; }).join("")+
@@ -1329,7 +1417,7 @@ function renderAvulsoLancamentoScreen(){
     '</div>';
 }
 
-/* ---- Tela 2: Separação de Material (igual à Prog. Perfiladeira — visão por dia da semana,
+/* ---- Tela 2: Prog. Pedido Manual (igual à Prog. Perfiladeira — visão por dia da semana,
    arraste um registro pra outro dia pra reprogramar a data prevista) ---- */
 function shiftAvulsoWeek(n){
   const s = STATE.avulsoStageState;
@@ -1341,7 +1429,7 @@ function shiftAvulsoWeek(n){
 function updateAvulsoStageFilter(key, val){ STATE.avulsoStageState[key]=val; renderScreen(); }
 function clearAvulsoStageFiltro(){
   const s = STATE.avulsoStageState;
-  s.materialId=""; s.op=""; s.status="";
+  s.materialId=""; s.op=""; s.status=""; s.tipo="";
   renderScreen();
 }
 function toggleAvulsoDiaVisivel(idx){ STATE.avulsoStageState.diasVisiveis[idx] = !STATE.avulsoStageState.diasVisiveis[idx]; renderScreen(); }
@@ -1362,6 +1450,7 @@ function computeAvulsoAtivos(){
     if(a.status==="concluido" || !a.dataPrevista) return false;
     if(a.dataPrevista<s.dIni || a.dataPrevista>s.dFim) return false;
     if(s.materialId && a.materialId!==s.materialId) return false;
+    if(s.tipo){ const m = STATE.materiais.find(function(x){ return x.id===a.materialId; }); if(!m || m.tipo!==s.tipo) return false; }
     if(s.op && !(a.op||"").toLowerCase().includes(s.op.toLowerCase())) return false;
     if(s.status && a.status!==s.status) return false;
     return true;
@@ -1399,7 +1488,7 @@ function renderAvulsoSeparacaoScreen(){
         '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.brand+';padding:2px 8px;border-radius:10px;font-weight:700;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(b.qtd)+'</span>'+
       '</div>'+
       '<div class="pcp-card drag-target" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleAvulsoDrop(event,\''+b.date+'\')">'+
-        avulsoTableHtml(b.items, true)+
+        avulsoTableHtml(b.items, true, true)+
       '</div>'+
     '</div>';
   }).join('<div style="height:2px"></div>');
@@ -1418,8 +1507,11 @@ function renderAvulsoSeparacaoScreen(){
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:140px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateAvulsoStageFilter(\'op\', this.value)"/></div>'+
+      '<div style="min-width:160px"><label class="field-label">Tipo *</label><select class="field-select" onchange="updateAvulsoStageFilter(\'tipo\', this.value)"><option value="">Todos</option>'+
+        uniqueMaterialTipos().map(function(t){ return '<option value="'+escapeAttr(t)+'" '+(s.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>'; }).join("")+
+        '</select></div>'+
       '<div style="min-width:200px"><label class="field-label">Matéria-Prima</label><select class="field-select" onchange="updateAvulsoStageFilter(\'materialId\', this.value)"><option value="">Todas</option>'+
-        STATE.materiais.map(function(m){ return '<option value="'+m.id+'" '+(s.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>'; }).join("")+
+        STATE.materiais.filter(function(m){ return !s.tipo || m.tipo===s.tipo; }).map(function(m){ return '<option value="'+m.id+'" '+(s.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>'; }).join("")+
         '</select></div>'+
       '<div style="min-width:180px"><label class="field-label">Status</label><select class="field-select" onchange="updateAvulsoStageFilter(\'status\', this.value)"><option value="">Todos</option>'+
         STATUS_AVULSO_DEFS.filter(function(st){ return st.id!=="concluido"; }).map(function(st){ return '<option value="'+st.id+'" '+(s.status===st.id?"selected":"")+'>'+st.label+'</option>'; }).join("")+
@@ -1436,6 +1528,24 @@ function renderAvulsoSeparacaoScreen(){
 }
 
 /* ---- Tela 3: Concluídos (igual à "Pedidos Entregues") — relatório filtrável + PDF ---- */
+function confirmReverterAvulso(id){
+  const item = STATE.materiaisAvulsos.find(function(a){ return a.id===id; });
+  if(!item) return;
+  const m = STATE.materiais.find(function(x){ return x.id===item.materialId; });
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Reverter conclusão</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">'+(item.op?("OP "+escapeHtml(item.op)+" — "):"")+(m?escapeHtml(m.nome):"?")+'. O registro volta pro status "Aguardando" e '+fmtNum(item.quantidade)+' '+(m?m.unidade:"")+' '+(m?"são devolvidos":"é devolvido")+' ao estoque.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="doReverterAvulso(\''+id+'\')">Reverter</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function doReverterAvulso(id){
+  closeModal();
+  await updateAvulsoStatus(id, "aguardando");
+}
 function renderAvulsoConcluidosScreen(){
   const f = STATE.avulsoConcluidosFiltro;
   const concluidos = STATE.materiaisAvulsos.filter(function(a){
@@ -1456,11 +1566,11 @@ function renderAvulsoConcluidosScreen(){
       '<td>'+(m?escapeHtml(m.nome):"?")+'</td>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(a.quantidade)+' '+(m?m.unidade:"")+'</td>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace">'+(a.concluidoEm?fmtDateBR(a.concluidoEm.slice(0,10)):"—")+'</td>'+
-      '<td class="no-print">'+icon("checkCircle",14,COLORS.green)+'</td>'+
+      '<td class="no-print"><button class="icon-btn" title="Reverter — volta pra Aguardando e devolve a quantidade ao estoque" onclick="confirmReverterAvulso(\''+a.id+'\')">'+icon("undo",14)+'</button></td>'+
     '</tr>';
   }).join("");
   const table = concluidos.length===0 ? emptyStateHtml("Nenhum registro concluído com os filtros atuais.") :
-    '<table class="pcp-table"><thead><tr><th>OP</th><th>Cliente</th><th>Matéria-Prima</th><th>Quantidade</th><th>Concluído em</th><th class="no-print"></th></tr></thead><tbody>'+rows+'</tbody></table>';
+    '<table class="pcp-table"><thead><tr><th>OP</th><th>Cliente</th><th>Matéria-Prima</th><th>Quantidade</th><th>Concluído em</th><th class="no-print">Reverter</th></tr></thead><tbody>'+rows+'</tbody></table>';
   document.getElementById("content").innerHTML =
     screenHeaderHtml("checkCircle","Pedido Concluído","Registros de separação avulsa já baixados do estoque",
       '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
@@ -4764,7 +4874,7 @@ const NAV_GROUPS = [
      primeira versão do módulo, mas os rótulos visíveis mudaram — não é bug, é só pra não ter
      que remexer em permissões já salvas por causa de um id. */
   { id:"progAcessorios", title:"Prog. de Acessórios", items:[
-    {id:"avulsoLancamento", label:"Separação de Material", icon:"arrowDownCircle"},
+    {id:"avulsoLancamento", label:"Lanç.de Pedidos", icon:"arrowDownCircle"},
     {id:"avulsoSeparacao", label:"Prog. Pedido Manual", icon:"calendar"},
     {id:"avulsoConcluidos", label:"Pedido Concluído", icon:"checkCircle"},
   ]},
@@ -5131,6 +5241,7 @@ function setScreen(id){
     showToast("error","Você não tem permissão para acessar esta tela.");
     return;
   }
+  if(STATE.screen!==id) STATE.screenAnterior = STATE.screen;
   STATE.screen=id;
   const groupId = findNavGroupFor(id);
   if(groupId && STATE.sidebarCollapsedGroups[groupId]){

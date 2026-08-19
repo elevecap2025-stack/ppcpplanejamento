@@ -286,7 +286,7 @@ function mapMaterialFromRow(r){
     id:r.id, tipo:r.tipo, nome:r.nome, cor:r.cor||"N", unidade:r.unidade||"m",
     estoque:Number(r.estoque||0), estoqueMinimo:Number(r.estoque_minimo||0), loteMinimo:Number(r.lote_minimo||0),
     fator:Number(r.fator||1), valorUnitario:Number(r.valor_unitario||0), atencao:!!r.atencao,
-    fatorConversaoKg:Number(r.fator_conversao_kg||0),
+    fatorConversaoKg:Number(r.fator_conversao_kg||0), estoqueInicial:Number(r.estoque_inicial||0),
     dataCadastro:r.data_cadastro, ultimoAcerto:r.ultimo_acerto||null,
   };
 }
@@ -316,6 +316,28 @@ function mapNotaFromRow(r){ return {id:r.id, data:r.data, fornecedor:r.fornecedo
 function mapFatorHistoricoFromRow(r){ return {id:r.id, materialId:r.material_id, fator:Number(r.fator||0), vigenciaDesde:r.vigencia_desde, criadoEm:r.criado_em}; }
 function mapBaixaManualFromRow(r){ return {id:r.id, materialId:r.material_id, quantidade:Number(r.quantidade||0), motivo:r.motivo||"", observacao:r.observacao||"", data:r.data}; }
 function mapTransferenciaFromRow(r){ return {id:r.id, materialOrigemId:r.material_origem_id, materialDestinoId:r.material_destino_id, quantidade:Number(r.quantidade||0), observacao:r.observacao||"", data:r.data}; }
+function mapMovimentoFromRow(r){ return {id:r.id, materialId:r.material_id, tipo:r.tipo, origem:r.origem, quantidade:Number(r.quantidade||0), referencia:r.referencia||"", data:r.data}; }
+/* ---- registro de movimentações de estoque (auditoria: Saldo Inicial + Entradas − Saídas = Saldo Atual) ----
+   Chamado em TODO ponto que altera materiais.estoque (nota de entrada, baixa manual, avulso, transferência,
+   consumo de produção via pedido, acerto). Best-effort: se falhar, avisa mas não desfaz a operação principal,
+   que já foi concluída com sucesso no banco. */
+async function logMovimento(materialId, tipo, quantidade, origem, referencia){
+  if(!materialId) return;
+  const qtd = Math.round(Math.abs(Number(quantidade||0))*100)/100;
+  if(!(qtd>0)) return;
+  const row = {material_id:materialId, tipo:tipo, origem:origem, quantidade:qtd, referencia:referencia||"", data:todayStr()};
+  const { data:inserted, error } = await sb.from("movimentacoes_estoque").insert(row).select().single();
+  if(error){ sbErrorToast("registrar movimentação de estoque ("+origem+")", error); return; }
+  STATE.movimentacoes.push(mapMovimentoFromRow(inserted));
+}
+function movTotaisDoMaterial(materialId){
+  let entradas=0, saidas=0;
+  STATE.movimentacoes.forEach(function(mv){
+    if(mv.materialId!==materialId) return;
+    if(mv.tipo==="entrada") entradas += mv.quantidade; else if(mv.tipo==="saida") saidas += mv.quantidade;
+  });
+  return {entradas: Math.round(entradas*100)/100, saidas: Math.round(saidas*100)/100};
+}
 function mapMaterialAvulsoFromRow(r){
   return {
     id:r.id, op:r.op||"", cliente:r.cliente||"", materialId:r.material_id, quantidade:Number(r.quantidade||0),
@@ -615,7 +637,7 @@ const STATE = {
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
-  baixasManual:[], transferencias:[], fatorConversaoHistorico:[],
+  baixasManual:[], transferencias:[], fatorConversaoHistorico:[], movimentacoes:[],
   tipoOptions:[], cumeeiraOptions:[], fatoresProducaoPerfilar:{},
   metasDiaOverride:{colagem:{}, perfilar:{}}, feriadosCustom:[], feriadosRemovidos:[],
   metasCalStage:"perfilar", metasCalMonth:new Date().getMonth(), metasCalYear:new Date().getFullYear(),
@@ -640,7 +662,7 @@ function initLocalDefaults(){
 async function loadAllData(){
   const content = document.getElementById("content");
   if(content) content.innerHTML = '<div style="padding:60px;text-align:center;color:'+COLORS.textMuted+'">Carregando dados do Supabase…</div>';
-  const [cidadesR, equipamentosR, motoristasR, statusR, materiaisR, pedidosR, notasR, baixasR, transfR, fatorHistR, avulsosR] = await Promise.all([
+  const [cidadesR, equipamentosR, motoristasR, statusR, materiaisR, pedidosR, notasR, baixasR, transfR, fatorHistR, avulsosR, movimentacoesR] = await Promise.all([
     sb.from("cidades").select("*").order("nome"),
     sb.from("equipamentos").select("*").order("nome"),
     sb.from("motoristas").select("*").order("nome"),
@@ -652,8 +674,9 @@ async function loadAllData(){
     sb.from("transferencias").select("*").order("data", {ascending:false}),
     sb.from("fator_conversao_historico").select("*").order("vigencia_desde", {ascending:false}),
     sb.from("materiais_avulsos").select("*").order("created_at", {ascending:false}),
+    sb.from("movimentacoes_estoque").select("*").order("data", {ascending:false}),
   ]);
-  [["cidades",cidadesR],["equipamentos",equipamentosR],["motoristas",motoristasR],["situações",statusR],["matéria-prima",materiaisR],["pedidos",pedidosR],["notas",notasR],["baixas de estoque",baixasR],["transferências",transfR],["histórico de fator de conversão",fatorHistR],["separação de materiais avulsos",avulsosR]].forEach(function(pair){
+  [["cidades",cidadesR],["equipamentos",equipamentosR],["motoristas",motoristasR],["situações",statusR],["matéria-prima",materiaisR],["pedidos",pedidosR],["notas",notasR],["baixas de estoque",baixasR],["transferências",transfR],["histórico de fator de conversão",fatorHistR],["separação de materiais avulsos",avulsosR],["movimentações de estoque",movimentacoesR]].forEach(function(pair){
     if(pair[1].error) sbErrorToast("carregar "+pair[0], pair[1].error);
   });
   STATE.cidades = (cidadesR.data||[]).map(mapCidadeFromRow);
@@ -667,6 +690,7 @@ async function loadAllData(){
   STATE.transferencias = (transfR.data||[]).map(mapTransferenciaFromRow);
   STATE.fatorConversaoHistorico = (fatorHistR.data||[]).map(mapFatorHistoricoFromRow);
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
+  STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
   const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
@@ -841,6 +865,8 @@ async function salvarAcertoEstoque(materialId){
   if(error){ sbErrorToast("ajustar estoque", error); return; }
   m.estoque = novoSaldo;
   m.ultimoAcerto = ultimoAcerto;
+  const deltaAcerto = novoSaldo - anterior;
+  if(deltaAcerto) await logMovimento(materialId, deltaAcerto>0?"entrada":"saida", deltaAcerto, "ajuste", motivo||"Acerto de estoque");
   closeModal();
   renderScreen();
   showToast("success","Estoque ajustado: "+fmtNum(anterior)+" \u2192 "+fmtNum(novoSaldo)+" "+m.unidade+".");
@@ -890,6 +916,7 @@ async function submitBaixaManualForm(event){
   }
   m.estoque = novoEstoque;
   STATE.baixasManual.push(mapBaixaManualFromRow(row));
+  await logMovimento(data.materialId, "saida", qtd, "baixa_manual", data.motivo||"Baixa de estoque");
   closeModal();
   renderScreen();
   showToast("success","Baixa de "+fmtNum(qtd)+" "+m.unidade+" registrada para "+m.nome+".");
@@ -918,7 +945,11 @@ async function doDeleteBaixaManual(id){
     if(m){
       const { error:updErr } = await sb.from("materiais").update({estoque:novoEstoque}).eq("id", m.id);
       if(updErr){ sbErrorToast("estornar estoque", updErr); }
-      else m.estoque = novoEstoque;
+      else {
+        m.estoque = novoEstoque;
+        const origemMov = (b.motivo||"").indexOf("Avulso")>=0 ? "avulso" : "baixa_manual";
+        await logMovimento(m.id, b.quantidade>0?"entrada":"saida", b.quantidade, origemMov, "Estorno: "+(b.motivo||"baixa removida"));
+      }
     }
     STATE.baixasManual = STATE.baixasManual.filter(x=>x.id!==id);
   }
@@ -972,6 +1003,7 @@ async function devolverBaixaRow(materialId){
   }
   m.estoque = novoEstoque;
   STATE.baixasManual.push(mapBaixaManualFromRow(row));
+  await logMovimento(materialId, "entrada", qtd, "baixa_manual", obs||"Devolução (baixa duplicada)");
   closeModal();
   renderScreen();
   showToast("success", fmtNum(qtd)+" "+m.unidade+" devolvidos ao estoque de "+m.nome+".");
@@ -1254,6 +1286,7 @@ async function efetivarBaixaAvulso(item){
   }
   m.estoque = novoEstoque;
   STATE.baixasManual.push(mapBaixaManualFromRow(row));
+  await logMovimento(m.id, "saida", qtd, "avulso", "OP "+(item.op||"—")+(item.cliente?(" · "+item.cliente):""));
   item.baixado = true;
   item.baixaManualId = row.id;
   const { error:updAvErr } = await sb.from("materiais_avulsos").update({ baixado:true, baixa_manual_id:row.id }).eq("id", item.id);
@@ -1279,6 +1312,7 @@ async function estornarBaixaAvulso(item){
     const { error:updErr } = await sb.from("materiais").update({estoque:novoEstoque}).eq("id", m.id);
     if(updErr){ sbErrorToast("devolver estoque da separação avulsa", updErr); return false; }
     m.estoque = novoEstoque;
+    await logMovimento(m.id, "entrada", item.quantidade, "avulso", "Estorno — OP "+(item.op||"—")+(item.cliente?(" · "+item.cliente):""));
   }
   return true;
 }
@@ -1685,6 +1719,10 @@ async function submitTransferenciaForm(event){
   origem.estoque = novoOrigem;
   destino.estoque = novoDestino;
   STATE.transferencias.push(mapTransferenciaFromRow(row));
+  await Promise.all([
+    logMovimento(origem.id, "saida", qtd, "transferencia", "Para "+destino.nome+(data.observacao?(" — "+data.observacao):"")),
+    logMovimento(destino.id, "entrada", qtd, "transferencia", "De "+origem.nome+(data.observacao?(" — "+data.observacao):"")),
+  ]);
   closeModal();
   renderScreen();
   showToast("success","Transferidos "+fmtNum(qtd)+" de "+origem.nome+" para "+destino.nome+".");
@@ -1719,6 +1757,10 @@ async function doDeleteTransferencia(id){
     if(origem) origem.estoque = Math.round((origem.estoque + t.quantidade)*100)/100;
     if(destino) destino.estoque = Math.round((destino.estoque - t.quantidade)*100)/100;
     STATE.transferencias = STATE.transferencias.filter(x=>x.id!==id);
+    await Promise.all([
+      origem ? logMovimento(origem.id, "entrada", t.quantidade, "transferencia", "Estorno — de "+(destino?destino.nome:"?")) : Promise.resolve(),
+      destino ? logMovimento(destino.id, "saida", t.quantidade, "transferencia", "Estorno — para "+(origem?origem.nome:"?")) : Promise.resolve(),
+    ]);
   }
   closeModal();
   renderScreen();
@@ -1837,7 +1879,9 @@ const ENTITY_CONFIGS = {
         '<div style="min-width:160px"><label class="field-label">Tipo</label><select class="field-select" onchange="updateMateriaisFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
           uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
           '</select></div>'+
-        '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" value="'+escapeAttr(f.produto)+'" placeholder="Buscar produto…" onchange="updateMateriaisFiltro(\'produto\', this.value)"/></div>'+
+        '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" list="materiais-produto-datalist" value="'+escapeAttr(f.produto)+'" placeholder="Buscar e selecionar produto…" onchange="updateMateriaisFiltro(\'produto\', this.value)"/>'+
+          '<datalist id="materiais-produto-datalist">'+Array.from(new Set(STATE.materiais.map(m=>m.nome))).sort().map(n=>'<option value="'+escapeAttr(n)+'">').join("")+'</datalist>'+
+        '</div>'+
         '<div style="min-width:140px"><label class="field-label">Mês (cadastro)</label><select class="field-select" onchange="updateMateriaisFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
           MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
         '<div style="width:110px"><label class="field-label">Ano (cadastro)</label><select class="field-select" onchange="updateMateriaisFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
@@ -1865,9 +1909,18 @@ const ENTITY_CONFIGS = {
       {key:"tipo", label:"Tipo"},
       {key:"nome", label:"Material", render:(it)=> it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome)},
       {key:"cor", label:"É Cor?", render:(it)=> it.cor==="S" ? "Sim" : "Não"},
-      {key:"estoque", label:"Estoque", render:(it)=>{
+      {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>'<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace">'+fmtNum(it.estoqueInicial||0)+' '+it.unidade+'</span>'},
+      {key:"entradas", label:"Entradas", render:(it)=>{
+        const t = movTotaisDoMaterial(it.id);
+        return t.entradas>0 ? '<span style="color:'+COLORS.green+';font-family:\'IBM Plex Mono\',monospace">+'+fmtNum(t.entradas)+' '+it.unidade+'</span>' : '<span style="color:'+COLORS.textMuted+'">—</span>';
+      }},
+      {key:"saidas", label:"Saídas", render:(it)=>{
+        const t = movTotaisDoMaterial(it.id);
+        return t.saidas>0 ? '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace">-'+fmtNum(t.saidas)+' '+it.unidade+'</span>' : '<span style="color:'+COLORS.textMuted+'">—</span>';
+      }},
+      {key:"estoque", label:"Saldo Atual", render:(it)=>{
         const low = it.estoque < it.estoqueMinimo;
-        return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px">'+fmtNum(it.estoque)+' '+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
+        return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px" title="Saldo Inicial + Entradas − Saídas registradas desde a ativação deste controle">'+fmtNum(it.estoque)+' '+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
       }},
       {key:"preProducao", label:"Pré-produção", render:(it)=>{
         const total = Number(preProducaoTotals()[it.id]||0);
@@ -1887,15 +1940,18 @@ const ENTITY_CONFIGS = {
       {key:"cor", label:"É Cor? (S/N)", type:"select", options:()=>[{value:"S",label:"Sim"},{value:"N",label:"Não"}], default:"N"},
       {key:"unidade", label:"Unidade", type:"text", default:"m"},
       {key:"estoque", label:"Estoque atual", type:"number", required:true},
+      {key:"estoqueInicial", label:"Saldo Inicial", type:"number", placeholder:"Em branco = igual ao Estoque atual"},
       {key:"estoqueMinimo", label:"Estoque mínimo", type:"number"},
       {key:"loteMinimo", label:"Lote mínimo de compra", type:"number"},
       {key:"fator", label:"Fator de consumo (× metragem)", type:"number", default:"1"},
       {key:"valorUnitario", label:"Valor Unitário (R$)", type:"number", default:"0", full:true},
     ],
     onAdd: async(data)=>{
+      const estoqueVal = Number(data.estoque||0);
+      const estoqueInicialVal = (data.estoqueInicial!==undefined && data.estoqueInicial!=="") ? Number(data.estoqueInicial) : estoqueVal;
       const row = {
         tipo:data.tipo||"Outro", nome:data.nome, cor:data.cor==="S"?"S":"N", unidade:data.unidade||"m",
-        estoque:Number(data.estoque||0), estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
+        estoque:estoqueVal, estoque_inicial:estoqueInicialVal, estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
         fator:Number(data.fator||1), valor_unitario:Number(data.valorUnitario||0), data_cadastro: todayStr(), atencao:false,
       };
       const { data:inserted, error } = await sb.from("materiais").insert(row).select().single();
@@ -1905,15 +1961,17 @@ const ENTITY_CONFIGS = {
       showToast("success","Matéria-prima cadastrada.");
     },
     onUpdate: async(id,data)=>{
+      const mAtual = STATE.materiais.find(x=>x.id===id);
+      const estoqueInicialVal = (data.estoqueInicial!==undefined && data.estoqueInicial!=="") ? Number(data.estoqueInicial) : Number((mAtual&&mAtual.estoqueInicial)||0);
       const row = {
         tipo:data.tipo, nome:data.nome, cor:data.cor==="S"?"S":"N", unidade:data.unidade,
-        estoque:Number(data.estoque||0), estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
+        estoque:Number(data.estoque||0), estoque_inicial:estoqueInicialVal, estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
         fator:Number(data.fator||1), valor_unitario:Number(data.valorUnitario||0),
       };
       const { error } = await sb.from("materiais").update(row).eq("id", id);
       if(error){ sbErrorToast("atualizar matéria-prima", error); return false; }
       const m=STATE.materiais.find(x=>x.id===id);
-      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoque=row.estoque; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; }
+      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoque=row.estoque; m.estoqueInicial=row.estoque_inicial; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; }
       if(data.tipo && !STATE.materialTipos.includes(data.tipo)){ STATE.materialTipos.push(data.tipo); await configSet("material_tipos", STATE.materialTipos); }
     },
     onDelete: async(id)=>{
@@ -1970,11 +2028,11 @@ function fieldHtml(f, item){
       opts.map(o=>'<option value="'+escapeAttr(o.value)+'" '+(String(val)===String(o.value)?"selected":"")+'>'+escapeHtml(o.label)+'</option>').join('')+
       '</select>';
   } else if(f.type==="number"){
-    control = '<input class="field-input" id="f-'+f.key+'" type="number" step="0.01" name="'+f.key+'" value="'+escapeAttr(val)+'" '+(f.required?"required":"")+'/>';
+    control = '<input class="field-input" id="f-'+f.key+'" type="number" step="0.01" name="'+f.key+'" value="'+escapeAttr(val)+'" '+(f.placeholder?'placeholder="'+escapeAttr(f.placeholder)+'"':"")+' '+(f.required?"required":"")+'/>';
   } else {
     const listId = "dl-"+f.key;
     const listAttr = f.datalist ? ' list="'+listId+'"' : '';
-    control = '<input class="field-input" id="f-'+f.key+'" type="text" name="'+f.key+'" value="'+escapeAttr(val)+'"'+listAttr+' '+(f.required?"required":"")+'/>';
+    control = '<input class="field-input" id="f-'+f.key+'" type="text" name="'+f.key+'" value="'+escapeAttr(val)+'"'+listAttr+' '+(f.placeholder?'placeholder="'+escapeAttr(f.placeholder)+'"':"")+' '+(f.required?"required":"")+'/>';
     if(f.datalist){ control += '<datalist id="'+listId+'">'+f.datalist().map(o=>'<option value="'+escapeAttr(o)+'">').join('')+'</datalist>'; }
     if(f.quickAddType){ control += '<div id="qa-'+f.quickAddType+'">'+quickAddButtonHtml(f.quickAddType)+'</div>'; }
   }
@@ -2106,6 +2164,8 @@ async function adjustStock(oldPedido, newPedido){
   const oldMap = computeEffectiveConsumption(oldPedido);
   const newMap = computeEffectiveConsumption(newPedido);
   const ids = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
+  const pedidoRef = newPedido||oldPedido;
+  const refTxt = pedidoRef ? ("Pedido OP "+(pedidoRef.op||pedidoRef.id)+(pedidoRef.cliente?(" · "+pedidoRef.cliente):"")) : "Pedido";
   const writes = [];
   ids.forEach(id=>{
     const delta = (newMap[id]||0) - (oldMap[id]||0);
@@ -2114,9 +2174,12 @@ async function adjustStock(oldPedido, newPedido){
     if(!mat) return;
     const novoEstoque = Math.round((mat.estoque - delta)*100)/100;
     writes.push(
-      sb.from("materiais").update({estoque:novoEstoque}).eq("id", id).then(r=>{
+      sb.from("materiais").update({estoque:novoEstoque}).eq("id", id).then(async r=>{
         if(r.error){ sbErrorToast("ajustar estoque de "+mat.nome, r.error); }
-        else { mat.estoque = novoEstoque; }
+        else {
+          mat.estoque = novoEstoque;
+          await logMovimento(id, delta>0?"saida":"entrada", delta, "producao", refTxt);
+        }
       })
     );
   });
@@ -3767,9 +3830,12 @@ async function addNota(nota){
       novoCustoMedio = Math.round(novoCustoMedio*10000)/10000;
       patch.valor_unitario = novoCustoMedio;
     }
-    writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(r=>{
+    writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(async r=>{
       if(r.error){ sbErrorToast("atualizar estoque de "+m.nome, r.error); }
-      else { m.estoque = novoEstoque; if(agg.temValor) m.valorUnitario = novoCustoMedio; }
+      else {
+        m.estoque = novoEstoque; if(agg.temValor) m.valorUnitario = novoCustoMedio;
+        await logMovimento(m.id, "entrada", agg.qtd, "compra", "Nota "+(nota.numeroNota||"—")+(nota.fornecedor?(" — "+nota.fornecedor):""));
+      }
     }));
   });
   await Promise.all(writes);
@@ -3820,9 +3886,12 @@ async function updateNota(id, nota){
       novoCustoMedio = Math.round(novoCustoMedio*10000)/10000;
       patch.valor_unitario = novoCustoMedio;
     }
-    writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(r=>{
+    writes.push(sb.from("materiais").update(patch).eq("id", m.id).then(async r=>{
       if(r.error){ sbErrorToast("ajustar estoque/custo de "+m.nome, r.error); }
-      else { m.estoque = novoEstoque; if(diffValorTotal) m.valorUnitario = novoCustoMedio; }
+      else {
+        m.estoque = novoEstoque; if(diffValorTotal) m.valorUnitario = novoCustoMedio;
+        if(diffQtd) await logMovimento(m.id, diffQtd>0?"entrada":"saida", diffQtd, "compra", "Ajuste na nota "+(nota.numeroNota||"—")+(nota.fornecedor?(" — "+nota.fornecedor):""));
+      }
     }));
   });
   await Promise.all(writes);
@@ -3858,9 +3927,12 @@ async function doDeleteNota(id){
     const m = STATE.materiais.find(x=>x.id===it.materialId);
     if(!m) return;
     const novoEstoque = Math.round((m.estoque - Number(it.quantidade||0))*100)/100;
-    writes.push(sb.from("materiais").update({estoque:novoEstoque}).eq("id", m.id).then(r=>{
+    writes.push(sb.from("materiais").update({estoque:novoEstoque}).eq("id", m.id).then(async r=>{
       if(r.error){ sbErrorToast("estornar estoque de "+m.nome, r.error); }
-      else { m.estoque = novoEstoque; }
+      else {
+        m.estoque = novoEstoque;
+        await logMovimento(m.id, "saida", it.quantidade, "compra", "Remoção da nota "+(n.numeroNota||"—")+(n.fornecedor?(" — "+n.fornecedor):""));
+      }
     }));
   });
   await Promise.all(writes);

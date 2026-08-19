@@ -2092,7 +2092,7 @@ const ENTITY_CONFIGS = {
       {key:"cor", label:"É Cor? (S/N)", type:"select", options:()=>[{value:"S",label:"Sim"},{value:"N",label:"Não"}], default:"N"},
       {key:"unidade", label:"Unidade", type:"text", default:"m"},
       {key:"estoque", label:"Estoque atual", type:"number", required:true, lockOnEdit:true, lockHint:"Para alterar o estoque, use o botão Acerto de Estoque na linha do material (restrito a administradores)."},
-      {key:"estoqueInicial", label:"Saldo Inicial", type:"number", adminOnly:true, placeholder:"Em branco = igual ao Estoque atual"},
+      {key:"estoqueInicial", label:"Saldo Inicial", type:"number", adminOnly:true, placeholder:"Em branco = mantém o atual", hint:"Alterar este valor recalcula o Estoque atual (Saldo Inicial + Entradas − Saídas)."},
       {key:"estoqueMinimo", label:"Estoque mínimo", type:"number"},
       {key:"loteMinimo", label:"Lote mínimo de compra", type:"number"},
       {key:"fator", label:"Fator de consumo (× metragem)", type:"number", default:"1"},
@@ -2115,21 +2115,36 @@ const ENTITY_CONFIGS = {
     onUpdate: async(id,data)=>{
       const mAtual = STATE.materiais.find(x=>x.id===id);
       const admin = isCurrentUserAdmin();
-      /* O estoque NÃO é alterado por este formulário — só por Acerto de Estoque ou
-         pela alteração do Saldo Inicial, ambos restritos a administradores.
-         O Saldo Inicial só é gravado se quem editou for administrador. */
+      /* O estoque não é editável diretamente neste formulário. Ele só muda por
+         Acerto de Estoque ou, aqui, como consequência de o administrador ter
+         alterado o Saldo Inicial — nesse caso é recalculado pela mesma fórmula
+         do modal: Saldo Inicial + Entradas − Saídas. */
+      const inicialAnterior = Number((mAtual&&mAtual.estoqueInicial)||0);
       const estoqueInicialVal = (admin && data.estoqueInicial!==undefined && data.estoqueInicial!=="")
         ? Number(data.estoqueInicial)
-        : Number((mAtual&&mAtual.estoqueInicial)||0);
+        : inicialAnterior;
       const row = {
         tipo:data.tipo, nome:data.nome, cor:data.cor==="S"?"S":"N", unidade:data.unidade,
         estoque_inicial:estoqueInicialVal, estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
         fator:Number(data.fator||1), valor_unitario:Number(data.valorUnitario||0),
       };
+      const mudouInicial = admin && Math.abs(estoqueInicialVal - inicialAnterior) >= 0.005;
+      let novoEstoque = null, estoqueAnterior = null;
+      if(mudouInicial && mAtual){
+        const t = movTotaisDoMaterial(id);
+        estoqueAnterior = Number(mAtual.estoque||0);
+        novoEstoque = Math.round((estoqueInicialVal + t.entradas - t.saidas)*100)/100;
+        row.estoque = novoEstoque;
+      }
       const { error } = await sb.from("materiais").update(row).eq("id", id);
       if(error){ sbErrorToast("atualizar matéria-prima", error); return false; }
       const m=STATE.materiais.find(x=>x.id===id);
-      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoqueInicial=row.estoque_inicial; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; }
+      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoqueInicial=row.estoque_inicial; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; if(novoEstoque!==null) m.estoque=novoEstoque; }
+      if(novoEstoque!==null){
+        const delta = Math.round((novoEstoque - estoqueAnterior)*100)/100;
+        if(delta) await logMovimento(id, delta>0?"entrada":"saida", delta, "ajuste", "Alteração do saldo inicial para "+fmtNum(estoqueInicialVal)+" "+row.unidade);
+        showToast("success","Saldo inicial alterado — saldo atual recalculado para "+fmtNum(novoEstoque)+" "+row.unidade+".");
+      }
       if(data.tipo && !STATE.materialTipos.includes(data.tipo)){ STATE.materialTipos.push(data.tipo); await configSet("material_tipos", STATE.materialTipos); }
     },
     onDelete: async(id)=>{
@@ -2278,7 +2293,8 @@ function fieldHtml(f, item){
     if(f.datalist){ control += '<datalist id="'+listId+'">'+f.datalist().map(o=>'<option value="'+escapeAttr(o)+'">').join('')+'</datalist>'; }
     if(f.quickAddType){ control += '<div id="qa-'+f.quickAddType+'">'+quickAddButtonHtml(f.quickAddType)+'</div>'; }
   }
-  return '<div style="'+(f.full?"grid-column:1 / -1":"")+'">'+label+control+'</div>';
+  const hintHtml = f.hint ? '<p style="font-size:10.5px;color:'+COLORS.textMuted+';margin:4px 0 0;line-height:1.4">'+f.hint+'</p>' : '';
+  return '<div style="'+(f.full?"grid-column:1 / -1":"")+'">'+label+control+hintHtml+'</div>';
 }
 
 function openEntityModal(type, mode, id){

@@ -586,6 +586,49 @@ function screenHeaderHtml(iconName, title, subtitle, actionHtml, hideAllInPrint)
     (subtitle?'<p class="screen-subtitle">'+subtitle+'</p>':'')+'</div>'+(actionHtml||'')+'</div>';
 }
 function emptyStateHtml(text){ return '<div style="padding:44px;text-align:center;color:'+COLORS.textMuted+';font-size:13.5px">'+(text||'Nenhum registro ainda. Clique em "Novo" para cadastrar.')+'</div>'; }
+
+/* ============================== EXPORTAÇÃO (EXCEL / PDF) ==============================
+   Helpers genéricos usados pelas telas de Matéria-Prima, Baixa de Materiais e
+   Movimentação de Estoque. O "Excel" é um CSV com separador ponto-e-vírgula e BOM
+   UTF-8 — é o formato que o Excel em português abre direto, com acentos corretos e
+   já separado em colunas. Números vão com vírgula decimal para o Excel reconhecer. */
+function exportBotoesHtml(fnBase){
+  return '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+    '<button class="btn btn-ghost" onclick="'+fnBase+'Excel()" title="Baixar planilha (.csv, abre no Excel)">'+icon("package",13)+' Excel</button>'+
+    '<button class="btn btn-ghost" onclick="'+fnBase+'Pdf()" title="Gerar PDF">'+icon("printer",13)+' PDF</button>'+
+  '</div>';
+}
+function csvCell(v){
+  if(v==null) return "";
+  const s = String(v);
+  return /[";\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s;
+}
+function csvNum(n){ return String(Number(n||0).toFixed(2)).replace(".", ","); }
+function baixarCsv(nomeArquivo, head, body){
+  const linhas = [head].concat(body).map(function(r){ return r.map(csvCell).join(";"); }).join("\r\n");
+  const blob = new Blob(["\ufeff"+linhas], {type:"text/csv;charset=utf-8;"});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nomeArquivo;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  showToast("success","Planilha gerada.");
+}
+function gerarPdfTabela(titulo, subtitulo, head, body, orientacao){
+  if(!window.jspdf || !window.jspdf.jsPDF){ showToast("error","Biblioteca de PDF não carregou — verifique sua conexão e tente novamente."); return; }
+  const doc = new window.jspdf.jsPDF({orientation: orientacao || "landscape"});
+  doc.setFontSize(14);
+  doc.text(titulo, 14, 16);
+  doc.setFontSize(9);
+  doc.text(subtitulo, 14, 22);
+  doc.autoTable({
+    startY:28, head:[head], body:body,
+    styles:{fontSize:8}, headStyles:{fillColor:[0,128,198]},
+  });
+  const nome = titulo.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  doc.save(nome+"-"+todayStr()+".pdf");
+  showToast("success","PDF gerado.");
+}
 function statCardHtml(label, value, iconName, accent){
   accent = accent || COLORS.textMuted;
   const valColor = accent===COLORS.textMuted ? COLORS.text : accent;
@@ -882,11 +925,49 @@ async function removeMotivoPerda(idx){
 
 function updateMateriaisFiltro(key, val){ STATE.materiaisFiltro[key]=val; renderScreen(); }
 function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false}; renderScreen(); }
+/* ---- exportação: Matéria-Prima (respeita os filtros da tela) ---- */
+function materiaisExportDados(){
+  const items = ENTITY_CONFIGS.material.filterItems(STATE.materiais);
+  const head = ["Tipo","Material","É Cor?","Saldo Inicial","Entradas","Saídas","Saldo Atual","Divergência","Pré-produção","Mínimo","Lote Mín. Compra","Fator Consumo","Valor Unit.","Valor em Estoque","Unidade","Cadastrado em"];
+  const preTotals = preProducaoTotals();
+  const rows = items.map(function(m){
+    const t = movTotaisDoMaterial(m.id);
+    return [
+      m.tipo, m.nome, m.cor==="S"?"Sim":"Não",
+      Number(m.estoqueInicial||0), t.entradas, t.saidas, Number(m.estoque||0),
+      divergenciaDoMaterial(m), Number(preTotals[m.id]||0),
+      Number(m.estoqueMinimo||0), Number(m.loteMinimo||0), Number(m.fator||1),
+      Number(m.valorUnitario||0), Number(m.estoque||0)*Number(m.valorUnitario||0),
+      m.unidade, m.dataCadastro||"",
+    ];
+  });
+  return {items:items, head:head, rows:rows};
+}
+function exportarMateriaisExcel(){
+  const d = materiaisExportDados();
+  if(d.items.length===0){ showToast("info","Nenhum material pra exportar com os filtros atuais."); return; }
+  const body = d.rows.map(function(r){
+    return [r[0],r[1],r[2], csvNum(r[3]),csvNum(r[4]),csvNum(r[5]),csvNum(r[6]),csvNum(r[7]),csvNum(r[8]),
+            csvNum(r[9]),csvNum(r[10]),csvNum(r[11]),csvNum(r[12]),csvNum(r[13]), r[14], r[15]?fmtDateBR(r[15]):""];
+  });
+  baixarCsv("materia-prima-"+todayStr()+".csv", d.head, body);
+}
+function exportarMateriaisPdf(){
+  const d = materiaisExportDados();
+  if(d.items.length===0){ showToast("info","Nenhum material pra exportar com os filtros atuais."); return; }
+  const head = ["Tipo","Material","Saldo Inicial","Entradas","Saídas","Saldo Atual","Diverg.","Mínimo","Valor Unit.","Valor Estoque"];
+  const body = d.rows.map(function(r){
+    return [r[0], r[1], fmtNum(r[3])+" "+r[14], fmtNum(r[4]), fmtNum(r[5]), fmtNum(r[6])+" "+r[14],
+            Math.abs(r[7])>=0.01?fmtNum(r[7]):"—", fmtNum(r[9])+" "+r[14], fmtBRL(r[12]), fmtBRL(r[13])];
+  });
+  gerarPdfTabela("Matéria-Prima", "Gerado em "+fmtDateBR(todayStr())+" · "+d.items.length+" material(is)", head, body);
+}
 
 /* ---- acerto de estoque ---- */
 function openAcertoModal(materialId){
   const m = STATE.materiais.find(x=>x.id===materialId);
   if(!m) return;
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem fazer acerto de estoque."); return; }
   const nomeDisplay = m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : '<span style="font-size:14px;font-weight:600">'+escapeHtml(m.nome)+'</span>';
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
@@ -907,6 +988,7 @@ function openAcertoModal(materialId){
 async function salvarAcertoEstoque(materialId){
   const m = STATE.materiais.find(x=>x.id===materialId);
   if(!m) return;
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem fazer acerto de estoque."); return; }
   const novoSaldo = Number(document.getElementById("acerto-saldo").value||0);
   const motivo = document.getElementById("acerto-motivo").value.trim();
   const anterior = m.estoque;
@@ -1964,10 +2046,17 @@ const ENTITY_CONFIGS = {
       {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>{
         const div = divergenciaDoMaterial(it);
         const sugerido = saldoInicialSugerido(it);
-        if(Math.abs(div) < 0.01) return '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtNum(it.estoqueInicial||0)+'&nbsp;'+it.unidade+'</span>';
-        const tip = "Divergência de "+fmtNum(Math.abs(div))+" "+it.unidade+". Para a conta fechar com os movimentos reais, o Saldo Inicial deveria ser "+fmtNum(sugerido)+" "+it.unidade+". Clique para corrigir.";
+        const admin = isCurrentUserAdmin();
+        const valorTxt = fmtNum(it.estoqueInicial||0)+'&nbsp;'+it.unidade;
+        if(Math.abs(div) < 0.01){
+          if(!admin) return '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+valorTxt+'</span>';
+          return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;white-space:nowrap" title="Alterar saldo inicial (recalcula o saldo atual)" onclick="corrigirSaldoInicial(\''+it.id+'\')">'+
+            '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.textMuted+';white-space:nowrap">'+valorTxt+'</span></button>';
+        }
+        const tip = "Divergência de "+fmtNum(Math.abs(div))+" "+it.unidade+". Para a conta fechar com os movimentos reais, o Saldo Inicial deveria ser "+fmtNum(sugerido)+" "+it.unidade+(admin?". Clique para alterar.":". Peça a um administrador para corrigir.");
+        if(!admin) return '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap;display:inline-flex;align-items:center;gap:5px" title="'+escapeAttr(tip)+'">'+valorTxt+icon("alert",12,COLORS.red)+'</span>';
         return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;gap:5px;border-color:'+COLORS.red+';white-space:nowrap" title="'+escapeAttr(tip)+'" onclick="corrigirSaldoInicial(\''+it.id+'\')">'+
-          '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap">'+fmtNum(it.estoqueInicial||0)+'&nbsp;'+it.unidade+'</span>'+icon("alert",12,COLORS.red)+'</button>';
+          '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap">'+valorTxt+'</span>'+icon("alert",12,COLORS.red)+'</button>';
       }},
       {key:"entradas", label:"Entradas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
@@ -2002,8 +2091,8 @@ const ENTITY_CONFIGS = {
       {key:"nome", label:"Nome / Cor", type:"text", required:true},
       {key:"cor", label:"É Cor? (S/N)", type:"select", options:()=>[{value:"S",label:"Sim"},{value:"N",label:"Não"}], default:"N"},
       {key:"unidade", label:"Unidade", type:"text", default:"m"},
-      {key:"estoque", label:"Estoque atual", type:"number", required:true},
-      {key:"estoqueInicial", label:"Saldo Inicial", type:"number", placeholder:"Em branco = igual ao Estoque atual"},
+      {key:"estoque", label:"Estoque atual", type:"number", required:true, lockOnEdit:true, lockHint:"Para alterar o estoque, use o botão Acerto de Estoque na linha do material (restrito a administradores)."},
+      {key:"estoqueInicial", label:"Saldo Inicial", type:"number", adminOnly:true, placeholder:"Em branco = igual ao Estoque atual"},
       {key:"estoqueMinimo", label:"Estoque mínimo", type:"number"},
       {key:"loteMinimo", label:"Lote mínimo de compra", type:"number"},
       {key:"fator", label:"Fator de consumo (× metragem)", type:"number", default:"1"},
@@ -2025,16 +2114,22 @@ const ENTITY_CONFIGS = {
     },
     onUpdate: async(id,data)=>{
       const mAtual = STATE.materiais.find(x=>x.id===id);
-      const estoqueInicialVal = (data.estoqueInicial!==undefined && data.estoqueInicial!=="") ? Number(data.estoqueInicial) : Number((mAtual&&mAtual.estoqueInicial)||0);
+      const admin = isCurrentUserAdmin();
+      /* O estoque NÃO é alterado por este formulário — só por Acerto de Estoque ou
+         pela alteração do Saldo Inicial, ambos restritos a administradores.
+         O Saldo Inicial só é gravado se quem editou for administrador. */
+      const estoqueInicialVal = (admin && data.estoqueInicial!==undefined && data.estoqueInicial!=="")
+        ? Number(data.estoqueInicial)
+        : Number((mAtual&&mAtual.estoqueInicial)||0);
       const row = {
         tipo:data.tipo, nome:data.nome, cor:data.cor==="S"?"S":"N", unidade:data.unidade,
-        estoque:Number(data.estoque||0), estoque_inicial:estoqueInicialVal, estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
+        estoque_inicial:estoqueInicialVal, estoque_minimo:Number(data.estoqueMinimo||0), lote_minimo:Number(data.loteMinimo||0),
         fator:Number(data.fator||1), valor_unitario:Number(data.valorUnitario||0),
       };
       const { error } = await sb.from("materiais").update(row).eq("id", id);
       if(error){ sbErrorToast("atualizar matéria-prima", error); return false; }
       const m=STATE.materiais.find(x=>x.id===id);
-      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoque=row.estoque; m.estoqueInicial=row.estoque_inicial; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; }
+      if(m){ m.tipo=data.tipo; m.nome=data.nome; m.cor=row.cor; m.unidade=data.unidade; m.estoqueInicial=row.estoque_inicial; m.estoqueMinimo=row.estoque_minimo; m.loteMinimo=row.lote_minimo; m.fator=row.fator; m.valorUnitario=row.valor_unitario; }
       if(data.tipo && !STATE.materialTipos.includes(data.tipo)){ STATE.materialTipos.push(data.tipo); await configSet("material_tipos", STATE.materialTipos); }
     },
     onDelete: async(id)=>{
@@ -2070,47 +2165,74 @@ const ENTITY_CONFIGS = {
     },
   },
 };
-/* Ajusta o Saldo Inicial para o valor que faz a conta fechar com os movimentos
-   reais. NÃO altera o saldo atual — só corrige o ponto de partida histórico. */
+/* Ajusta o Saldo Inicial e recalcula o Saldo Atual pela conta
+   Saldo Atual = Saldo Inicial + Entradas − Saídas.
+   Restrito a administradores. */
 function corrigirSaldoInicial(id){
   const m = STATE.materiais.find(x=>x.id===id);
   if(!m) return;
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem alterar o saldo inicial."); return; }
   const t = movTotaisDoMaterial(m.id);
   const sugerido = saldoInicialSugerido(m);
   const div = divergenciaDoMaterial(m);
   const nomeDisplay = m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : '<span style="font-size:14px;font-weight:600">'+escapeHtml(m.nome)+'</span>';
-  const linha = (rot, val, cor)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0"><span style="color:'+COLORS.textMuted+'">'+rot+'</span><span style="font-family:\'IBM Plex Mono\',monospace;color:'+(cor||COLORS.text)+'">'+val+'</span></div>';
+  const linha = (rot, val, cor)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0"><span style="color:'+COLORS.textMuted+'">'+rot+'</span><span style="font-family:\'IBM Plex Mono\',monospace;color:'+(cor||COLORS.text)+';white-space:nowrap">'+val+'</span></div>';
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:440px">'+
-        '<div class="modal-header"><h3>Corrigir Saldo Inicial</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+      '<div class="modal-card" style="max-width:460px">'+
+        '<div class="modal-header"><h3>Alterar Saldo Inicial</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
         '<div style="margin-bottom:14px">'+nomeDisplay+'</div>'+
         '<div style="font-size:13px;border:1px solid var(--steel-border);border-radius:8px;padding:12px;margin-bottom:12px">'+
           linha("Saldo Inicial atual", fmtNum(m.estoqueInicial||0)+" "+m.unidade)+
           linha("Entradas", "+"+fmtNum(t.entradas)+" "+m.unidade, COLORS.green)+
           linha("Saídas", "-"+fmtNum(t.saidas)+" "+m.unidade, COLORS.red)+
           '<div style="border-top:1px dashed var(--steel-border);margin:6px 0"></div>'+
-          linha("Resultado projetado", fmtNum(Number(m.estoqueInicial||0)+t.entradas-t.saidas)+" "+m.unidade)+
-          linha("Saldo Atual real", fmtNum(m.estoque)+" "+m.unidade)+
-          linha("Divergência", (div>0?"+":"")+fmtNum(div)+" "+m.unidade, COLORS.red)+
+          linha("Saldo Atual hoje", fmtNum(m.estoque)+" "+m.unidade)+
+          (Math.abs(div)>=0.01 ? linha("Divergência", (div>0?"+":"")+fmtNum(div)+" "+m.unidade, COLORS.red) : "")+
         '</div>'+
-        '<div><label class="field-label">Novo Saldo Inicial *</label><input class="field-input" type="number" step="0.01" id="saldo-inicial-input" value="'+sugerido+'"/></div>'+
-        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Com '+fmtNum(sugerido)+' '+m.unidade+' a conta fecha exatamente. Isso corrige apenas o ponto de partida histórico — <strong style="color:'+COLORS.text+'">o saldo atual não é alterado</strong>. Se o saldo atual é que está errado, use o Acerto de Estoque.</p>'+
+        '<div><label class="field-label">Novo Saldo Inicial *</label>'+
+          '<input class="field-input" type="number" step="0.01" id="saldo-inicial-input" value="'+(Math.abs(div)>=0.01?sugerido:(m.estoqueInicial||0))+'" oninput="previewSaldoInicial(\''+id+'\')"/></div>'+
+        '<div id="saldo-inicial-preview" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--panel-alt);font-size:13px"></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O Saldo Atual é recalculado automaticamente: <strong style="color:'+COLORS.text+'">Saldo Inicial + Entradas − Saídas</strong>. Entradas e Saídas não são alteradas — elas vêm das notas, pedidos, baixas e transferências já lançados.</p>'+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="salvarSaldoInicial(\''+id+'\')">Salvar</button></div>'+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
+  previewSaldoInicial(id);
+}
+function previewSaldoInicial(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  const box = document.getElementById("saldo-inicial-preview");
+  if(!m || !box) return;
+  const t = movTotaisDoMaterial(m.id);
+  const novo = Number((document.getElementById("saldo-inicial-input")||{}).value||0);
+  const novoSaldo = Math.round((novo + t.entradas - t.saidas)*100)/100;
+  const delta = Math.round((novoSaldo - Number(m.estoque||0))*100)/100;
+  const cor = novoSaldo < 0 ? COLORS.red : COLORS.brand;
+  box.innerHTML =
+    '<div style="display:flex;justify-content:space-between;gap:12px"><span style="color:'+COLORS.textMuted+'">Novo Saldo Atual</span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+cor+';white-space:nowrap">'+fmtNum(novoSaldo)+'&nbsp;'+m.unidade+'</span></div>'+
+    (delta ? '<div style="display:flex;justify-content:space-between;gap:12px;margin-top:4px;font-size:12px"><span style="color:'+COLORS.textMuted+'">Variação no estoque</span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+(delta>0?COLORS.green:COLORS.red)+';white-space:nowrap">'+(delta>0?"+":"")+fmtNum(delta)+'&nbsp;'+m.unidade+'</span></div>' : '')+
+    (novoSaldo < 0 ? '<div style="margin-top:6px;font-size:11.5px;color:'+COLORS.red+';line-height:1.4">Saldo negativo é fisicamente impossível — confira se as saídas lançadas estão corretas antes de salvar.</div>' : '');
 }
 async function salvarSaldoInicial(id){
   const m = STATE.materiais.find(x=>x.id===id);
   if(!m) return;
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem alterar o saldo inicial."); return; }
   const novo = Number((document.getElementById("saldo-inicial-input")||{}).value||0);
-  const { error } = await sb.from("materiais").update({estoque_inicial:novo}).eq("id", id);
-  if(error){ sbErrorToast("corrigir saldo inicial", error); return; }
+  const t = movTotaisDoMaterial(m.id);
+  const novoSaldo = Math.round((novo + t.entradas - t.saidas)*100)/100;
+  const anterior = Number(m.estoque||0);
+  const { error } = await sb.from("materiais").update({estoque_inicial:novo, estoque:novoSaldo}).eq("id", id);
+  if(error){ sbErrorToast("alterar saldo inicial", error); return; }
   m.estoqueInicial = novo;
+  m.estoque = novoSaldo;
+  const delta = Math.round((novoSaldo - anterior)*100)/100;
+  if(delta) await logMovimento(id, delta>0?"entrada":"saida", delta, "ajuste", "Alteração do saldo inicial para "+fmtNum(novo)+" "+m.unidade);
   closeModal();
   renderScreen();
-  showToast("success","Saldo inicial de "+m.nome+" ajustado para "+fmtNum(novo)+" "+m.unidade+".");
+  showToast("success","Saldo inicial de "+m.nome+" alterado para "+fmtNum(novo)+" "+m.unidade+" — saldo atual recalculado para "+fmtNum(novoSaldo)+" "+m.unidade+".");
 }
 async function toggleMaterialAtencao(id){
   const m = STATE.materiais.find(x=>x.id===id);
@@ -2126,6 +2248,21 @@ async function toggleMaterialAtencao(id){
 function fieldHtml(f, item){
   const val = item ? (item[f.key] != null ? item[f.key] : "") : (f.default || "");
   const label = '<label class="field-label">'+f.label+(f.required?" *":"")+'</label>';
+  /* Campo travado na edição (ex.: Estoque atual — só muda por Acerto de Estoque)
+     ou restrito a administradores (ex.: Saldo Inicial). Renderiza como leitura,
+     mantendo um hidden para o valor continuar sendo enviado sem alteração. */
+  const travadoEdicao = f.lockOnEdit && item;
+  const travadoAdmin = f.adminOnly && !isCurrentUserAdmin();
+  if(travadoEdicao || travadoAdmin){
+    const hint = travadoAdmin ? "Somente administradores podem alterar" : (f.lockHint || "Não editável aqui");
+    return '<div style="'+(f.full?"grid-column:1 / -1":"")+'">'+label+
+      '<div class="field-input" style="background:var(--panel-alt);color:'+COLORS.textMuted+';display:flex;align-items:center;justify-content:space-between;gap:8px">'+
+        '<span>'+escapeHtml(String(val===""?"—":val))+'</span>'+icon("alert",12,COLORS.textMuted)+
+      '</div>'+
+      '<input type="hidden" id="f-'+f.key+'" name="'+f.key+'" value="'+escapeAttr(val)+'"/>'+
+      '<p style="font-size:10.5px;color:'+COLORS.textMuted+';margin:4px 0 0;line-height:1.4">'+hint+'</p>'+
+    '</div>';
+  }
   let control;
   if(f.type==="select"){
     const opts = f.options();
@@ -2202,7 +2339,7 @@ function renderGenericScreen(type){
   if(cfg.filterItems) items = cfg.filterItems(items);
   const rows = items.map(it=>{
     const tds = cfg.columns.map(c=>'<td>'+(c.render ? c.render(it) : escapeHtml(it[c.key]||"—"))+'</td>').join("");
-    const acertoBtn = type==="material" ? '<button class="icon-btn" title="Acerto de Estoque" onclick="openAcertoModal(\''+it.id+'\')">'+icon("sliders",13)+'</button>' : '';
+    const acertoBtn = (type==="material" && isCurrentUserAdmin()) ? '<button class="icon-btn" title="Acerto de Estoque" onclick="openAcertoModal(\''+it.id+'\')">'+icon("sliders",13)+'</button>' : '';
     return '<tr>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
   }).join("");
   const table = items.length===0 ? emptyStateHtml() :
@@ -2212,7 +2349,9 @@ function renderGenericScreen(type){
   const printHeader = cfg.printable ? '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de '+cfg.title+' — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>' : "";
   const actions = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openTiposModal()">'+icon("settings",14)+' Gerenciar Tipos</button>' : '')+
-    (cfg.printable ? '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button>' : '')+
+    (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisExcel()" title="Baixar planilha (.csv, abre no Excel)">'+icon("package",14)+' Excel</button>' : '')+
+    (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisPdf()" title="Gerar PDF">'+icon("printer",14)+' PDF</button>' : '')+
+    (cfg.printable ? '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Imprimir</button>' : '')+
     '<button class="btn btn-primary" onclick="openEntityModal(\''+type+'\',\'new\')">'+icon("plus",14)+' Novo</button>'+
   '</div>';
   document.getElementById("content").innerHTML =
@@ -3255,6 +3394,34 @@ function filterBaixaRows(rows){
 function updateBaixasFilter(key, val){ STATE.baixasFiltro[key]=val; renderScreen(); }
 function clearBaixasFiltro(){ STATE.baixasFiltro = {materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"}; renderScreen(); }
 
+/* ---- exportação: Baixa de Materiais (respeita os filtros da tela) ---- */
+function baixasExportLinhas(){
+  return filterBaixaRows(getBaixaRows()).sort(function(a,b){ return b.data.localeCompare(a.data); });
+}
+function exportarBaixasExcel(){
+  const rows = baixasExportLinhas();
+  if(rows.length===0){ showToast("info","Nenhuma baixa pra exportar com os filtros atuais."); return; }
+  const head = ["Data","Dia da Semana","Cliente","OP","Papel","Material / Cor","Tipo","Quantidade","Unidade","Situação"];
+  const body = rows.map(function(r){
+    return [fmtDateBR(r.data), weekdayFromDateStr(r.data), r.cliente||"", r.op||"", r.papel,
+            r.materialNome, r.materialTipo||"", csvNum(-r.quantidade), r.unidade,
+            r.preProducao?"Pré-produção (previsto)":"Efetiva"];
+  });
+  baixarCsv("baixa-de-materiais-"+todayStr()+".csv", head, body);
+}
+function exportarBaixasPdf(){
+  const rows = baixasExportLinhas();
+  if(rows.length===0){ showToast("info","Nenhuma baixa pra exportar com os filtros atuais."); return; }
+  const total = rows.reduce(function(s,r){ return s+r.quantidade; }, 0);
+  const head = ["Data","Cliente","OP","Papel","Material / Cor","Quantidade","Situação"];
+  const body = rows.map(function(r){
+    return [fmtDateBR(r.data), r.cliente||"—", r.op||"—", r.papel, r.materialNome,
+            "−"+fmtNum(r.quantidade)+" "+r.unidade, r.preProducao?"Pré-produção":"Efetiva"];
+  });
+  gerarPdfTabela("Baixa de Materiais",
+    "Gerado em "+fmtDateBR(todayStr())+" · "+rows.length+" baixa(s) · Total: "+fmtNum(total)+" m",
+    head, body);
+}
 function renderBaixasScreen(){
   const allRows = getBaixaRows();
   const years = Array.from(new Set(allRows.map(r=>r.data.slice(0,4)))).sort();
@@ -3285,7 +3452,7 @@ function renderBaixasScreen(){
 
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("arrowDownCircle","Baixa de Materiais","Itens baixados do estoque conforme a produção dos pedidos — pedidos em Pré-produção ainda não têm baixa real, apenas prevista")+
+    screenHeaderHtml("arrowDownCircle","Baixa de Materiais","Itens baixados do estoque conforme a produção dos pedidos — pedidos em Pré-produção ainda não têm baixa real, apenas prevista", exportBotoesHtml("exportarBaixas"), true)+
     '<div class="stat-row">'+
       statCardHtml("Baixas no Filtro", filtered.length, "arrowDownCircle", COLORS.red)+
       statCardHtml(totalLabel, fmtNum(totalQtd)+" m", "package", COLORS.brand)+
@@ -3384,12 +3551,10 @@ function monthlyMovementTotal(year){ return monthlyMovementAggregate(STATE.mater
 function monthlyMovementByTipo(tipo, year){ return monthlyMovementAggregate(STATE.materiais.filter(m=>m.tipo===tipo), year); }
 function updateMovFiltro(key, val){ STATE.movFiltro[key]=val; renderScreen(); }
 
-function renderMovimentacaoScreen(){
+/* Cálculo da Movimentação de Estoque conforme os filtros — usado pela tela e pelas exportações. */
+function movimentacaoDados(){
   const f = STATE.movFiltro;
-  const anoAtual = new Date().getFullYear();
-  const anos = [String(anoAtual-1), String(anoAtual), String(anoAtual+1)];
-
-  let data;
+  let data, escopo;
   if(f.materialId){
     const mat = STATE.materiais.find(m=>m.id===f.materialId);
     const r = monthlyMovementForMaterial(f.materialId, f.ano);
@@ -3398,11 +3563,49 @@ function renderMovimentacaoScreen(){
       estoqueInicialAno:r.estoqueInicialAno, totalCompras:r.totalCompras, totalProducao:r.totalProducao,
       estoqueFinalAno:r.estoqueFinalAno, valorFinalTotal:r.estoqueFinalAno*r.valorUnitario, unidade:r.unidade,
     };
+    escopo = mat ? (mat.nome+" ("+mat.tipo+")") : "Material";
   } else if(f.tipo){
     data = monthlyMovementByTipo(f.tipo, f.ano);
+    escopo = "Tipo: "+f.tipo;
   } else {
     data = monthlyMovementTotal(f.ano);
+    escopo = "Total Geral (bobinas e EPS)";
   }
+  return {data:data, escopo:escopo, ano:f.ano};
+}
+function movimentacaoLinhasExport(){
+  const d = movimentacaoDados();
+  const linhas = MESES.map(function(nome,i){
+    const row = d.data.rows[i];
+    return [nome, row.inicial, row.compras, row.producao, row.final, row.valor];
+  });
+  linhas.push(["Total do Ano", d.data.estoqueInicialAno, d.data.totalCompras, d.data.totalProducao, d.data.estoqueFinalAno, d.data.valorFinalTotal]);
+  return {linhas:linhas, escopo:d.escopo, ano:d.ano, unidade:d.data.unidade};
+}
+function exportarMovimentacaoExcel(){
+  const d = movimentacaoLinhasExport();
+  const head = ["Mês","Estoque Inicial","+ Compras","− Produção","= Estoque Final","Valor (R$)","Unidade","Escopo","Ano"];
+  const body = d.linhas.map(function(r){
+    return [r[0], csvNum(r[1]), csvNum(r[2]), csvNum(r[3]), csvNum(r[4]), csvNum(r[5]), d.unidade, d.escopo, d.ano];
+  });
+  baixarCsv("movimentacao-estoque-"+d.ano+"-"+todayStr()+".csv", head, body);
+}
+function exportarMovimentacaoPdf(){
+  const d = movimentacaoLinhasExport();
+  const head = ["Mês","Estoque Inicial","+ Compras","− Produção","= Estoque Final","Valor (R$)"];
+  const body = d.linhas.map(function(r){
+    return [r[0], fmtNum(r[1])+" "+d.unidade, "+"+fmtNum(r[2]), "−"+fmtNum(r[3]), fmtNum(r[4])+" "+d.unidade, fmtBRL(r[5])];
+  });
+  gerarPdfTabela("Movimentação de Estoque",
+    "Gerado em "+fmtDateBR(todayStr())+" · Ano "+d.ano+" · "+d.escopo,
+    head, body, "portrait");
+}
+function renderMovimentacaoScreen(){
+  const f = STATE.movFiltro;
+  const anoAtual = new Date().getFullYear();
+  const anos = [String(anoAtual-1), String(anoAtual), String(anoAtual+1)];
+
+  const data = movimentacaoDados().data;
 
   const rowsHtml = MESES.map((nome,i)=>{
     const row = data.rows[i];
@@ -3421,7 +3624,7 @@ function renderMovimentacaoScreen(){
     '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(data.valorFinalTotal)+'</td></tr>';
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("trendingUp","Movimentação de Estoque","Estoque inicial + compras − produção = estoque final, mês a mês")+
+    screenHeaderHtml("trendingUp","Movimentação de Estoque","Estoque inicial + compras − produção = estoque final, mês a mês", exportBotoesHtml("exportarMovimentacao"), true)+
     '<div class="stat-row">'+
       statCardHtml("Estoque Inicial do Ano", fmtNum(data.estoqueInicialAno)+" "+data.unidade, "boxes")+
       statCardHtml("Compras no Ano", "+"+fmtNum(data.totalCompras)+" "+data.unidade, "arrowDownCircle", COLORS.green)+

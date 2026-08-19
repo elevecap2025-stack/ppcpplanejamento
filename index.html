@@ -330,13 +330,63 @@ async function logMovimento(materialId, tipo, quantidade, origem, referencia){
   if(error){ sbErrorToast("registrar movimentação de estoque ("+origem+")", error); return; }
   STATE.movimentacoes.push(mapMovimentoFromRow(inserted));
 }
-function movTotaisDoMaterial(materialId){
-  let entradas=0, saidas=0;
-  STATE.movimentacoes.forEach(function(mv){
-    if(mv.materialId!==materialId) return;
-    if(mv.tipo==="entrada") entradas += mv.quantidade; else if(mv.tipo==="saida") saidas += mv.quantidade;
+/* ---- Entradas / Saídas reais, calculadas AO VIVO das fontes que já existem ----
+   Entradas: Notas de Entrada (compra), transferências recebidas e devoluções
+             (baixas lançadas com quantidade negativa).
+   Saídas:   consumo de Produção (pedidos fora de Pré-produção), baixas manuais,
+             separações avulsas e transferências enviadas.
+   Não depende de backfill nem de tabela populada — é sempre retroativo e reflete
+   qualquer edição feita nas telas de origem. O único movimento que não aparece
+   aqui é o Acerto de Estoque, que por natureza é uma correção do próprio saldo. */
+let _movTotaisCache = null;
+function invalidateMovTotais(){ _movTotaisCache = null; }
+function movTotaisMap(){
+  if(_movTotaisCache) return _movTotaisCache;
+  const map = {};
+  function bump(id, campo, qtd){
+    if(!id) return;
+    const q = Number(qtd||0);
+    if(!(q>0)) return;
+    if(!map[id]) map[id] = {entradas:0, saidas:0};
+    map[id][campo] += q;
+  }
+  // 1) Notas de Entrada → entrada
+  STATE.notas.forEach(function(n){
+    (n.itens||[]).forEach(function(it){ bump(it.materialId, "entradas", it.quantidade); });
   });
-  return {entradas: Math.round(entradas*100)/100, saidas: Math.round(saidas*100)/100};
+  // 2) Baixas manuais e avulsos → saída (negativas são devoluções → entrada)
+  STATE.baixasManual.forEach(function(b){
+    const q = Number(b.quantidade||0);
+    if(q>0) bump(b.materialId, "saidas", q); else if(q<0) bump(b.materialId, "entradas", -q);
+  });
+  // 3) Transferências → saída na origem, entrada no destino
+  STATE.transferencias.forEach(function(t){
+    bump(t.materialOrigemId, "saidas", t.quantidade);
+    bump(t.materialDestinoId, "entradas", t.quantidade);
+  });
+  // 4) Consumo de Produção (mesma regra da tela "Baixa de Materiais")
+  getEfetivaBaixaRows().forEach(function(r){ bump(r.materialId, "saidas", r.quantidade); });
+  Object.keys(map).forEach(function(id){
+    map[id].entradas = Math.round(map[id].entradas*100)/100;
+    map[id].saidas   = Math.round(map[id].saidas*100)/100;
+  });
+  _movTotaisCache = map;
+  return map;
+}
+function movTotaisDoMaterial(materialId){
+  const t = movTotaisMap()[materialId];
+  return t ? {entradas:t.entradas, saidas:t.saidas} : {entradas:0, saidas:0};
+}
+/* Saldo inicial que FARIA a conta fechar, dado o saldo atual e os movimentos reais. */
+function saldoInicialSugerido(m){
+  const t = movTotaisDoMaterial(m.id);
+  return Math.round((Number(m.estoque||0) - t.entradas + t.saidas)*100)/100;
+}
+/* Divergência entre o que o saldo inicial cadastrado projeta e o saldo atual real. */
+function divergenciaDoMaterial(m){
+  const t = movTotaisDoMaterial(m.id);
+  const projetado = Number(m.estoqueInicial||0) + t.entradas - t.saidas;
+  return Math.round((projetado - Number(m.estoque||0))*100)/100;
 }
 function mapMaterialAvulsoFromRow(r){
   return {
@@ -1897,10 +1947,12 @@ const ENTITY_CONFIGS = {
       const baixoCount = items.filter(m=>m.estoque<m.estoqueMinimo).length;
       const preTotals = preProducaoTotals();
       const preProducaoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(preTotals[m.id]||0),0);
+      const divergentes = items.filter(m=>Math.abs(divergenciaDoMaterial(m))>=0.01).length;
       return '<div class="stat-row">'+
         statCardHtml("Valor Total em Estoque", fmtBRL(valorTotal), "trendingUp", COLORS.brand)+
         statCardHtml("Metragem Total em Estoque", fmtNum(metragemTotal)+" m", "boxes", COLORS.green)+
         statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
+        statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted)+
         statCardHtml("Reservado em Pré-produção", fmtNum(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
       '</div>';
     },
@@ -1909,30 +1961,41 @@ const ENTITY_CONFIGS = {
       {key:"tipo", label:"Tipo"},
       {key:"nome", label:"Material", render:(it)=> it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome)},
       {key:"cor", label:"É Cor?", render:(it)=> it.cor==="S" ? "Sim" : "Não"},
-      {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>'<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace">'+fmtNum(it.estoqueInicial||0)+' '+it.unidade+'</span>'},
+      {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>{
+        const div = divergenciaDoMaterial(it);
+        const sugerido = saldoInicialSugerido(it);
+        if(Math.abs(div) < 0.01) return '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtNum(it.estoqueInicial||0)+'&nbsp;'+it.unidade+'</span>';
+        const tip = "Divergência de "+fmtNum(Math.abs(div))+" "+it.unidade+". Para a conta fechar com os movimentos reais, o Saldo Inicial deveria ser "+fmtNum(sugerido)+" "+it.unidade+". Clique para corrigir.";
+        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;gap:5px;border-color:'+COLORS.red+';white-space:nowrap" title="'+escapeAttr(tip)+'" onclick="corrigirSaldoInicial(\''+it.id+'\')">'+
+          '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap">'+fmtNum(it.estoqueInicial||0)+'&nbsp;'+it.unidade+'</span>'+icon("alert",12,COLORS.red)+'</button>';
+      }},
       {key:"entradas", label:"Entradas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
-        return t.entradas>0 ? '<span style="color:'+COLORS.green+';font-family:\'IBM Plex Mono\',monospace">+'+fmtNum(t.entradas)+' '+it.unidade+'</span>' : '<span style="color:'+COLORS.textMuted+'">—</span>';
+        if(!(t.entradas>0)) return '<span style="color:'+COLORS.textMuted+'">—</span>';
+        return '<span style="color:'+COLORS.green+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap" title="Notas de Entrada, transferências recebidas e devoluções">+'+fmtNum(t.entradas)+'&nbsp;'+it.unidade+'</span>';
       }},
       {key:"saidas", label:"Saídas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
-        return t.saidas>0 ? '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace">-'+fmtNum(t.saidas)+' '+it.unidade+'</span>' : '<span style="color:'+COLORS.textMuted+'">—</span>';
+        if(!(t.saidas>0)) return '<span style="color:'+COLORS.textMuted+'">—</span>';
+        return '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap" title="Consumo de produção, baixas manuais, avulsos e transferências enviadas">-'+fmtNum(t.saidas)+'&nbsp;'+it.unidade+'</span>';
       }},
       {key:"estoque", label:"Saldo Atual", render:(it)=>{
         const low = it.estoque < it.estoqueMinimo;
-        return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px" title="Saldo Inicial + Entradas − Saídas registradas desde a ativação deste controle">'+fmtNum(it.estoque)+' '+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
+        const t = movTotaisDoMaterial(it.id);
+        const tip = "Saldo Inicial "+fmtNum(it.estoqueInicial||0)+" + Entradas "+fmtNum(t.entradas)+" − Saídas "+fmtNum(t.saidas)+" = "+fmtNum(Number(it.estoqueInicial||0)+t.entradas-t.saidas)+" "+it.unidade;
+        return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+fmtNum(it.estoque)+'&nbsp;'+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
       }},
       {key:"preProducao", label:"Pré-produção", render:(it)=>{
         const total = Number(preProducaoTotals()[it.id]||0);
         if(!total) return '<span style="color:'+COLORS.textMuted+'">—</span>';
-        return '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600" title="Reservado em pedidos de Pré-produção — ainda não baixado do estoque">'+fmtNum(total)+' '+it.unidade+'</span>';
+        return '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600;white-space:nowrap" title="Reservado em pedidos de Pré-produção — ainda não baixado do estoque">'+fmtNum(total)+'&nbsp;'+it.unidade+'</span>';
       }},
-      {key:"estoqueMinimo", label:"Mínimo", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtNum(it.estoqueMinimo)+' '+it.unidade+'</span>'},
-      {key:"loteMinimo", label:"Lote Mín. Compra", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtNum(it.loteMinimo||0)+' '+it.unidade+'</span>'},
+      {key:"estoqueMinimo", label:"Mínimo", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.estoqueMinimo)+'&nbsp;'+it.unidade+'</span>'},
+      {key:"loteMinimo", label:"Lote Mín. Compra", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.loteMinimo||0)+'&nbsp;'+it.unidade+'</span>'},
       {key:"fator", label:"Fator Consumo", render:(it)=>'<span style="font-family:\'IBM Plex Mono\',monospace">'+it.fator+'x</span>'},
-      {key:"valorUnitario", label:"Valor Unit.", render:(it)=>'<span style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(it.valorUnitario)+'/'+it.unidade+'</span>'},
-      {key:"valorEstoque", label:"Valor em Estoque", render:(it)=>'<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:600">'+fmtBRL(Number(it.estoque||0)*Number(it.valorUnitario||0))+'</span>'},
-      {key:"dataCadastro", label:"Cadastrado em", render:(it)=>'<span style="color:'+COLORS.textMuted+'">'+fmtDateBR(it.dataCadastro)+'</span>'},
+      {key:"valorUnitario", label:"Valor Unit.", render:(it)=>'<span style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtBRL(it.valorUnitario)+'/'+it.unidade+'</span>'},
+      {key:"valorEstoque", label:"Valor em Estoque", render:(it)=>'<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:600;white-space:nowrap">'+fmtBRL(Number(it.estoque||0)*Number(it.valorUnitario||0))+'</span>'},
+      {key:"dataCadastro", label:"Cadastrado em", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtDateBR(it.dataCadastro)+'</span>'},
     ],
     fields: [
       {key:"tipo", label:"Tipo", type:"text", required:true, datalist:()=>uniqueMaterialTipos(), quickAddType:"tipoMaterial"},
@@ -2007,6 +2070,48 @@ const ENTITY_CONFIGS = {
     },
   },
 };
+/* Ajusta o Saldo Inicial para o valor que faz a conta fechar com os movimentos
+   reais. NÃO altera o saldo atual — só corrige o ponto de partida histórico. */
+function corrigirSaldoInicial(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  if(!m) return;
+  const t = movTotaisDoMaterial(m.id);
+  const sugerido = saldoInicialSugerido(m);
+  const div = divergenciaDoMaterial(m);
+  const nomeDisplay = m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : '<span style="font-size:14px;font-weight:600">'+escapeHtml(m.nome)+'</span>';
+  const linha = (rot, val, cor)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0"><span style="color:'+COLORS.textMuted+'">'+rot+'</span><span style="font-family:\'IBM Plex Mono\',monospace;color:'+(cor||COLORS.text)+'">'+val+'</span></div>';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Corrigir Saldo Inicial</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="margin-bottom:14px">'+nomeDisplay+'</div>'+
+        '<div style="font-size:13px;border:1px solid var(--steel-border);border-radius:8px;padding:12px;margin-bottom:12px">'+
+          linha("Saldo Inicial atual", fmtNum(m.estoqueInicial||0)+" "+m.unidade)+
+          linha("Entradas", "+"+fmtNum(t.entradas)+" "+m.unidade, COLORS.green)+
+          linha("Saídas", "-"+fmtNum(t.saidas)+" "+m.unidade, COLORS.red)+
+          '<div style="border-top:1px dashed var(--steel-border);margin:6px 0"></div>'+
+          linha("Resultado projetado", fmtNum(Number(m.estoqueInicial||0)+t.entradas-t.saidas)+" "+m.unidade)+
+          linha("Saldo Atual real", fmtNum(m.estoque)+" "+m.unidade)+
+          linha("Divergência", (div>0?"+":"")+fmtNum(div)+" "+m.unidade, COLORS.red)+
+        '</div>'+
+        '<div><label class="field-label">Novo Saldo Inicial *</label><input class="field-input" type="number" step="0.01" id="saldo-inicial-input" value="'+sugerido+'"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Com '+fmtNum(sugerido)+' '+m.unidade+' a conta fecha exatamente. Isso corrige apenas o ponto de partida histórico — <strong style="color:'+COLORS.text+'">o saldo atual não é alterado</strong>. Se o saldo atual é que está errado, use o Acerto de Estoque.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="salvarSaldoInicial(\''+id+'\')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function salvarSaldoInicial(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  if(!m) return;
+  const novo = Number((document.getElementById("saldo-inicial-input")||{}).value||0);
+  const { error } = await sb.from("materiais").update({estoque_inicial:novo}).eq("id", id);
+  if(error){ sbErrorToast("corrigir saldo inicial", error); return; }
+  m.estoqueInicial = novo;
+  closeModal();
+  renderScreen();
+  showToast("success","Saldo inicial de "+m.nome+" ajustado para "+fmtNum(novo)+" "+m.unidade+".");
+}
 async function toggleMaterialAtencao(id){
   const m = STATE.materiais.find(x=>x.id===id);
   if(!m) return;
@@ -5356,6 +5461,7 @@ function renderSidebar(){
     '<button class="pcp-sidebar-btn" onclick="handleLogout()">'+icon("logout",16)+' Sair</button>';
 }
 function renderScreen(){
+  invalidateMovTotais();
   if(STATE.screen==="dashboard") renderDashboardScreen();
   else if(STATE.screen==="pedidos") renderPedidosScreen();
   else if(STATE.screen==="prog-perfilar") renderStageScreen("perfilar");

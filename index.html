@@ -388,6 +388,347 @@ function divergenciaDoMaterial(m){
   const projetado = Number(m.estoqueInicial||0) + t.entradas - t.saidas;
   return Math.round((projetado - Number(m.estoque||0))*100)/100;
 }
+/* ---- Lançamentos individuais de Entrada/Saída de um material ----
+   Monta, a partir das mesmas fontes usadas em movTotaisMap() (Notas de Entrada,
+   Baixas Manuais/devoluções, Transferências e Consumo de Produção), a lista
+   detalhada de lançamentos que compõem o total de Entradas ou Saídas exibido
+   na tela de Matéria-Prima — para exibir em modal e permitir impressão (PDF). */
+function materialLancamentosRows(materialId, tipo){
+  const rows = [];
+  const mat = STATE.materiais.find(x=>x.id===materialId);
+  const unidade = mat ? mat.unidade : "";
+  // 1) Notas de Entrada (compra) → só entradas
+  if(tipo==="entradas"){
+    STATE.notas.forEach(function(n){
+      (n.itens||[]).forEach(function(it){
+        if(it.materialId!==materialId) return;
+        const q = Number(it.quantidade||0);
+        if(!(q>0)) return;
+        rows.push({data:n.data, origem:"Compra (Nota de Entrada)",
+          detalhe:"Fornecedor: "+(n.fornecedor||"—")+(n.numeroNota?" · Nota "+n.numeroNota:""),
+          quantidade:q});
+      });
+    });
+  }
+  // 2) Baixas manuais → saída (perda); quantidade negativa = devolução → entrada
+  STATE.baixasManual.forEach(function(b){
+    if(b.materialId!==materialId) return;
+    const q = Number(b.quantidade||0);
+    if(tipo==="saidas" && q>0){
+      rows.push({data:b.data, origem:"Baixa Manual ("+(b.motivo||"Perda")+")", detalhe:b.observacao||"—", quantidade:q});
+    } else if(tipo==="entradas" && q<0){
+      rows.push({data:b.data, origem:"Devolução ao Estoque", detalhe:b.observacao||"—", quantidade:-q});
+    }
+  });
+  // 3) Transferências → saída na origem, entrada no destino
+  STATE.transferencias.forEach(function(t){
+    const q = Number(t.quantidade||0);
+    if(!(q>0)) return;
+    if(tipo==="saidas" && t.materialOrigemId===materialId){
+      const destino = STATE.materiais.find(x=>x.id===t.materialDestinoId);
+      rows.push({data:t.data, origem:"Transferência enviada",
+        detalhe:"Para: "+(destino?destino.nome:"—")+(t.observacao?" · "+t.observacao:""), quantidade:q});
+    }
+    if(tipo==="entradas" && t.materialDestinoId===materialId){
+      const origem = STATE.materiais.find(x=>x.id===t.materialOrigemId);
+      rows.push({data:t.data, origem:"Transferência recebida",
+        detalhe:"De: "+(origem?origem.nome:"—")+(t.observacao?" · "+t.observacao:""), quantidade:q});
+    }
+  });
+  // 4) Consumo de Produção (baixa efetiva dos pedidos) → só saídas
+  if(tipo==="saidas"){
+    getEfetivaBaixaRows().forEach(function(r){
+      if(r.materialId!==materialId) return;
+      rows.push({data:r.data, origem:"Consumo de Produção",
+        detalhe:"OP "+(r.op||"—")+" · Cliente: "+(r.cliente||"—")+" · "+r.papel, quantidade:r.quantidade});
+    });
+  }
+  rows.sort(function(a,b){ return (b.data||"").localeCompare(a.data||""); });
+  rows.forEach(function(r){ r.unidade = unidade; });
+  return rows;
+}
+function openLancamentosMaterialModal(materialId, tipo){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const rows = materialLancamentosRows(materialId, tipo);
+  const total = rows.reduce(function(s,r){ return s+Number(r.quantidade||0); }, 0);
+  const cor = tipo==="entradas" ? COLORS.green : COLORS.red;
+  const sinal = tipo==="entradas" ? "+" : "−";
+  const titulo = (tipo==="entradas" ? "Entradas" : "Saídas") + " — " + m.nome;
+  const linhasHtml = rows.length===0 ? '' : rows.map(function(r){
+    return '<tr>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+fmtDateBR(r.data)+'</td>'+
+      '<td style="white-space:nowrap">'+escapeHtml(r.origem)+'</td>'+
+      '<td style="color:'+COLORS.textMuted+'">'+escapeHtml(r.detalhe||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+cor+';white-space:nowrap;text-align:right">'+sinal+fmtNum(r.quantidade)+' '+r.unidade+'</td>'+
+    '</tr>';
+  }).join("");
+  const table = rows.length===0 ? emptyStateHtml("Nenhum lançamento encontrado.") :
+    '<div style="max-height:50vh;overflow:auto"><table class="pcp-table"><thead><tr><th>Data</th><th>Origem</th><th>Detalhe</th><th style="text-align:right">Quantidade</th></tr></thead><tbody>'+linhasHtml+'</tbody></table></div>';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:720px">'+
+        '<div class="modal-header"><h3>'+escapeHtml(titulo)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;font-size:13px;color:'+COLORS.textMuted+'">'+
+          '<span>'+rows.length+' lançamento(s)</span>'+
+          '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+cor+'">Total: '+sinal+fmtNum(total)+' '+m.unidade+'</span>'+
+        '</div>'+
+        table+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="imprimirLancamentosMaterial(\''+materialId+'\',\''+tipo+'\')">'+icon("printer",14)+' Imprimir (PDF)</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* Auditoria: mostra o que foi realmente ESCRITO no estoque (tabela movimentacoes_estoque),
+   ao contrário da lista acima, que é calculada ao vivo a partir das telas de origem.
+   Comparar as duas é o jeito de flagrar uma baixa que entrou em duplicidade: o mesmo
+   pedido aparecendo duas vezes aqui, mas uma vez só na lista calculada. */
+function openAuditoriaMaterialModal(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const movs = (STATE.movimentacoes||[]).filter(x=>x.materialId===materialId)
+    .slice().sort(function(a,b){ return (b.data||"").localeCompare(a.data||""); });
+  /* Conta referências repetidas de produção — o sintoma clássico de baixa duplicada. */
+  const contagem = {};
+  movs.forEach(function(mv){
+    if(mv.origem!=="producao" || !mv.referencia) return;
+    const chave = mv.tipo+"|"+mv.referencia+"|"+mv.quantidade;
+    contagem[chave] = (contagem[chave]||0) + 1;
+  });
+  const duplicadas = Object.keys(contagem).filter(k=>contagem[k]>1).length;
+  const rowsHtml = movs.map(function(mv){
+    const entrada = mv.tipo==="entrada";
+    const cor = entrada ? COLORS.green : COLORS.red;
+    const chave = mv.tipo+"|"+mv.referencia+"|"+mv.quantidade;
+    const dup = mv.origem==="producao" && mv.referencia && contagem[chave]>1;
+    return '<tr'+(dup?' style="background:'+COLORS.red+'12"':'')+'>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+fmtDateBR(mv.data)+'</td>'+
+      '<td style="white-space:nowrap">'+escapeHtml(mv.origem||"—")+(dup?' <span style="font-size:9.5px;font-weight:700;color:'+COLORS.red+';border:1px solid '+COLORS.red+'66;border-radius:10px;padding:1px 6px;white-space:nowrap">REPETIDO</span>':'')+'</td>'+
+      '<td style="color:'+COLORS.textMuted+'">'+escapeHtml(mv.referencia||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+cor+';white-space:nowrap;text-align:right">'+(entrada?"+":"−")+fmtNum(mv.quantidade)+' '+m.unidade+'</td>'+
+    '</tr>';
+  }).join("");
+  const aviso = duplicadas>0
+    ? '<div style="border:1px solid '+COLORS.red+'55;background:'+COLORS.red+'12;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.5">'+
+        '<strong style="color:'+COLORS.red+'">'+duplicadas+' lançamento(s) de produção repetido(s)</strong> — marcados abaixo. Se a saída aconteceu uma vez só na prática, use <strong>Recalcular Saldo Atual</strong> na coluna Saldo Inicial para corrigir o estoque.</div>'
+    : '<div style="font-size:12.5px;color:'+COLORS.textMuted+';margin-bottom:12px;line-height:1.5">Nenhum lançamento de produção repetido encontrado neste registro.</div>';
+  const table = movs.length===0 ? emptyStateHtml("Nenhuma movimentação registrada para este material.") :
+    '<div style="max-height:46vh;overflow:auto"><table class="pcp-table"><thead><tr><th>Data</th><th>Origem</th><th>Referência</th><th style="text-align:right">Quantidade</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:720px">'+
+        '<div class="modal-header"><h3>Auditoria de Movimentações — '+escapeHtml(m.nome)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        aviso+
+        table+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* ---- Reconciliação: por que este material está divergente? ----
+   A conta oficial é Saldo Inicial + Entradas − Saídas = Saldo Atual. Quando não fecha,
+   a causa está na diferença entre o que foi CALCULADO ao vivo (a partir das notas,
+   pedidos, baixas e transferências) e o que foi de fato ESCRITO no estoque (registrado
+   em movimentacoes_estoque). Comparando os dois lado a lado, por origem, dá para separar:
+     · Acerto de Estoque (origem "ajuste")  -> divergência legítima, foi uma correção manual
+     · excesso na origem "producao"         -> consumo de pedido baixado em duplicidade
+   Vale a identidade: divergência = (líquido calculado) − (líquido registrado). */
+const MOV_ORIGEM_GRUPOS = [
+  {id:"compra",        label:"Compras (Notas de Entrada)"},
+  {id:"baixa_manual",  label:"Baixas manuais e avulsos"},
+  {id:"transferencia", label:"Transferências"},
+  {id:"producao",      label:"Consumo de produção"},
+  {id:"ajuste",        label:"Acertos de estoque"},
+];
+function grupoDaOrigem(origem){
+  if(origem==="avulso") return "baixa_manual";
+  return MOV_ORIGEM_GRUPOS.some(g=>g.id===origem) ? origem : "ajuste";
+}
+function reconciliacaoMaterial(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  const live = {compra:0, baixa_manual:0, transferencia:0, producao:0, ajuste:0};
+  const log  = {compra:0, baixa_manual:0, transferencia:0, producao:0, ajuste:0};
+  // --- líquido CALCULADO ao vivo (positivo = entra no estoque) ---
+  STATE.notas.forEach(function(n){
+    (n.itens||[]).forEach(function(it){ if(it.materialId===materialId) live.compra += Number(it.quantidade||0); });
+  });
+  STATE.baixasManual.forEach(function(b){ if(b.materialId===materialId) live.baixa_manual -= Number(b.quantidade||0); });
+  STATE.transferencias.forEach(function(t){
+    if(t.materialOrigemId===materialId)  live.transferencia -= Number(t.quantidade||0);
+    if(t.materialDestinoId===materialId) live.transferencia += Number(t.quantidade||0);
+  });
+  getEfetivaBaixaRows().forEach(function(r){ if(r.materialId===materialId) live.producao -= Number(r.quantidade||0); });
+  // --- líquido REGISTRADO (o que realmente mexeu no saldo) ---
+  (STATE.movimentacoes||[]).forEach(function(mv){
+    if(mv.materialId!==materialId) return;
+    const g = grupoDaOrigem(mv.origem);
+    log[g] += (mv.tipo==="entrada" ? 1 : -1) * Number(mv.quantidade||0);
+  });
+  const r2 = v=>Math.round(v*100)/100;
+  const grupos = MOV_ORIGEM_GRUPOS.map(function(g){
+    return {id:g.id, label:g.label, live:r2(live[g.id]), log:r2(log[g.id]), diff:r2(log[g.id]-live[g.id])};
+  });
+  const liveTotal = r2(Object.keys(live).reduce((s,k)=>s+live[k],0));
+  const logTotal  = r2(Object.keys(log).reduce((s,k)=>s+log[k],0));
+  const divergencia = m ? divergenciaDoMaterial(m) : 0;
+  /* Excesso de saída lançado como produção: o sinal negativo em diff quer dizer que
+     saiu mais do estoque do que os pedidos justificam. */
+  const excessoProducao = r2(-(grupos.find(g=>g.id==="producao").diff));
+  const acertos = r2(log.ajuste);
+  let classificacao, detalhe;
+  if(Math.abs(divergencia) < 0.01){
+    classificacao = "ok"; detalhe = "Sem divergência.";
+  } else if(excessoProducao > 0.01 && Math.abs(excessoProducao - divergencia) < 0.02){
+    classificacao = "duplicidade";
+    detalhe = "Consumo de produção baixado a mais: "+fmtNum(excessoProducao)+" "+(m?m.unidade:"")+". O registro mostra mais saída de produção do que os pedidos justificam — típico de baixa lançada em duplicidade.";
+  } else if(Math.abs(acertos) > 0.01 && Math.abs(divergencia + acertos) < 0.02){
+    classificacao = "acerto";
+    detalhe = "Explicada por Acerto de Estoque de "+(acertos>0?"+":"")+fmtNum(acertos)+" "+(m?m.unidade:"")+". É uma correção manual do saldo — não é erro.";
+  } else if(excessoProducao > 0.01){
+    classificacao = "duplicidade_parcial";
+    detalhe = "Há "+fmtNum(excessoProducao)+" "+(m?m.unidade:"")+" de consumo de produção baixado a mais, mas isso não explica a divergência inteira. Pode haver também acerto de estoque ou lançamento não registrado.";
+  } else {
+    classificacao = "indeterminado";
+    detalhe = "Não foi possível atribuir a uma causa só. Pode ser saldo inicial cadastrado errado, ou movimentação feita antes de o registro de auditoria existir.";
+  }
+  return {material:m, grupos:grupos, liveTotal:liveTotal, logTotal:logTotal,
+          divergencia:divergencia, excessoProducao:excessoProducao, acertos:acertos,
+          classificacao:classificacao, detalhe:detalhe};
+}
+const DIVERGENCIA_BADGES = {
+  duplicidade:         {label:"Baixa duplicada",      cor:"#D1493E"},
+  duplicidade_parcial: {label:"Duplicidade parcial",  cor:"#C98A00"},
+  acerto:              {label:"Acerto de estoque",    cor:"#2F9E5B"},
+  indeterminado:       {label:"Causa indeterminada",  cor:"#66707C"},
+  ok:                  {label:"Sem divergência",      cor:"#2F9E5B"},
+};
+function badgeDivergenciaHtml(classificacao){
+  const b = DIVERGENCIA_BADGES[classificacao] || DIVERGENCIA_BADGES.indeterminado;
+  return '<span style="font-size:9.5px;font-weight:700;letter-spacing:.03em;color:'+b.cor+';background:'+b.cor+'18;border:1px solid '+b.cor+'55;border-radius:10px;padding:2px 8px;white-space:nowrap">'+b.label.toUpperCase()+'</span>';
+}
+/* Painel geral: todos os materiais cuja conta não fecha, já classificados por causa. */
+function openDiagnosticoDivergenciasModal(){
+  const divergentes = STATE.materiais
+    .filter(m=>Math.abs(divergenciaDoMaterial(m))>=0.01)
+    .map(m=>reconciliacaoMaterial(m.id))
+    .sort(function(a,b){ return Math.abs(b.divergencia)-Math.abs(a.divergencia); });
+  const duplicados = divergentes.filter(d=>d.classificacao==="duplicidade");
+  const admin = isCurrentUserAdmin();
+  const rowsHtml = divergentes.map(function(d){
+    const m = d.material;
+    const acao = admin
+      ? '<button type="button" class="icon-btn" style="width:auto;padding:3px 9px;font-size:11.5px" onclick="recalcularSaldoAtual(\''+m.id+'\')">Recalcular</button>'
+      : '<span style="font-size:11px;color:'+COLORS.textMuted+'">—</span>';
+    return '<tr>'+
+      '<td>'+(m.tipo==="Bobina"?coilSwatchHtml(m.nome):escapeHtml(m.nome))+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap;text-align:right">'+(d.divergencia>0?"+":"")+fmtNum(d.divergencia)+' '+m.unidade+'</td>'+
+      '<td>'+badgeDivergenciaHtml(d.classificacao)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;text-align:right">'+fmtNum(Math.round((Number(m.estoqueInicial||0)+movTotaisDoMaterial(m.id).entradas-movTotaisDoMaterial(m.id).saidas)*100)/100)+' '+m.unidade+'</td>'+
+      '<td class="no-print" style="white-space:nowrap"><div style="display:flex;gap:6px;justify-content:flex-end">'+
+        '<button type="button" class="icon-btn" style="width:auto;padding:3px 9px;font-size:11.5px" onclick="openReconciliacaoModal(\''+m.id+'\')">Detalhes</button>'+acao+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+  const resumo = divergentes.length===0
+    ? '<div style="border:1px solid '+COLORS.green+'55;background:'+COLORS.green+'12;border-radius:8px;padding:12px;font-size:13px;line-height:1.5">Nenhum material com divergência. A conta <strong>Saldo Inicial + Entradas − Saídas</strong> fecha para todos.</div>'
+    : '<div style="font-size:12.5px;color:'+COLORS.textMuted+';margin-bottom:12px;line-height:1.5">'+
+        divergentes.length+' material(is) com a conta aberta'+
+        (duplicados.length? ' · <strong style="color:'+COLORS.red+'">'+duplicados.length+' com baixa duplicada confirmada</strong>' : '')+
+        '. "Saldo correto" é o que o saldo atual passaria a ser ao recalcular, mantendo o saldo inicial.</div>';
+  const table = divergentes.length===0 ? '' :
+    '<div style="max-height:48vh;overflow:auto"><table class="pcp-table"><thead><tr><th>Material</th><th style="text-align:right">Divergência</th><th>Causa provável</th><th style="text-align:right">Saldo correto</th><th class="no-print"></th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
+  const bulk = (admin && duplicados.length>0)
+    ? '<button type="button" class="btn btn-primary" onclick="recalcularTodasDuplicidades()">Recalcular os '+duplicados.length+' com baixa duplicada</button>'
+    : '';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:860px">'+
+        '<div class="modal-header"><h3>Diagnóstico de Divergências</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        resumo + table +
+        '<div class="modal-actions">'+bulk+'<button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* Detalhe material a material: calculado x registrado, linha por origem. */
+function openReconciliacaoModal(materialId){
+  const d = reconciliacaoMaterial(materialId);
+  const m = d.material;
+  if(!m) return;
+  const b = DIVERGENCIA_BADGES[d.classificacao] || DIVERGENCIA_BADGES.indeterminado;
+  const num = (v,cor)=>'<span style="font-family:\'IBM Plex Mono\',monospace;color:'+(cor||COLORS.text)+';white-space:nowrap">'+(v>0?"+":"")+fmtNum(v)+'</span>';
+  const rowsHtml = d.grupos.map(function(g){
+    const alerta = Math.abs(g.diff)>=0.01;
+    return '<tr'+(alerta?' style="background:'+COLORS.red+'0F"':'')+'>'+
+      '<td>'+escapeHtml(g.label)+'</td>'+
+      '<td style="text-align:right">'+num(g.live)+'</td>'+
+      '<td style="text-align:right">'+num(g.log)+'</td>'+
+      '<td style="text-align:right">'+(alerta?num(g.diff,COLORS.red):'<span style="color:'+COLORS.textMuted+'">—</span>')+'</td>'+
+    '</tr>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:640px">'+
+        '<div class="modal-header"><h3>Reconciliação — '+escapeHtml(m.nome)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="margin-bottom:12px">'+badgeDivergenciaHtml(d.classificacao)+'</div>'+
+        '<p style="font-size:12.5px;line-height:1.55;margin:0 0 14px;color:'+COLORS.text+'">'+escapeHtml(d.detalhe)+'</p>'+
+        '<table class="pcp-table"><thead><tr><th>Origem</th><th style="text-align:right">Calculado</th><th style="text-align:right">Registrado</th><th style="text-align:right">Diferença</th></tr></thead>'+
+        '<tbody>'+rowsHtml+
+          '<tr style="background:var(--panel-alt);font-weight:700"><td>Líquido total</td>'+
+            '<td style="text-align:right">'+num(d.liveTotal)+'</td>'+
+            '<td style="text-align:right">'+num(d.logTotal)+'</td>'+
+            '<td style="text-align:right">'+num(Math.round((d.logTotal-d.liveTotal)*100)/100, COLORS.red)+'</td></tr>'+
+        '</tbody></table>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">'+
+          '<strong style="color:'+COLORS.text+'">Calculado</strong> = o que as telas de origem (notas, pedidos, baixas, transferências) dizem que deveria ter acontecido. '+
+          '<strong style="color:'+COLORS.text+'">Registrado</strong> = o que de fato foi escrito no saldo. Uma diferença negativa em "Consumo de produção" significa que saiu mais do que os pedidos justificam.'+
+          '<br><br>Atenção: o registro de auditoria é preenchido desde que esse controle passou a existir. Movimentações muito antigas podem não aparecer em "Registrado", o que sozinho já gera diferença sem significar erro.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="openAuditoriaMaterialModal(\''+m.id+'\')">Ver lançamentos</button>'+
+        (isCurrentUserAdmin()&&Math.abs(d.divergencia)>=0.01 ? '<button type="button" class="btn btn-primary" onclick="recalcularSaldoAtual(\''+m.id+'\')">Recalcular Saldo Atual</button>' : '')+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function recalcularTodasDuplicidades(){
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem recalcular saldos."); return; }
+  const alvos = STATE.materiais
+    .filter(m=>Math.abs(divergenciaDoMaterial(m))>=0.01)
+    .filter(m=>reconciliacaoMaterial(m.id).classificacao==="duplicidade");
+  if(alvos.length===0){ showToast("info","Nenhuma duplicidade confirmada para recalcular."); return; }
+  if(!confirm("Recalcular o Saldo Atual de "+alvos.length+" material(is) com baixa duplicada confirmada? O Saldo Inicial de cada um é mantido.")) return;
+  let ok = 0;
+  for(const m of alvos){
+    const t = movTotaisDoMaterial(m.id);
+    const novoSaldo = Math.round((Number(m.estoqueInicial||0) + t.entradas - t.saidas)*100)/100;
+    const delta = Math.round((novoSaldo - Number(m.estoque||0))*100)/100;
+    if(!delta) continue;
+    const { error } = await sb.from("materiais").update({estoque:novoSaldo}).eq("id", m.id);
+    if(error){ sbErrorToast("recalcular saldo de "+m.nome, error); continue; }
+    m.estoque = novoSaldo;
+    await logMovimento(m.id, delta>0?"entrada":"saida", delta, "ajuste",
+      "Recálculo em lote (baixa duplicada) para "+fmtNum(novoSaldo)+" "+m.unidade);
+    ok++;
+  }
+  closeModal();
+  renderScreen();
+  showToast("success", ok+" saldo(s) recalculado(s).");
+}
+function imprimirLancamentosMaterial(materialId, tipo){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const rows = materialLancamentosRows(materialId, tipo);
+  if(rows.length===0){ showToast("info","Nenhum lançamento pra imprimir."); return; }
+  const sinal = tipo==="entradas" ? "+" : "−";
+  const head = ["Data","Origem","Detalhe","Quantidade"];
+  const body = rows.map(function(r){
+    return [fmtDateBR(r.data), r.origem, r.detalhe||"—", sinal+fmtNum(r.quantidade)+" "+r.unidade];
+  });
+  gerarPdfTabela((tipo==="entradas"?"Entradas":"Saídas")+" — "+m.nome,
+    "Gerado em "+fmtDateBR(todayStr())+" · "+rows.length+" lançamento(s)",
+    head, body, "portrait");
+}
 function mapMaterialAvulsoFromRow(r){
   return {
     id:r.id, op:r.op||"", cliente:r.cliente||"", materialId:r.material_id, quantidade:Number(r.quantidade||0),
@@ -629,10 +970,11 @@ function gerarPdfTabela(titulo, subtitulo, head, body, orientacao){
   doc.save(nome+"-"+todayStr()+".pdf");
   showToast("success","PDF gerado.");
 }
-function statCardHtml(label, value, iconName, accent){
+function statCardHtml(label, value, iconName, accent, onClick){
   accent = accent || COLORS.textMuted;
   const valColor = accent===COLORS.textMuted ? COLORS.text : accent;
-  return '<div class="pcp-card stat-card"><div style="display:flex;align-items:center;justify-content:space-between"><span class="stat-label">'+label+'</span>'+icon(iconName,15,accent)+'</div><div class="stat-value" style="color:'+valColor+'">'+value+'</div></div>';
+  const clickAttrs = onClick ? ' onclick="'+escapeAttr(onClick)+'" style="cursor:pointer" title="Clique para ver o diagnóstico"' : '';
+  return '<div class="pcp-card stat-card"'+clickAttrs+'><div style="display:flex;align-items:center;justify-content:space-between"><span class="stat-label">'+label+'</span>'+icon(iconName,15,accent)+'</div><div class="stat-value" style="color:'+valColor+'">'+value+'</div></div>';
 }
 function barListHtml(items){
   const max = Math.max.apply(null, items.map(i=>i.value).concat([1]));
@@ -719,7 +1061,7 @@ const STATE = {
   transferenciaFiltro:{materialOrigemId:"",materialDestinoId:"",dIni:"",dFim:""},
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
-  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false},
+  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""},
   fatorConversaoFiltro:{tipo:"",produto:""},
   notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
   precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
@@ -809,6 +1151,12 @@ async function loadAllData(){
   STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
+  /* Marca o consumo de cada pedido como "já aplicado": o estoque que veio do banco
+     já reflete os pedidos como eles estão agora. Isso é a base da idempotência do
+     adjustStock() — sem isso, a primeira alteração de um pedido nesta sessão poderia
+     reaplicar um consumo que já estava baixado. Depende de statusOptions (para saber
+     o que é Pré-produção), por isso vem depois delas. */
+  initConsumoAplicado();
   STATE.dataLoaded = true;
 }
 
@@ -924,7 +1272,41 @@ async function removeMotivoPerda(idx){
 }
 
 function updateMateriaisFiltro(key, val){ STATE.materiaisFiltro[key]=val; renderScreen(); }
-function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false}; renderScreen(); }
+function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""}; renderScreen(); }
+/* Opções de ordenação da tela de Matéria-Prima — cada uma é [rótulo, função de comparação]. */
+const MATERIAL_ORDENACAO_OPCOES = [
+  {value:"", label:"Padrão"},
+  {value:"nome_asc", label:"Material (A-Z)"},
+  {value:"nome_desc", label:"Material (Z-A)"},
+  {value:"tipo_asc", label:"Tipo (A-Z)"},
+  {value:"estoque_desc", label:"Saldo Atual (maior → menor)"},
+  {value:"estoque_asc", label:"Saldo Atual (menor → maior)"},
+  {value:"valorEstoque_desc", label:"Valor em Estoque (maior → menor)"},
+  {value:"valorEstoque_asc", label:"Valor em Estoque (menor → maior)"},
+  {value:"cadastro_desc", label:"Cadastrado em (mais recente)"},
+  {value:"cadastro_asc", label:"Cadastrado em (mais antigo)"},
+];
+function ordenarMateriais(items, ordenarPor){
+  if(!ordenarPor) return items;
+  const arr = items.slice();
+  const porNome = (a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR", {sensitivity:"base"});
+  const valorEstoqueDe = (m)=> Number(m.estoque||0)*Number(m.valorUnitario||0);
+  const cmpMap = {
+    nome_asc: porNome,
+    nome_desc: (a,b)=> porNome(b,a),
+    tipo_asc: (a,b)=> (a.tipo||"").localeCompare(b.tipo||"", "pt-BR", {sensitivity:"base"}) || porNome(a,b),
+    estoque_desc: (a,b)=> Number(b.estoque||0)-Number(a.estoque||0) || porNome(a,b),
+    estoque_asc: (a,b)=> Number(a.estoque||0)-Number(b.estoque||0) || porNome(a,b),
+    valorEstoque_desc: (a,b)=> valorEstoqueDe(b)-valorEstoqueDe(a) || porNome(a,b),
+    valorEstoque_asc: (a,b)=> valorEstoqueDe(a)-valorEstoqueDe(b) || porNome(a,b),
+    cadastro_desc: (a,b)=> (b.dataCadastro||"").localeCompare(a.dataCadastro||"") || porNome(a,b),
+    cadastro_asc: (a,b)=> (a.dataCadastro||"").localeCompare(b.dataCadastro||"") || porNome(a,b),
+  };
+  const cmp = cmpMap[ordenarPor];
+  if(!cmp) return items;
+  arr.sort(cmp);
+  return arr;
+}
 /* ---- exportação: Matéria-Prima (respeita os filtros da tela) ---- */
 function materiaisExportDados(){
   const items = ENTITY_CONFIGS.material.filterItems(STATE.materiais);
@@ -1994,7 +2376,7 @@ const ENTITY_CONFIGS = {
     filterItems: (items)=>{
       const f = STATE.materiaisFiltro;
       const preTotals = f.somentePreProducao ? preProducaoTotals() : null;
-      return items.filter(m=>{
+      const filtrados = items.filter(m=>{
         if(f.tipo && m.tipo!==f.tipo) return false;
         if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
         if(f.ano && (!m.dataCadastro || m.dataCadastro.slice(0,4)!==String(f.ano))) return false;
@@ -2002,6 +2384,7 @@ const ENTITY_CONFIGS = {
         if(preTotals && !(Number(preTotals[m.id]||0)>0)) return false;
         return true;
       });
+      return ordenarMateriais(filtrados, f.ordenarPor);
     },
     filterBar: ()=>{
       const f = STATE.materiaisFiltro;
@@ -2018,6 +2401,9 @@ const ENTITY_CONFIGS = {
           MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
         '<div style="width:110px"><label class="field-label">Ano (cadastro)</label><select class="field-select" onchange="updateMateriaisFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
           anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
+        '<div style="min-width:220px"><label class="field-label">Ordenar por</label><select class="field-select" onchange="updateMateriaisFiltro(\'ordenarPor\', this.value)">'+
+          MATERIAL_ORDENACAO_OPCOES.map(o=>'<option value="'+escapeAttr(o.value)+'" '+(f.ordenarPor===o.value?"selected":"")+'>'+escapeHtml(o.label)+'</option>').join("")+
+          '</select></div>'+
         '<label style="display:flex;align-items:center;gap:7px;padding-bottom:9px;font-size:12.5px;color:'+COLORS.textMuted+';cursor:pointer" title="Mostrar apenas materiais com quantidade reservada em pedidos de Pré-produção (ainda não baixada do estoque)">'+
           '<input type="checkbox" '+(f.somentePreProducao?"checked":"")+' onchange="updateMateriaisFiltro(\'somentePreProducao\', this.checked)"/> Somente com reserva em Pré-produção</label>'+
         '<button class="btn btn-ghost" onclick="clearMateriaisFiltro()">Limpar filtros</button>'+
@@ -2034,7 +2420,7 @@ const ENTITY_CONFIGS = {
         statCardHtml("Valor Total em Estoque", fmtBRL(valorTotal), "trendingUp", COLORS.brand)+
         statCardHtml("Metragem Total em Estoque", fmtNum(metragemTotal)+" m", "boxes", COLORS.green)+
         statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
-        statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted)+
+        statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted, divergentes?"openDiagnosticoDivergenciasModal()":null)+
         statCardHtml("Reservado em Pré-produção", fmtNum(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
       '</div>';
     },
@@ -2061,12 +2447,14 @@ const ENTITY_CONFIGS = {
       {key:"entradas", label:"Entradas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
         if(!(t.entradas>0)) return '<span style="color:'+COLORS.textMuted+'">—</span>';
-        return '<span style="color:'+COLORS.green+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap" title="Notas de Entrada, transferências recebidas e devoluções">+'+fmtNum(t.entradas)+'&nbsp;'+it.unidade+'</span>';
+        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;white-space:nowrap" title="Ver lançamentos de entrada (e imprimir)" onclick="openLancamentosMaterialModal(\''+it.id+'\',\'entradas\')">'+
+          '<span style="color:'+COLORS.green+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">+'+fmtNum(t.entradas)+'&nbsp;'+it.unidade+'</span></button>';
       }},
       {key:"saidas", label:"Saídas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
         if(!(t.saidas>0)) return '<span style="color:'+COLORS.textMuted+'">—</span>';
-        return '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap" title="Consumo de produção, baixas manuais, avulsos e transferências enviadas">-'+fmtNum(t.saidas)+'&nbsp;'+it.unidade+'</span>';
+        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;white-space:nowrap" title="Ver lançamentos de saída (e imprimir)" onclick="openLancamentosMaterialModal(\''+it.id+'\',\'saidas\')">'+
+          '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">-'+fmtNum(t.saidas)+'&nbsp;'+it.unidade+'</span></button>';
       }},
       {key:"estoque", label:"Saldo Atual", render:(it)=>{
         const low = it.estoque < it.estoqueMinimo;
@@ -2190,12 +2578,13 @@ function corrigirSaldoInicial(id){
   const t = movTotaisDoMaterial(m.id);
   const sugerido = saldoInicialSugerido(m);
   const div = divergenciaDoMaterial(m);
+  const saldoRecalculado = Math.round((Number(m.estoqueInicial||0) + t.entradas - t.saidas)*100)/100;
   const nomeDisplay = m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : '<span style="font-size:14px;font-weight:600">'+escapeHtml(m.nome)+'</span>';
   const linha = (rot, val, cor)=>'<div style="display:flex;justify-content:space-between;gap:16px;padding:4px 0"><span style="color:'+COLORS.textMuted+'">'+rot+'</span><span style="font-family:\'IBM Plex Mono\',monospace;color:'+(cor||COLORS.text)+';white-space:nowrap">'+val+'</span></div>';
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:460px">'+
-        '<div class="modal-header"><h3>Alterar Saldo Inicial</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+      '<div class="modal-card" style="max-width:480px">'+
+        '<div class="modal-header"><h3>Corrigir Divergência de Saldo</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
         '<div style="margin-bottom:14px">'+nomeDisplay+'</div>'+
         '<div style="font-size:13px;border:1px solid var(--steel-border);border-radius:8px;padding:12px;margin-bottom:12px">'+
           linha("Saldo Inicial atual", fmtNum(m.estoqueInicial||0)+" "+m.unidade)+
@@ -2205,15 +2594,48 @@ function corrigirSaldoInicial(id){
           linha("Saldo Atual hoje", fmtNum(m.estoque)+" "+m.unidade)+
           (Math.abs(div)>=0.01 ? linha("Divergência", (div>0?"+":"")+fmtNum(div)+" "+m.unidade, COLORS.red) : "")+
         '</div>'+
-        '<div><label class="field-label">Novo Saldo Inicial *</label>'+
-          '<input class="field-input" type="number" step="0.01" id="saldo-inicial-input" value="'+(Math.abs(div)>=0.01?sugerido:(m.estoqueInicial||0))+'" oninput="previewSaldoInicial(\''+id+'\')"/></div>'+
-        '<div id="saldo-inicial-preview" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--panel-alt);font-size:13px"></div>'+
-        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O Saldo Atual é recalculado automaticamente: <strong style="color:'+COLORS.text+'">Saldo Inicial + Entradas − Saídas</strong>. Entradas e Saídas não são alteradas — elas vêm das notas, pedidos, baixas e transferências já lançados.</p>'+
-        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="salvarSaldoInicial(\''+id+'\')">Salvar</button></div>'+
+        '<div style="border:1px solid '+COLORS.brand+'55;background:'+COLORS.brand+'12;border-radius:8px;padding:12px;margin-bottom:14px">'+
+          '<div style="font-size:12.5px;font-weight:700;margin-bottom:6px">Opção 1 — Corrigir o Saldo Atual (recomendado)</div>'+
+          '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Use quando o <strong style="color:'+COLORS.text+'">Saldo Inicial está certo</strong> e o Saldo Atual é que ficou errado — por exemplo se algum consumo de produção foi baixado em duplicidade. Mantém o Saldo Inicial e recalcula o Saldo Atual pela conta oficial.</p>'+
+          '<div style="display:flex;justify-content:space-between;gap:12px;font-size:13px;margin-bottom:10px"><span style="color:'+COLORS.textMuted+'">Saldo Atual passaria a ser</span>'+
+            '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+COLORS.brand+';white-space:nowrap">'+fmtNum(saldoRecalculado)+'&nbsp;'+m.unidade+'</span></div>'+
+          '<button type="button" class="btn btn-primary" style="width:100%" onclick="recalcularSaldoAtual(\''+id+'\')">Recalcular Saldo Atual para '+fmtNum(saldoRecalculado)+' '+m.unidade+'</button>'+
+        '</div>'+
+        '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:12px">'+
+          '<div style="font-size:12.5px;font-weight:700;margin-bottom:6px">Opção 2 — Corrigir o Saldo Inicial</div>'+
+          '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Use quando o <strong style="color:'+COLORS.text+'">Saldo Atual (contagem física) está certo</strong> e quem foi cadastrado errado é o Saldo Inicial. Para a conta fechar com o saldo atual de hoje, o Saldo Inicial teria que ser '+fmtNum(sugerido)+' '+m.unidade+'.</p>'+
+          '<label class="field-label">Novo Saldo Inicial *</label>'+
+          '<input class="field-input" type="number" step="0.01" id="saldo-inicial-input" value="'+(m.estoqueInicial||0)+'" oninput="previewSaldoInicial(\''+id+'\')"/>'+
+          '<div id="saldo-inicial-preview" style="margin-top:12px;padding:10px 12px;border-radius:8px;background:var(--panel-alt);font-size:13px"></div>'+
+          '<button type="button" class="btn btn-ghost" style="width:100%;margin-top:10px" onclick="salvarSaldoInicial(\''+id+'\')">Salvar novo Saldo Inicial</button>'+
+        '</div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">Em ambos os casos vale a mesma conta: <strong style="color:'+COLORS.text+'">Saldo Inicial + Entradas − Saídas = Saldo Atual</strong>. Entradas e Saídas não são alteradas — elas vêm das notas, pedidos, baixas e transferências já lançados.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="openAuditoriaMaterialModal(\''+id+'\')">Ver auditoria</button><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
   previewSaldoInicial(id);
+}
+/* Mantém o Saldo Inicial cadastrado e reescreve o Saldo Atual pela conta oficial
+   Saldo Inicial + Entradas − Saídas. É a correção certa quando o estoque real foi
+   baixado a mais (ou a menos) por um lançamento duplicado. */
+async function recalcularSaldoAtual(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  if(!m) return;
+  if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem recalcular o saldo."); return; }
+  const t = movTotaisDoMaterial(m.id);
+  const novoSaldo = Math.round((Number(m.estoqueInicial||0) + t.entradas - t.saidas)*100)/100;
+  const anterior = Number(m.estoque||0);
+  const delta = Math.round((novoSaldo - anterior)*100)/100;
+  if(!delta){ showToast("info","O saldo atual já está correto."); closeModal(); return; }
+  const { error } = await sb.from("materiais").update({estoque:novoSaldo}).eq("id", id);
+  if(error){ sbErrorToast("recalcular saldo atual", error); return; }
+  m.estoque = novoSaldo;
+  await logMovimento(id, delta>0?"entrada":"saida", delta, "ajuste",
+    "Recálculo do saldo atual (correção de divergência) para "+fmtNum(novoSaldo)+" "+m.unidade);
+  closeModal();
+  renderScreen();
+  showToast("success","Saldo atual de "+m.nome+" corrigido de "+fmtNum(anterior)+" para "+fmtNum(novoSaldo)+" "+m.unidade+".");
 }
 function previewSaldoInicial(id){
   const m = STATE.materiais.find(x=>x.id===id);
@@ -2365,6 +2787,7 @@ function renderGenericScreen(type){
   const printHeader = cfg.printable ? '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de '+cfg.title+' — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>' : "";
   const actions = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openTiposModal()">'+icon("settings",14)+' Gerenciar Tipos</button>' : '')+
+    (type==="material" ? '<button class="btn btn-ghost" onclick="openDiagnosticoDivergenciasModal()" title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",14)+' Divergências</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisExcel()" title="Baixar planilha (.csv, abre no Excel)">'+icon("package",14)+' Excel</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisPdf()" title="Gerar PDF">'+icon("printer",14)+' PDF</button>' : '')+
     (cfg.printable ? '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Imprimir</button>' : '')+
@@ -2420,30 +2843,59 @@ function preProducaoTotals(){
   });
   return totals;
 }
+/* Serializa e torna IDEMPOTENTES as operações que baixam estoque a partir de pedidos.
+   O problema original: adjustStock() calculava o delta comparando um "pedido antigo"
+   lido em memória com o novo. Se a mesma alteração fosse processada duas vezes (duplo
+   clique em Salvar, troca rápida de situação, conclusão de etapa disparada duas vezes),
+   as duas chamadas liam o MESMO pedido antigo e cada uma baixava o consumo inteiro —
+   o estoque caía o dobro, mesmo existindo um único lançamento de saída. Foi isso que
+   deixou o Preto 58,80 m abaixo do que a conta Saldo Inicial + Entradas − Saídas indica.
+
+   A correção: guardar, por pedido, quanto consumo já foi efetivamente aplicado ao
+   estoque (_consumoAplicado). O delta passa a ser "o que deveria estar baixado" menos
+   "o que já está baixado" — então reprocessar a mesma alteração dá delta 0. */
+const _consumoAplicado = {};
+let _stockOpChain = Promise.resolve();
+function runStockOp(fn){
+  const run = ()=>fn();
+  const next = _stockOpChain.then(run, run);
+  _stockOpChain = next.then(()=>{}, ()=>{});
+  return next;
+}
+/* Chamado depois de carregar os dados: o estoque que veio do banco já reflete o
+   consumo dos pedidos como eles estão hoje. */
+function initConsumoAplicado(){
+  Object.keys(_consumoAplicado).forEach(k=>{ delete _consumoAplicado[k]; });
+  STATE.pedidos.forEach(p=>{ _consumoAplicado[p.id] = computeEffectiveConsumption(p); });
+}
 async function adjustStock(oldPedido, newPedido){
-  const oldMap = computeEffectiveConsumption(oldPedido);
-  const newMap = computeEffectiveConsumption(newPedido);
-  const ids = new Set([...Object.keys(oldMap), ...Object.keys(newMap)]);
   const pedidoRef = newPedido||oldPedido;
-  const refTxt = pedidoRef ? ("Pedido OP "+(pedidoRef.op||pedidoRef.id)+(pedidoRef.cliente?(" · "+pedidoRef.cliente):"")) : "Pedido";
-  const writes = [];
-  ids.forEach(id=>{
-    const delta = (newMap[id]||0) - (oldMap[id]||0);
-    if(!delta) return;
-    const mat = STATE.materiais.find(m=>m.id===id);
-    if(!mat) return;
-    const novoEstoque = Math.round((mat.estoque - delta)*100)/100;
-    writes.push(
-      sb.from("materiais").update({estoque:novoEstoque}).eq("id", id).then(async r=>{
-        if(r.error){ sbErrorToast("ajustar estoque de "+mat.nome, r.error); }
-        else {
-          mat.estoque = novoEstoque;
-          await logMovimento(id, delta>0?"saida":"entrada", delta, "producao", refTxt);
-        }
-      })
-    );
+  if(!pedidoRef) return;
+  const pid = pedidoRef.id;
+  return runStockOp(async ()=>{
+    const jaAplicado = Object.prototype.hasOwnProperty.call(_consumoAplicado, pid)
+      ? _consumoAplicado[pid]
+      : computeEffectiveConsumption(oldPedido);
+    const desejado = newPedido ? computeEffectiveConsumption(newPedido) : {};
+    const ids = new Set([...Object.keys(jaAplicado), ...Object.keys(desejado)]);
+    /* Marca o novo estado ANTES dos awaits: se a mesma alteração for reprocessada
+       enquanto esta ainda roda, ela já encontra o consumo como aplicado e não repete. */
+    if(newPedido) _consumoAplicado[pid] = desejado; else delete _consumoAplicado[pid];
+    const refTxt = "Pedido OP "+(pedidoRef.op||pedidoRef.id)+(pedidoRef.cliente?(" · "+pedidoRef.cliente):"");
+    /* Sequencial (não Promise.all): dois itens do mesmo pedido podem apontar para o
+       mesmo material (ex.: Cor Sup. e Cor Inf. iguais) e não podem ler o mesmo saldo. */
+    for(const id of ids){
+      const delta = Math.round(((desejado[id]||0) - (jaAplicado[id]||0))*100)/100;
+      if(!delta) continue;
+      const mat = STATE.materiais.find(m=>m.id===id);
+      if(!mat) continue;
+      const novoEstoque = Math.round((mat.estoque - delta)*100)/100;
+      const r = await sb.from("materiais").update({estoque:novoEstoque}).eq("id", id);
+      if(r.error){ sbErrorToast("ajustar estoque de "+mat.nome, r.error); continue; }
+      mat.estoque = novoEstoque;
+      await logMovimento(id, delta>0?"saida":"entrada", delta, "producao", refTxt);
+    }
   });
-  await Promise.all(writes);
 }
 async function savePedido(id, data){
   const parsed = Object.assign({}, data, {metragem: Number(data.metragem||0), temPintura: !!data.temPintura, temColagem: !!data.temColagem});
@@ -2469,16 +2921,19 @@ async function savePedido(id, data){
     }
     const { error } = await sb.from("pedidos").update(pedidoToRow(updated)).eq("id", id);
     if(error){ sbErrorToast("atualizar pedido", error); return false; }
-    await adjustStock(old, updated);
+    /* STATE atualizado antes do adjustStock para que a tela e os cálculos ao vivo
+       (Entradas/Saídas) já reflitam o pedido novo. A proteção contra baixa dupla em
+       si fica por conta da idempotência do adjustStock. */
     STATE.pedidos = STATE.pedidos.map(p=>p.id===id?updated:p);
+    await adjustStock(old, updated);
     showToast("success", repositioned ? "Pedido atualizado — etapa reposicionada para "+(STAGE_DEFS[updated.etapaAtual]?STAGE_DEFS[updated.etapaAtual].label:updated.etapaAtual)+" conforme o novo fluxo." : "Pedido atualizado e estoque ajustado.");
   } else {
     const base = Object.assign({etapaAtual:"perfilar", motoristaId:"", dataEntregue:"", producaoStatus:"idle", producaoElapsedMs:0, producaoStartedAt:null}, parsed);
     const { data:row, error } = await sb.from("pedidos").insert(pedidoToRow(base)).select().single();
     if(error){ sbErrorToast("lançar pedido", error); return false; }
     const novo = mapPedidoFromRow(row);
-    await adjustStock(null, novo);
     STATE.pedidos = [novo, ...STATE.pedidos];
+    await adjustStock(null, novo);
     showToast("success","Pedido lançado e estoque atualizado.");
   }
 }
@@ -2486,8 +2941,8 @@ async function deletePedido(id){
   const old = STATE.pedidos.find(p=>p.id===id);
   const { error } = await sb.from("pedidos").delete().eq("id", id);
   if(error){ sbErrorToast("remover pedido", error); return false; }
-  await adjustStock(old, null);
   STATE.pedidos = STATE.pedidos.filter(p=>p.id!==id);
+  await adjustStock(old, null);
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -2865,13 +3320,23 @@ function openPedidoModal(mode, id){
   document.getElementById("modal-root").innerHTML = html;
   updateStockPreview();
 }
-function submitPedidoForm(event, mode, id){
+async function submitPedidoForm(event, mode, id){
   event.preventDefault();
   const fd = new FormData(event.target);
   const data = Object.fromEntries(fd.entries());
   data.temPintura = !!(event.target.elements["temPintura"] && event.target.elements["temPintura"].checked);
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
-  savePedido(mode==="edit"?id:null, data);
+  /* Trava o botão e aguarda o salvamento (que baixa/estorna estoque) terminar antes de
+     fechar o modal. Sem isso, um duplo clique ou uma segunda tentativa de salvar antes da
+     primeira terminar pode disparar adjustStock() duas vezes para a mesma alteração —
+     cada chamada calcula o delta a partir do pedido "antigo" em memória, então se a
+     segunda chamada ler esse "antigo" antes da primeira já ter sido persistida, o mesmo
+     consumo é baixado do estoque real duas vezes, mesmo aparecendo só um lançamento. */
+  const submitBtn = event.target.querySelector('button[type="submit"]');
+  if(submitBtn) submitBtn.disabled = true;
+  const ok = await savePedido(mode==="edit"?id:null, data);
+  if(submitBtn) submitBtn.disabled = false;
+  if(ok===false) return false;
   closeModal();
   renderScreen();
   return false;

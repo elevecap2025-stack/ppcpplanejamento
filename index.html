@@ -796,6 +796,7 @@ const ICON_PATHS = {
   menu:'<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/>',
   panelLeft:'<rect x="3" y="3" width="18" height="18" rx="2"/><line x1="9" y1="3" x2="9" y2="21"/>',
   activity:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  message:'<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
   arrowUpDown:'<polyline points="7 4 7 20"/><polyline points="4 7 7 4 10 7"/><polyline points="17 20 17 4"/><polyline points="14 17 17 20 20 17"/>',
   repeat:'<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   undo:'<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
@@ -1081,6 +1082,9 @@ const STATE = {
   metasDiaOverride:{colagem:{}, perfilar:{}}, feriadosCustom:[], feriadosRemovidos:[],
   metasCalStage:"perfilar", metasCalMonth:new Date().getMonth(), metasCalYear:new Date().getFullYear(),
   permissoesUsuarios:{}, currentUserEmail:"", screenAnterior:"",
+  /* Recados: avisos escritos por um admin e dirigidos a colaboradores.
+     Cada recado guarda quem já marcou como lido e quando. */
+  recados:[], recadosPopupMostrado:false,
   materiaisAvulsos:[], avulsoFiltro:{op:"",materialId:"",status:"",tipo:""}, avulsoConcluidosFiltro:{op:"",materialId:"",dIni:"",dFim:""},
   avulsoStageState:{weekStart:toISO(mondayOfCurrentWeek()), dIni:toISO(mondayOfCurrentWeek()), dFim:toISO(addDays(mondayOfCurrentWeek(),5)), materialId:"", op:"", status:"", tipo:"", diasVisiveis:[true,true,true,true,true,true]},
 };
@@ -1131,13 +1135,13 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, recados] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
-    configGet("permissoes_usuarios"),
+    configGet("permissoes_usuarios"), configGet("recados"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1153,6 +1157,7 @@ async function loadAllData(){
   STATE.feriadosCustom = Array.isArray(feriadosCustom) ? feriadosCustom : [];
   STATE.feriadosRemovidos = Array.isArray(feriadosRemovidos) ? feriadosRemovidos : [];
   STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
+  STATE.recados = Array.isArray(recados) ? recados : [];
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   /* Marca o consumo de cada pedido como "já aplicado": o estoque que veio do banco
@@ -6059,10 +6064,304 @@ function renderAcompanhamentoScreen(){
     '</div>';
 }
 
+/* ============================== RECADOS ==============================
+   Avisos escritos por um administrador e dirigidos a colaboradores específicos
+   (ou a todos). Ao abrir o sistema, os recados ainda não lidos aparecem em um
+   pop-up para o colaborador dar como lido. A confirmação fica registrada com
+   data e hora, e o admin acompanha quem já leu na tela "Gerenciar Recados". */
+function recadoDestinatarioTodos(r){ return !r.destinatarios || r.destinatarios.length===0; }
+function recadoEhPara(r, email){
+  if(!r || r.ativo===false) return false;
+  const e = (email||"").trim().toLowerCase();
+  if(!e) return false;
+  if(recadoDestinatarioTodos(r)) return true;
+  return (r.destinatarios||[]).map(x=>String(x).toLowerCase()).indexOf(e)!==-1;
+}
+function recadoLidoPor(r, email){
+  const e = (email||"").trim().toLowerCase();
+  return !!(r && r.leituras && r.leituras[e]);
+}
+function recadosDoUsuario(email){
+  return (STATE.recados||[])
+    .filter(r=>recadoEhPara(r, email))
+    .sort((a,b)=> String(b.criadoEm||"").localeCompare(String(a.criadoEm||"")));
+}
+function recadosNaoLidos(email){
+  return recadosDoUsuario(email).filter(r=>!recadoLidoPor(r, email));
+}
+/* Escrita segura: relê os recados do banco antes de gravar, para não sobrescrever
+   uma confirmação de leitura feita por outro usuário entre a carga e o salvamento. */
+async function salvarRecados(mutador){
+  const atuais = await configGet("recados");
+  const lista = Array.isArray(atuais) ? atuais : [];
+  const nova = mutador(lista);
+  const ok = await configSet("recados", nova);
+  if(!ok) return false;
+  STATE.recados = nova;
+  return true;
+}
+async function marcarRecadoLido(id){
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  if(!email) return;
+  const ok = await salvarRecados(function(lista){
+    return lista.map(function(r){
+      if(r.id!==id) return r;
+      const leituras = Object.assign({}, r.leituras||{});
+      if(!leituras[email]) leituras[email] = new Date().toISOString();
+      return Object.assign({}, r, {leituras: leituras});
+    });
+  });
+  if(!ok) return;
+  renderSidebar();
+  const restantes = recadosNaoLidos(email);
+  if(restantes.length>0) mostrarPopupRecados();
+  else { closeModal(); renderScreen(); showToast("success","Recado confirmado como lido."); }
+}
+async function marcarTodosRecadosLidos(){
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  if(!email) return;
+  const ids = recadosNaoLidos(email).map(r=>r.id);
+  if(ids.length===0) return;
+  const ok = await salvarRecados(function(lista){
+    return lista.map(function(r){
+      if(ids.indexOf(r.id)===-1) return r;
+      const leituras = Object.assign({}, r.leituras||{});
+      if(!leituras[email]) leituras[email] = new Date().toISOString();
+      return Object.assign({}, r, {leituras: leituras});
+    });
+  });
+  if(!ok) return;
+  closeModal();
+  renderSidebar();
+  renderScreen();
+  showToast("success", ids.length+" recado(s) confirmado(s) como lido(s).");
+}
+function fmtDataHora(iso){
+  if(!iso) return "—";
+  const d = new Date(iso);
+  if(isNaN(d.getTime())) return "—";
+  return fmtDateBR(toISO(d))+" às "+pad2(d.getHours())+":"+pad2(d.getMinutes());
+}
+function recadoCardHtml(r, opts){
+  opts = opts || {};
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const lido = recadoLidoPor(r, email);
+  const cor = lido ? COLORS.textMuted : COLORS.brand;
+  return '<div style="border:1px solid '+(lido?"var(--steel-border)":cor+"66")+';background:'+(lido?"transparent":cor+"0D")+';border-radius:8px;padding:14px;margin-bottom:10px">'+
+    '<div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start;flex-wrap:wrap">'+
+      '<div style="font-size:14px;font-weight:700">'+escapeHtml(r.titulo||"Recado")+'</div>'+
+      (lido
+        ? '<span style="font-size:10px;font-weight:700;color:'+COLORS.green+';white-space:nowrap">LIDO EM '+escapeHtml(fmtDataHora(r.leituras[email]))+'</span>'
+        : '<span style="font-size:10px;font-weight:700;color:'+cor+';border:1px solid '+cor+'66;border-radius:10px;padding:2px 8px;white-space:nowrap">NÃO LIDO</span>')+
+    '</div>'+
+    '<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:3px">De '+escapeHtml(r.autor||"—")+' · '+escapeHtml(fmtDataHora(r.criadoEm))+'</div>'+
+    '<div style="font-size:13px;line-height:1.6;margin-top:10px;white-space:pre-wrap">'+escapeHtml(r.mensagem||"")+'</div>'+
+    (!lido && opts.comBotao ? '<div style="margin-top:12px"><button type="button" class="btn btn-primary" onclick="marcarRecadoLido(\''+r.id+'\')">'+icon("checkCircle",14)+' Marcar como lido</button></div>' : '')+
+  '</div>';
+}
+/* Pop-up de abertura: só aparece quando há recado não lido para quem está logado. */
+function mostrarPopupRecados(){
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const pendentes = recadosNaoLidos(email);
+  if(pendentes.length===0) return;
+  const html =
+    '<div class="modal-overlay">'+
+      '<div class="modal-card" style="max-width:600px;max-height:85vh;display:flex;flex-direction:column">'+
+        '<div class="modal-header"><h3>'+icon("message",17)+' '+(pendentes.length===1?"Você tem um recado":"Você tem "+pendentes.length+" recados")+'</h3></div>'+
+        '<div style="overflow-y:auto;flex:1">'+pendentes.map(r=>recadoCardHtml(r, {comBotao:true})).join("")+'</div>'+
+        '<div class="modal-actions">'+
+          (pendentes.length>1 ? '<button type="button" class="btn btn-ghost" onclick="marcarTodosRecadosLidos()">Marcar todos como lidos</button>' : '')+
+          '<button type="button" class="btn btn-ghost" onclick="adiarPopupRecados()">Ver depois</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* "Ver depois" fecha sem confirmar leitura — o recado continua pendente na tela
+   Recados e volta a aparecer no próximo acesso. */
+function adiarPopupRecados(){
+  closeModal();
+  showToast("info","Os recados continuam disponíveis na tela Recados.");
+}
+function renderRecadosScreen(){
+  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const meus = recadosDoUsuario(email);
+  const naoLidos = meus.filter(r=>!recadoLidoPor(r, email));
+  const acoes = naoLidos.length>1
+    ? '<div class="no-print"><button class="btn btn-primary" onclick="marcarTodosRecadosLidos()">'+icon("checkCircle",14)+' Marcar todos como lidos</button></div>'
+    : '';
+  const corpo = meus.length===0
+    ? emptyStateHtml("Nenhum recado para você no momento.")
+    : (naoLidos.length>0
+        ? '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:'+COLORS.brand+';margin-bottom:8px">Não lidos ('+naoLidos.length+')</div>'+
+          naoLidos.map(r=>recadoCardHtml(r, {comBotao:true})).join("")
+        : '')+
+      (meus.length-naoLidos.length>0
+        ? '<div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;font-weight:700;color:'+COLORS.textMuted+';margin:18px 0 8px">Já lidos</div>'+
+          meus.filter(r=>recadoLidoPor(r,email)).map(r=>recadoCardHtml(r, {comBotao:false})).join("")
+        : '');
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("message","Recados","Avisos enviados pela administração", acoes)+
+    '<div class="pcp-card">'+corpo+'</div>';
+}
+/* ---- Administração dos recados ---- */
+function emailsConhecidos(){
+  const set = new Set(Object.keys(STATE.permissoesUsuarios||{}));
+  (STATE.recados||[]).forEach(function(r){
+    (r.destinatarios||[]).forEach(function(e){ set.add(String(e).toLowerCase()); });
+  });
+  if(STATE.currentUserEmail) set.add(STATE.currentUserEmail.trim().toLowerCase());
+  return Array.from(set).filter(Boolean).sort();
+}
+function openRecadoModal(editId){
+  const r = editId ? (STATE.recados||[]).find(x=>x.id===editId) : null;
+  const emails = emailsConhecidos();
+  const selecionados = r ? (r.destinatarios||[]) : [];
+  const paraTodos = r ? recadoDestinatarioTodos(r) : true;
+  const checkboxes = emails.map(function(e){
+    const marcado = selecionados.map(x=>String(x).toLowerCase()).indexOf(e)!==-1;
+    return '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 0;cursor:pointer">'+
+      '<input type="checkbox" class="recado-dest" value="'+escapeAttr(e)+'" '+(marcado?"checked":"")+' onchange="document.getElementById(\'recado-todos\').checked=false"/> '+escapeHtml(e)+'</label>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:560px;max-height:88vh;display:flex;flex-direction:column">'+
+        '<div class="modal-header"><h3>'+(r?"Editar":"Novo")+' Recado</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="overflow-y:auto;flex:1">'+
+          '<div><label class="field-label">Título *</label><input class="field-input" id="recado-titulo" value="'+escapeAttr(r?r.titulo:"")+'" placeholder="Ex.: Parada programada da perfiladeira"/></div>'+
+          '<div style="margin-top:12px"><label class="field-label">Mensagem *</label>'+
+            '<textarea class="field-input" id="recado-mensagem" rows="6" style="resize:vertical;font-family:inherit" placeholder="Escreva o aviso…">'+escapeHtml(r?r.mensagem:"")+'</textarea></div>'+
+          '<div style="margin-top:14px"><label class="field-label">Destinatários</label>'+
+            '<label style="display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;padding:4px 0;cursor:pointer">'+
+              '<input type="checkbox" id="recado-todos" '+(paraTodos?"checked":"")+' onchange="if(this.checked){document.querySelectorAll(\'.recado-dest\').forEach(function(c){c.checked=false;});}"/> Todos os usuários</label>'+
+            '<div style="max-height:150px;overflow-y:auto;border:1px solid var(--steel-border);border-radius:6px;padding:8px;margin-top:6px">'+
+              (emails.length? checkboxes : '<div style="font-size:12px;color:'+COLORS.textMuted+'">Nenhum e-mail cadastrado em Permissões de Usuário.</div>')+
+            '</div>'+
+            '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0;line-height:1.5">A lista vem dos e-mails cadastrados em Permissões de Usuário. Marcar "Todos" envia para qualquer pessoa que entrar no sistema.</p>'+
+          '</div>'+
+        '</div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="salvarRecado('+(r?"'"+r.id+"'":"null")+')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function salvarRecado(editId){
+  const titulo = (document.getElementById("recado-titulo").value||"").trim();
+  const mensagem = (document.getElementById("recado-mensagem").value||"").trim();
+  if(!titulo || !mensagem){ showToast("error","Preencha título e mensagem."); return; }
+  const todos = document.getElementById("recado-todos").checked;
+  const destinatarios = todos ? [] : Array.from(document.querySelectorAll(".recado-dest")).filter(c=>c.checked).map(c=>c.value);
+  if(!todos && destinatarios.length===0){ showToast("error","Escolha ao menos um destinatário, ou marque Todos."); return; }
+  const autor = STATE.currentUserEmail || "administração";
+  const ok = await salvarRecados(function(lista){
+    if(editId){
+      /* Editar mantém as leituras já registradas: quem leu não é obrigado a reler
+         uma correção de digitação. Para exigir nova leitura, crie outro recado. */
+      return lista.map(r=> r.id===editId ? Object.assign({}, r, {titulo, mensagem, destinatarios}) : r);
+    }
+    return [{id:"rec_"+Date.now()+"_"+Math.random().toString(36).slice(2,7), titulo, mensagem,
+             destinatarios, autor, criadoEm:new Date().toISOString(), ativo:true, leituras:{}}].concat(lista);
+  });
+  if(!ok) return;
+  closeModal();
+  renderSidebar();
+  renderScreen();
+  showToast("success", editId ? "Recado atualizado." : "Recado publicado.");
+}
+function confirmDeleteRecado(id){
+  const r = (STATE.recados||[]).find(x=>x.id===id);
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:380px">'+
+        '<div class="modal-header"><h3>Remover recado</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Remover o recado "'+escapeHtml(r?r.titulo:"")+'"? As confirmações de leitura também serão apagadas.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-danger" onclick="deleteRecado(\''+id+'\')">Remover</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function deleteRecado(id){
+  const ok = await salvarRecados(function(lista){ return lista.filter(r=>r.id!==id); });
+  if(!ok) return;
+  closeModal(); renderSidebar(); renderScreen();
+  showToast("info","Recado removido.");
+}
+async function toggleRecadoAtivo(id){
+  const ok = await salvarRecados(function(lista){
+    return lista.map(r=> r.id===id ? Object.assign({}, r, {ativo: r.ativo===false}) : r);
+  });
+  if(!ok) return;
+  renderSidebar(); renderScreen();
+}
+function openLeiturasRecadoModal(id){
+  const r = (STATE.recados||[]).find(x=>x.id===id);
+  if(!r) return;
+  const leituras = r.leituras||{};
+  const alvos = recadoDestinatarioTodos(r) ? emailsConhecidos() : (r.destinatarios||[]);
+  const linhas = alvos.map(function(e){
+    const quando = leituras[String(e).toLowerCase()];
+    return '<tr><td>'+escapeHtml(e)+'</td>'+
+      '<td style="text-align:right;white-space:nowrap">'+(quando
+        ? '<span style="color:'+COLORS.green+';font-weight:600">'+escapeHtml(fmtDataHora(quando))+'</span>'
+        : '<span style="color:'+COLORS.textMuted+'">Não lido</span>')+'</td></tr>';
+  }).join("");
+  /* Quem leu mas não está mais na lista de destinatários (ex.: recado editado). */
+  const extras = Object.keys(leituras).filter(e=>alvos.map(x=>String(x).toLowerCase()).indexOf(e)===-1);
+  const extrasHtml = extras.map(e=>'<tr><td>'+escapeHtml(e)+' <span style="font-size:10px;color:'+COLORS.textMuted+'">(fora da lista atual)</span></td>'+
+    '<td style="text-align:right;white-space:nowrap;color:'+COLORS.green+';font-weight:600">'+escapeHtml(fmtDataHora(leituras[e]))+'</td></tr>').join("");
+  const lidos = alvos.filter(e=>leituras[String(e).toLowerCase()]).length;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>Leituras — '+escapeHtml(r.titulo||"")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="font-size:12.5px;color:'+COLORS.textMuted+';margin-bottom:10px">'+lidos+' de '+alvos.length+' destinatário(s) já leram'+(recadoDestinatarioTodos(r)?' · enviado para todos':'')+'</div>'+
+        '<div style="max-height:52vh;overflow:auto"><table class="pcp-table"><thead><tr><th>Usuário</th><th style="text-align:right">Leitura</th></tr></thead><tbody>'+(linhas+extrasHtml || '<tr><td colspan="2">—</td></tr>')+'</tbody></table></div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function renderGerenciarRecadosScreen(){
+  if(!isCurrentUserAdmin()){
+    document.getElementById("content").innerHTML =
+      screenHeaderHtml("message","Gerenciar Recados","")+
+      '<div class="pcp-card">'+emptyStateHtml("Somente administradores podem gerenciar recados.")+'</div>';
+    return;
+  }
+  const lista = (STATE.recados||[]).slice().sort((a,b)=>String(b.criadoEm||"").localeCompare(String(a.criadoEm||"")));
+  const acoes = '<div class="no-print"><button class="btn btn-primary" onclick="openRecadoModal()">'+icon("plus",14)+' Novo Recado</button></div>';
+  const linhas = lista.map(function(r){
+    const alvos = recadoDestinatarioTodos(r) ? emailsConhecidos() : (r.destinatarios||[]);
+    const lidos = alvos.filter(e=>(r.leituras||{})[String(e).toLowerCase()]).length;
+    const inativo = r.ativo===false;
+    return '<tr'+(inativo?' style="opacity:.55"':'')+'>'+
+      '<td><div style="font-weight:600">'+escapeHtml(r.titulo||"")+'</div>'+
+        '<div style="font-size:11px;color:'+COLORS.textMuted+';max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(r.mensagem||"")+'</div></td>'+
+      '<td style="white-space:nowrap">'+(recadoDestinatarioTodos(r)?"Todos":(r.destinatarios||[]).length+" usuário(s)")+'</td>'+
+      '<td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(r.criadoEm))+'</td>'+
+      '<td style="white-space:nowrap"><button type="button" class="icon-btn" style="width:auto;padding:2px 8px;font-size:11.5px" onclick="openLeiturasRecadoModal(\''+r.id+'\')" title="Ver quem já leu">'+lidos+' / '+alvos.length+' leram</button></td>'+
+      '<td style="white-space:nowrap"><span style="font-size:10px;font-weight:700;color:'+(inativo?COLORS.textMuted:COLORS.green)+'">'+(inativo?"INATIVO":"ATIVO")+'</span></td>'+
+      '<td class="no-print"><div style="display:flex;gap:6px">'+
+        '<button class="icon-btn" title="'+(inativo?"Reativar":"Desativar")+'" onclick="toggleRecadoAtivo(\''+r.id+'\')">'+icon(inativo?"checkCircle":"x",13)+'</button>'+
+        '<button class="icon-btn" title="Editar" onclick="openRecadoModal(\''+r.id+'\')">'+icon("edit",13)+'</button>'+
+        '<button class="icon-btn" title="Remover" onclick="confirmDeleteRecado(\''+r.id+'\')">'+icon("trash",13)+'</button>'+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+  const tabela = lista.length===0 ? emptyStateHtml("Nenhum recado publicado ainda.") :
+    '<table class="pcp-table"><thead><tr><th>Recado</th><th>Destinatários</th><th>Publicado</th><th>Leituras</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>'+linhas+'</tbody></table>';
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("message","Gerenciar Recados","Publique avisos e acompanhe quem já deu como lido", acoes)+
+    '<div class="pcp-card" style="padding:0">'+tabela+'</div>';
+}
+
 /* ============================== NAV / LOGIN / INIT ============================== */
 const NAV_GROUPS = [
-  { id:"_top", items:[
+  { id:"_top", title:"Geral", items:[
     {id:"dashboard", label:"Dashboard", icon:"barChart"},
+    {id:"recados", label:"Recados", icon:"message"},
   ]},
   { id:"programacao", title:"Programação", items:[
     {id:"pedidos", label:"Lançamentos", icon:"dashboard"},
@@ -6101,6 +6400,7 @@ const NAV_GROUPS = [
   ]},
   { id:"administracao", title:"Administração", items:[
     {id:"permissoesUsuarios", label:"Permissões de Usuário", icon:"users"},
+    {id:"gerenciarRecados", label:"Gerenciar Recados", icon:"message"},
     {id:"backup", label:"Backup dos Dados", icon:"arrowDownCircle"},
   ]},
 ];
@@ -6126,9 +6426,17 @@ const SUPER_ADMIN_EMAILS = ["elevecap2025@gmail.com"];
 function isSuperAdminEmail(email){
   return SUPER_ADMIN_EMAILS.indexOf((email||"").trim().toLowerCase())!==-1;
 }
+/* Telas que o admin pode ligar/desligar por usuário. O grupo "Geral" entra aqui para
+   que o Dashboard seja configurável. Ficam de fora apenas as telas que se autogovernam:
+   "Permissões de Usuário" e "Gerenciar Recados" são sempre restritas a administradores,
+   e "Recados" é sempre livre — é onde o colaborador lê os avisos dirigidos a ele, então
+   bloqueá-la anularia o propósito do recado. */
+const TELAS_SEMPRE_ADMIN = ["permissoesUsuarios", "gerenciarRecados"];
+const TELAS_SEMPRE_LIVRES = ["recados"];
 function permTelasConfiguraveis(){
-  return NAV_GROUPS.filter(function(g){ return g.id!=="_top"; })
-    .map(function(g){ return Object.assign({}, g, { items: g.items.filter(function(it){ return it.id!=="permissoesUsuarios"; }) }); })
+  const fixas = TELAS_SEMPRE_ADMIN.concat(TELAS_SEMPRE_LIVRES);
+  return NAV_GROUPS
+    .map(function(g){ return Object.assign({}, g, { items: g.items.filter(function(it){ return fixas.indexOf(it.id)===-1; }) }); })
     .filter(function(g){ return g.items.length>0; });
 }
 function permsForCurrentUser(){
@@ -6145,9 +6453,9 @@ function isCurrentUserAdmin(){
   return !existeAdmin; // bootstrap: sem nenhum admin configurado, qualquer usuário logado pode configurar
 }
 function telaPermitida(screenId){
-  if(screenId==="dashboard") return true;
+  if(TELAS_SEMPRE_LIVRES.indexOf(screenId)!==-1) return true;
   if(isSuperAdminEmail(STATE.currentUserEmail)) return true;
-  if(screenId==="permissoesUsuarios") return isCurrentUserAdmin();
+  if(TELAS_SEMPRE_ADMIN.indexOf(screenId)!==-1) return isCurrentUserAdmin();
   const cfg = permsForCurrentUser();
   if(!cfg) return true;
   if(cfg.admin) return true;
@@ -6155,7 +6463,7 @@ function telaPermitida(screenId){
 }
 function primeiraTelaPermitida(){
   for(const it of NAV_ITEMS){ if(telaPermitida(it.id)) return it.id; }
-  return "dashboard";
+  return "recados";   // sempre liberada, então nunca sobra usuário sem destino
 }
 async function savePermissoesUsuarios(){
   const ok = await configSet("permissoes_usuarios", STATE.permissoesUsuarios);
@@ -6334,6 +6642,7 @@ function coletarDadosBackup(){
       feriadosCustom: STATE.feriadosCustom,
       feriadosRemovidos: STATE.feriadosRemovidos,
       permissoesUsuarios: STATE.permissoesUsuarios,
+      recados: STATE.recados,
     },
   };
 }
@@ -6460,7 +6769,15 @@ function renderSidebar(){
   const groupsHtml = NAV_GROUPS.map(g=>{
     const itemsPermitidos = g.items.filter(it=>telaPermitida(it.id));
     if(itemsPermitidos.length===0) return "";
-    const itemsHtml = itemsPermitidos.map(it=>'<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+'</button>').join("");
+    const itemsHtml = itemsPermitidos.map(function(it){
+      /* Contador de recados não lidos ao lado do item "Recados". */
+      let badge = "";
+      if(it.id==="recados"){
+        const n = recadosNaoLidos(STATE.currentUserEmail).length;
+        if(n>0) badge = '<span style="margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:'+COLORS.red+';border-radius:9px;padding:1px 6px;min-width:17px;text-align:center">'+n+'</span>';
+      }
+      return '<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+badge+'</button>';
+    }).join("");
     if(g.id==="_top") return itemsHtml;
     const collapsed = !!STATE.sidebarCollapsedGroups[g.id];
     return '<button class="pcp-sidebar-group-header" onclick="toggleSidebarGroup(\''+g.id+'\')">'+
@@ -6512,6 +6829,8 @@ function renderScreen(){
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");
   else if(STATE.screen==="permissoesUsuarios") renderPermissoesUsuariosScreen();
+  else if(STATE.screen==="recados") renderRecadosScreen();
+  else if(STATE.screen==="gerenciarRecados") renderGerenciarRecadosScreen();
   else if(STATE.screen==="backup") renderBackupScreen();
 }
 function showLoginError(msg){
@@ -6536,6 +6855,11 @@ async function enterApp(userName){
   if(!telaPermitida(STATE.screen)) STATE.screen = primeiraTelaPermitida();
   renderSidebar();
   renderScreen();
+  /* Recados pendentes aparecem assim que o sistema abre, uma vez por sessão. */
+  if(!STATE.recadosPopupMostrado){
+    STATE.recadosPopupMostrado = true;
+    mostrarPopupRecados();
+  }
   executarBackupAutomaticoSeNecessario();
 }
 async function handleLogin(event){

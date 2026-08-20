@@ -1061,6 +1061,10 @@ const STATE = {
   transferenciaFiltro:{materialOrigemId:"",materialDestinoId:"",dIni:"",dFim:""},
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
+  /* Dashboard: unidade escolhida em cada caixa de total (m = metragem, valor = R$). */
+  dashUnidades:{bobinasCompradas:"m", epsComprado:"m", pedidosEntregues:"m", enviadoPintura:"m"},
+  /* Período dos velocímetros de meta. Vazio = mês corrente. */
+  dashMetaFiltro:{ano:"",mes:"",dIni:"",dFim:""},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""},
   fatorConversaoFiltro:{tipo:"",produto:""},
   notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
@@ -1273,39 +1277,103 @@ async function removeMotivoPerda(idx){
 
 function updateMateriaisFiltro(key, val){ STATE.materiaisFiltro[key]=val; renderScreen(); }
 function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""}; renderScreen(); }
-/* Opções de ordenação da tela de Matéria-Prima — cada uma é [rótulo, função de comparação]. */
+/* Acessores de ordenação por coluna da tela de Matéria-Prima. A chave é a mesma
+   usada em `columns`, o que permite ordenar clicando no cabeçalho e pelo seletor
+   "Ordenar por" usando um único estado (materiaisFiltro.ordenarPor = "chave_dir"). */
+const MATERIAL_SORT_ACCESSORS = {
+  atencao:        (m,ctx)=> m.atencao?1:0,
+  tipo:           (m,ctx)=> (m.tipo||"").toLowerCase(),
+  nome:           (m,ctx)=> (m.nome||"").toLowerCase(),
+  cor:            (m,ctx)=> m.cor==="S"?1:0,
+  estoqueInicial: (m,ctx)=> Number(m.estoqueInicial||0),
+  entradas:       (m,ctx)=> ctx.mov[m.id] ? ctx.mov[m.id].entradas : 0,
+  saidas:         (m,ctx)=> ctx.mov[m.id] ? ctx.mov[m.id].saidas : 0,
+  estoque:        (m,ctx)=> Number(m.estoque||0),
+  preProducao:    (m,ctx)=> Number(ctx.pre[m.id]||0),
+  estoqueMinimo:  (m,ctx)=> Number(m.estoqueMinimo||0),
+  loteMinimo:     (m,ctx)=> Number(m.loteMinimo||0),
+  fator:          (m,ctx)=> Number(m.fator||1),
+  valorUnitario:  (m,ctx)=> Number(m.valorUnitario||0),
+  valorEstoque:   (m,ctx)=> Number(m.estoque||0)*Number(m.valorUnitario||0),
+  dataCadastro:   (m,ctx)=> m.dataCadastro||"",
+};
+/* Opções do seletor "Ordenar por" — mesmo formato "chave_dir" dos cliques no cabeçalho. */
 const MATERIAL_ORDENACAO_OPCOES = [
   {value:"", label:"Padrão"},
   {value:"nome_asc", label:"Material (A-Z)"},
   {value:"nome_desc", label:"Material (Z-A)"},
   {value:"tipo_asc", label:"Tipo (A-Z)"},
+  {value:"saidas_desc", label:"Saídas (maior → menor)"},
+  {value:"entradas_desc", label:"Entradas (maior → menor)"},
   {value:"estoque_desc", label:"Saldo Atual (maior → menor)"},
   {value:"estoque_asc", label:"Saldo Atual (menor → maior)"},
   {value:"valorEstoque_desc", label:"Valor em Estoque (maior → menor)"},
   {value:"valorEstoque_asc", label:"Valor em Estoque (menor → maior)"},
-  {value:"cadastro_desc", label:"Cadastrado em (mais recente)"},
-  {value:"cadastro_asc", label:"Cadastrado em (mais antigo)"},
+  {value:"dataCadastro_desc", label:"Cadastrado em (mais recente)"},
+  {value:"dataCadastro_asc", label:"Cadastrado em (mais antigo)"},
 ];
+/* Separa "chave_dir" em {chave, dir}. A chave pode conter "_", então corta no último. */
+function parseOrdenacao(ordenarPor){
+  if(!ordenarPor) return null;
+  const i = ordenarPor.lastIndexOf("_");
+  if(i<=0) return null;
+  const chave = ordenarPor.slice(0,i), dir = ordenarPor.slice(i+1);
+  if(!MATERIAL_SORT_ACCESSORS[chave] || (dir!=="asc" && dir!=="desc")) return null;
+  return {chave:chave, dir:dir};
+}
 function ordenarMateriais(items, ordenarPor){
-  if(!ordenarPor) return items;
-  const arr = items.slice();
+  const ord = parseOrdenacao(ordenarPor);
+  if(!ord) return items;
+  const acessor = MATERIAL_SORT_ACCESSORS[ord.chave];
+  /* Contexto calculado UMA vez: preProducaoTotals() varre todos os pedidos, e
+     chamá-lo dentro do comparador o executaria a cada comparação. */
+  const ctx = {mov: movTotaisMap(), pre: preProducaoTotals()};
+  const sinal = ord.dir==="desc" ? -1 : 1;
   const porNome = (a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR", {sensitivity:"base"});
-  const valorEstoqueDe = (m)=> Number(m.estoque||0)*Number(m.valorUnitario||0);
-  const cmpMap = {
-    nome_asc: porNome,
-    nome_desc: (a,b)=> porNome(b,a),
-    tipo_asc: (a,b)=> (a.tipo||"").localeCompare(b.tipo||"", "pt-BR", {sensitivity:"base"}) || porNome(a,b),
-    estoque_desc: (a,b)=> Number(b.estoque||0)-Number(a.estoque||0) || porNome(a,b),
-    estoque_asc: (a,b)=> Number(a.estoque||0)-Number(b.estoque||0) || porNome(a,b),
-    valorEstoque_desc: (a,b)=> valorEstoqueDe(b)-valorEstoqueDe(a) || porNome(a,b),
-    valorEstoque_asc: (a,b)=> valorEstoqueDe(a)-valorEstoqueDe(b) || porNome(a,b),
-    cadastro_desc: (a,b)=> (b.dataCadastro||"").localeCompare(a.dataCadastro||"") || porNome(a,b),
-    cadastro_asc: (a,b)=> (a.dataCadastro||"").localeCompare(b.dataCadastro||"") || porNome(a,b),
+  /* Decora-ordena-desdecora: calcula a chave de cada item uma vez só. */
+  return items
+    .map((m,i)=>({m:m, k:acessor(m,ctx), i:i}))
+    .sort(function(a,b){
+      let c;
+      if(typeof a.k === "string" || typeof b.k === "string"){
+        c = String(a.k).localeCompare(String(b.k), "pt-BR", {sensitivity:"base"});
+      } else {
+        c = (Number(a.k)||0) - (Number(b.k)||0);
+      }
+      if(c) return sinal*c;
+      return porNome(a.m, b.m) || (a.i - b.i);   // empate: nome, depois ordem original
+    })
+    .map(x=>x.m);
+}
+/* Abas por Tipo na tela de Matéria-Prima. Escrevem no mesmo estado do filtro
+   `tipo`, então a filtragem, os totais do topo e as exportações continuam
+   funcionando exatamente como antes — a aba é só outra forma de acionar o filtro. */
+function materialTipoTabsHtml(){
+  const f = STATE.materiaisFiltro;
+  const tipos = uniqueMaterialTipos();
+  const contarTipo = (t)=> STATE.materiais.filter(m=>!t || m.tipo===t).length;
+  const aba = (valor, rotulo)=>{
+    const ativa = (f.tipo||"") === valor;
+    return '<button type="button" onclick="updateMateriaisFiltro(\'tipo\', \''+escapeAttr(valor)+'\')" '+
+      'style="border:none;background:transparent;cursor:pointer;padding:8px 14px;font-size:12.5px;'+
+      'font-weight:'+(ativa?"700":"500")+';color:'+(ativa?COLORS.brand:COLORS.textMuted)+';'+
+      'border-bottom:2px solid '+(ativa?COLORS.brand:"transparent")+';white-space:nowrap;margin-bottom:-1px">'+
+      escapeHtml(rotulo)+' <span style="font-size:10.5px;opacity:.75">('+contarTipo(valor)+')</span></button>';
   };
-  const cmp = cmpMap[ordenarPor];
-  if(!cmp) return items;
-  arr.sort(cmp);
-  return arr;
+  return '<div class="pcp-card no-print" style="padding:0 6px;margin-bottom:14px;overflow-x:auto">'+
+    '<div style="display:flex;gap:2px;border-bottom:1px solid var(--steel-border);min-width:min-content">'+
+      aba("", "Todos") + tipos.map(t=>aba(t, t)).join("")+
+    '</div>'+
+  '</div>';
+}
+/* Clique no cabeçalho: crescente → decrescente → sem ordenação. */
+function toggleMaterialSort(chave){
+  if(!MATERIAL_SORT_ACCESSORS[chave]) return;
+  const atual = STATE.materiaisFiltro.ordenarPor;
+  STATE.materiaisFiltro.ordenarPor =
+    atual === chave+"_asc"  ? chave+"_desc" :
+    atual === chave+"_desc" ? "" : chave+"_asc";
+  renderScreen();
 }
 /* ---- exportação: Matéria-Prima (respeita os filtros da tela) ---- */
 function materiaisExportDados(){
@@ -2391,9 +2459,6 @@ const ENTITY_CONFIGS = {
       const anoAtual = String(new Date().getFullYear());
       const anos = Array.from(new Set(STATE.materiais.map(m=>m.dataCadastro?m.dataCadastro.slice(0,4):null).filter(Boolean).concat([anoAtual]))).sort();
       return '<div class="pcp-card filter-bar no-print">'+
-        '<div style="min-width:160px"><label class="field-label">Tipo</label><select class="field-select" onchange="updateMateriaisFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
-          uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
-          '</select></div>'+
         '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" list="materiais-produto-datalist" value="'+escapeAttr(f.produto)+'" placeholder="Buscar e selecionar produto…" onchange="updateMateriaisFiltro(\'produto\', this.value)"/>'+
           '<datalist id="materiais-produto-datalist">'+Array.from(new Set(STATE.materiais.map(m=>m.nome))).sort().map(n=>'<option value="'+escapeAttr(n)+'">').join("")+'</datalist>'+
         '</div>'+
@@ -2422,11 +2487,27 @@ const ENTITY_CONFIGS = {
         statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
         statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted, divergentes?"openDiagnosticoDivergenciasModal()":null)+
         statCardHtml("Reservado em Pré-produção", fmtNum(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
-      '</div>';
+      '</div>'+
+      materialTipoTabsHtml();
+    },
+    /* Cabeçalho clicável: ordena pela coluna, alternando asc → desc → padrão.
+       Compartilha o estado com o seletor "Ordenar por", então os dois nunca
+       divergem. Colunas sem acessor de ordenação ficam como texto simples. */
+    headerCell: (c)=>{
+      if(!MATERIAL_SORT_ACCESSORS[c.key]) return '<th>'+c.label+'</th>';
+      const ord = parseOrdenacao(STATE.materiaisFiltro.ordenarPor);
+      const ativa = ord && ord.chave===c.key;
+      const seta = ativa ? (ord.dir==="asc" ? "▲" : "▼") : "";
+      const tip = ativa
+        ? (ord.dir==="asc" ? "Ordenado crescente — clique para inverter" : "Ordenado decrescente — clique para remover a ordenação")
+        : "Clique para ordenar por "+c.label;
+      return '<th style="cursor:pointer;user-select:none;'+(ativa?"color:"+COLORS.brand+";":"")+'" '+
+        'title="'+escapeAttr(tip)+'" onclick="toggleMaterialSort(\''+c.key+'\')">'+
+        escapeHtml(c.label)+(seta?' <span style="font-size:9px">'+seta+'</span>':'<span style="font-size:9px;opacity:.28"> ⇅</span>')+
+      '</th>';
     },
     columns: [
-      {key:"atencao", label:"Atenção", render:(it)=>'<button type="button" class="icon-btn'+(it.atencao?" atencao-on":"")+'" title="'+(it.atencao?"Remover destaque de atenção":"Marcar como produto de atenção")+'" onclick="toggleMaterialAtencao(\''+it.id+'\')">'+icon("star",14)+'</button>'},
-      {key:"tipo", label:"Tipo"},
+      {key:"atencao", label:"Atenção", render:(it)=>'<button type="button" class="icon-btn'+(it.atencao?" atencao-on":"")+'" title="'+(it.atencao?"Remover destaque de atenção":"Marcar como produto de atenção")+'" onclick="toggleMaterialAtencao(\''+it.id+'\')">'+icon("star",14)+'</button>'},      {key:"tipo", label:"Tipo"},
       {key:"nome", label:"Material", render:(it)=> it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome)},
       {key:"cor", label:"É Cor?", render:(it)=> it.cor==="S" ? "Sim" : "Não"},
       {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>{
@@ -2781,7 +2862,7 @@ function renderGenericScreen(type){
     return '<tr>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
   }).join("");
   const table = items.length===0 ? emptyStateHtml() :
-    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=>'<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:110px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=> cfg.headerCell ? cfg.headerCell(c) : '<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:110px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
   const extra = cfg.extraTop ? cfg.extraTop(items) : "";
   const filterBar = cfg.filterBar ? cfg.filterBar() : "";
   const printHeader = cfg.printable ? '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de '+cfg.title+' — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>' : "";
@@ -4131,6 +4212,214 @@ function renderMovimentacaoScreen(){
 /* ============================== DASHBOARD ============================== */
 function updateDashFiltro(key, val){ STATE.dashFiltro[key]=val; renderScreen(); }
 function clearDashFiltro(){ STATE.dashFiltro = {ano:"",mes:"",dia:"",dIni:"",dFim:""}; renderScreen(); }
+function updateDashUnidade(key, val){ STATE.dashUnidades[key]=val; renderScreen(); }
+function updateDashMetaFiltro(key, val){ STATE.dashMetaFiltro[key]=val; renderScreen(); }
+function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:"",mes:"",dIni:"",dFim:""}; renderScreen(); }
+/* Resolve o período dos velocímetros a partir do filtro.
+   Prioridade: intervalo entre datas > mês+ano > ano inteiro > mês corrente. */
+function dashMetaPeriodo(){
+  const f = STATE.dashMetaFiltro;
+  const hoje = new Date();
+  const pad = n=>pad2(n);
+  if(f.dIni && f.dFim){
+    const ini = f.dIni <= f.dFim ? f.dIni : f.dFim;
+    const fim = f.dIni <= f.dFim ? f.dFim : f.dIni;
+    return {ini:ini, fim:fim, label:fmtDateBR(ini)+" a "+fmtDateBR(fim)};
+  }
+  if(f.dIni && !f.dFim) return {ini:f.dIni, fim:toISO(hoje), label:"De "+fmtDateBR(f.dIni)+" até hoje"};
+  if(f.dFim && !f.dIni) return {ini:f.dFim.slice(0,4)+"-01-01", fim:f.dFim, label:"Até "+fmtDateBR(f.dFim)};
+  const ano = f.ano || String(hoje.getFullYear());
+  if(f.mes){
+    const ultimo = new Date(Number(ano), Number(f.mes), 0).getDate();
+    return {ini:ano+"-"+f.mes+"-01", fim:ano+"-"+f.mes+"-"+pad(ultimo), label:MESES[Number(f.mes)-1]+" de "+ano};
+  }
+  if(f.ano) return {ini:ano+"-01-01", fim:ano+"-12-31", label:"Ano de "+ano};
+  const m = pad(hoje.getMonth()+1);
+  const ultimo = new Date(hoje.getFullYear(), hoje.getMonth()+1, 0).getDate();
+  return {ini:ano+"-"+m+"-01", fim:ano+"-"+m+"-"+pad(ultimo), label:MESES[hoje.getMonth()]+" de "+ano};
+}
+/* Produção real de uma etapa dentro de um intervalo de datas. */
+function producaoNoPeriodo(stage, ini, fim){
+  let total = 0, pedidos = 0;
+  STATE.pedidos.forEach(function(p){
+    if(!p.dataProg || p.dataProg < ini || p.dataProg > fim) return;
+    if(stage==="colagem" && !p.temColagem) return;
+    if(!stageConcluido(p, stage)) return;
+    const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
+    total += Number(p.metragem||0)*fator;
+    pedidos += 1;
+  });
+  return {total: Math.round(total*100)/100, pedidos: pedidos};
+}
+/* Meta acumulada do período. Dias no futuro não entram: comparar o realizado de
+   meio de mês contra a meta do mês inteiro daria sempre a impressão de atraso.
+   Retorna também se houve corte, para avisar na tela. */
+function metaNoPeriodo(stage, ini, fim){
+  const hojeStr = todayStr();
+  const limite = fim > hojeStr ? hojeStr : fim;
+  const cortado = fim > hojeStr;
+  let total = 0, diasUteis = 0;
+  if(limite < ini) return {total:0, diasUteis:0, cortado:cortado, limite:limite};
+  const [ya,ma,da] = ini.split("-").map(Number);
+  const cursor = new Date(ya, ma-1, da);
+  let guard = 0;
+  while(toISO(cursor) <= limite && guard++ < 800){
+    const m = metaDoDia(stage, cursor.getFullYear(), cursor.getMonth()+1, cursor.getDate());
+    if(m > 0){ total += m; diasUteis++; }
+    cursor.setDate(cursor.getDate()+1);
+  }
+  return {total: Math.round(total*100)/100, diasUteis: diasUteis, cortado: cortado, limite: limite};
+}
+
+/* ---- Velocímetro (gauge) meia-lua: realizado x meta ----
+   Arco de 180° dividido em faixas de desempenho (vermelho → amarelo → verde) e um
+   ponteiro na posição do realizado. A escala vai até 125% da meta, para que dar
+   exatamente a meta caia visivelmente dentro do verde e ainda sobre espaço acima. */
+/* Inteiro com separador de milhar, sem casas decimais — dentro do velocímetro o
+   que importa é a leitura rápida, e ",86" só rouba espaço. */
+function fmtInt(n){ return Math.round(Number(n)||0).toLocaleString("pt-BR", {maximumFractionDigits:0}); }
+function gaugeChartHtml(valor, meta, unidadeTxt){
+  const W = 260, H = 158, cx = 130, cy = 132, rOut = 108, rIn = 76;
+  /* Cores sólidas e saturadas — o velocímetro precisa ser lido de longe, no chão de fábrica. */
+  const G_VERMELHO = "#E4342A", G_AMARELO = "#F5A623", G_VERDE = "#1FA85B";
+  const temMeta = Number(meta) > 0;
+  const escala = temMeta ? Number(meta)*1.25 : Math.max(Number(valor)||0, 1);
+  const frac = Math.max(0, Math.min(1, (Number(valor)||0)/escala));
+  const pol = (r, t)=>{ const a=Math.PI*(1-t); return [cx+r*Math.cos(a), cy-r*Math.sin(a)]; };
+  /* Setor do anel entre duas frações da escala. O gauge inteiro é meia-lua (180°),
+     então nenhum setor pode passar de 180° — large-arc-flag é sempre 0. */
+  const setor = (t0, t1, cor)=>{
+    const [x0o,y0o]=pol(rOut,t0), [x1o,y1o]=pol(rOut,t1);
+    const [x1i,y1i]=pol(rIn,t1),  [x0i,y0i]=pol(rIn,t0);
+    return '<path d="M '+x0o.toFixed(1)+' '+y0o.toFixed(1)+
+      ' A '+rOut+' '+rOut+' 0 0 1 '+x1o.toFixed(1)+' '+y1o.toFixed(1)+
+      ' L '+x1i.toFixed(1)+' '+y1i.toFixed(1)+
+      ' A '+rIn+' '+rIn+' 0 0 0 '+x0i.toFixed(1)+' '+y0i.toFixed(1)+
+      ' Z" fill="'+cor+'"/>';
+  };
+  let faixas;
+  if(temMeta){
+    /* 0–70% da meta vermelho, 70–100% amarelo, 100%+ verde. Convertido para
+       frações da escala (que é 1,25x a meta). */
+    faixas = setor(0, 0.70/1.25, G_VERMELHO) +
+             setor(0.70/1.25, 1/1.25, G_AMARELO) +
+             setor(1/1.25, 1, G_VERDE);
+  } else {
+    faixas = setor(0, 1, COLORS.steelBorder+"66");
+  }
+  /* Marca da meta (100%) */
+  const metaTick = temMeta ? (function(){
+    const t = 1/1.25;
+    const [xa,ya] = pol(rIn-4, t), [xb,yb] = pol(rOut+4, t);
+    return '<line x1="'+xa.toFixed(1)+'" y1="'+ya.toFixed(1)+'" x2="'+xb.toFixed(1)+'" y2="'+yb.toFixed(1)+'" stroke="'+COLORS.text+'" stroke-width="3" stroke-linecap="round"/>';
+  })() : '';
+  const [px,py] = pol(rOut-14, frac);
+  const atingiu = temMeta && Number(valor) >= Number(meta);
+  const corValor = !temMeta ? COLORS.textMuted : (atingiu ? G_VERDE : (Number(valor) >= Number(meta)*0.7 ? G_AMARELO : G_VERMELHO));
+  const pct = temMeta ? Math.round((Number(valor)/Number(meta))*100) : null;
+  /* Sem meta não há escala com significado — mostrar ponteiro apontando pro fim
+     daria a falsa impressão de 100%. Nesse caso só o número é exibido. */
+  const ponteiro = temMeta
+    ? '<line x1="'+cx+'" y1="'+cy+'" x2="'+px.toFixed(1)+'" y2="'+py.toFixed(1)+'" stroke="'+COLORS.text+'" stroke-width="4" stroke-linecap="round"/>'+
+      '<circle cx="'+cx+'" cy="'+cy+'" r="7" fill="'+COLORS.text+'"/>'
+    : '';
+  const escalaLabels = temMeta
+    ? '<text x="14" y="'+(cy+16)+'" font-size="11" fill="'+COLORS.textMuted+'">0</text>'+
+      '<text x="'+(W-14)+'" y="'+(cy+16)+'" text-anchor="end" font-size="11" fill="'+COLORS.textMuted+'">'+fmtInt(escala)+'</text>'
+    : '';
+  /* Ajusta o corpo do número para caber no furo do anel. O furo estreita conforme
+     o texto sobe, então a largura disponível depende do próprio tamanho da fonte —
+     por isso testa de cima pra baixo até encontrar o maior que ainda cabe.
+     Sem isso, valores altos (16.225, 50.000, 1.234.567) invadem as faixas coloridas. */
+  const valorTxt = fmtInt(valor);
+  let fsValor = 26;
+  for(let fs=26; fs>=13; fs--){
+    const topo = 30 + 0.70*fs;
+    const meia = topo < rIn ? Math.sqrt(rIn*rIn - topo*topo) : 0;
+    if(valorTxt.length*0.60*fs <= 2*meia - 10){ fsValor = fs; break; }
+    fsValor = fs;
+  }
+  return '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;max-width:280px;display:block;margin:0 auto" role="img">'+
+      faixas + metaTick + ponteiro +
+      '<text x="'+cx+'" y="'+(cy-30)+'" text-anchor="middle" font-size="'+fsValor+'" font-weight="700" fill="'+corValor+'" font-family="IBM Plex Mono, monospace">'+valorTxt+'</text>'+
+      '<text x="'+cx+'" y="'+(cy-13)+'" text-anchor="middle" font-size="12" fill="'+COLORS.textMuted+'">'+escapeHtml(unidadeTxt)+'</text>'+
+      escalaLabels+
+    '</svg>'+
+    '<div style="text-align:center;margin-top:6px;font-size:12.5px;line-height:1.5">'+
+      (temMeta
+        ? '<span style="color:'+COLORS.textMuted+'">Meta do período: </span><strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtInt(meta)+' m</strong>'+
+          ' <span style="color:'+corValor+';font-weight:700">('+pct+'%)</span>'+
+          '<div style="font-size:11.5px;color:'+corValor+';font-weight:600;margin-top:2px">'+
+            (atingiu ? 'Meta atingida' : 'Faltam '+fmtInt(Number(meta)-Number(valor))+' m')+'</div>'
+        : '<span style="color:'+COLORS.textMuted+'">Sem meta definida para este período</span>')+
+    '</div>';
+}
+/* Custo dos materiais consumidos por um pedido (cor sup + cor inf + EPS com fator). */
+function valorMateriaisDoPedido(p){
+  let v = 0;
+  const m = Number(p.metragem||0);
+  const unit = id=>{ const mat = STATE.materiais.find(x=>x.id===id); return mat ? Number(mat.valorUnitario||0) : 0; };
+  if(p.corSupId) v += unit(p.corSupId)*m;
+  if(p.corInfId) v += unit(p.corInfId)*m;
+  if(p.epsId){
+    const mat = STATE.materiais.find(x=>x.id===p.epsId);
+    const fator = mat ? Number(mat.fator||1) : 1;
+    v += unit(p.epsId)*m*fator;
+  }
+  return v;
+}
+/* Totais das caixas do dashboard, respeitando o filtro de período da tela.
+   Cada um traz metragem e valor; a caixa escolhe qual mostrar. */
+function dashTotais(f){
+  const r2 = v=>Math.round(v*100)/100;
+  let bobM=0, bobV=0, epsM=0, epsV=0;
+  STATE.notas.forEach(function(n){
+    if(!matchesDateFilters(n.data, f)) return;
+    (n.itens||[]).forEach(function(it){
+      const mat = STATE.materiais.find(x=>x.id===it.materialId);
+      if(!mat) return;
+      const q = Number(it.quantidade||0);
+      const v = q*Number(it.valorUnitario||mat.valorUnitario||0);
+      if(mat.tipo==="Bobina"){ bobM+=q; bobV+=v; }
+      else if(mat.tipo==="EPS"){ epsM+=q; epsV+=v; }
+    });
+  });
+  let entM=0, entV=0, entQtd=0;
+  STATE.pedidos.forEach(function(p){
+    if(p.etapaAtual!=="entregue") return;
+    /* Usa a data em que foi efetivamente entregue; se faltar, cai na programada. */
+    if(!matchesDateFilters(p.dataEntregue||p.dataProg, f)) return;
+    entM += Number(p.metragem||0); entV += valorMateriaisDoPedido(p); entQtd += 1;
+  });
+  let pintM=0, pintV=0, pintQtd=0;
+  STATE.pedidos.forEach(function(p){
+    if(!p.temPintura) return;
+    if(!stageConcluido(p, "pintura")) return;
+    if(!matchesDateFilters(p.dataProg, f)) return;
+    pintM += Number(p.metragem||0); pintV += valorMateriaisDoPedido(p); pintQtd += 1;
+  });
+  return {
+    bobinasCompradas:{m:r2(bobM), valor:r2(bobV)},
+    epsComprado:{m:r2(epsM), valor:r2(epsV)},
+    pedidosEntregues:{m:r2(entM), valor:r2(entV), qtd:entQtd},
+    enviadoPintura:{m:r2(pintM), valor:r2(pintV), qtd:pintQtd},
+  };
+}
+/* Caixa de total com alternador metro / R$. */
+function toggleStatCardHtml(key, label, dados, iconName, accent, rodape){
+  const unidade = (STATE.dashUnidades[key]==="valor") ? "valor" : "m";
+  const valorTxt = unidade==="valor" ? fmtBRL(dados.valor) : fmtNum(dados.m)+" m";
+  const btn = (val, txt)=>'<button type="button" onclick="updateDashUnidade(\''+key+'\',\''+val+'\')" '+
+    'style="flex:1;font-size:10.5px;font-weight:700;padding:3px 0;border:1px solid '+(unidade===val?accent:"var(--steel-border)")+';'+
+    'background:'+(unidade===val?accent+"1A":"transparent")+';color:'+(unidade===val?accent:COLORS.textMuted)+';'+
+    'cursor:pointer;border-radius:5px">'+txt+'</button>';
+  return '<div class="pcp-card stat-card">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between"><span class="stat-label">'+label+'</span>'+icon(iconName,15,accent)+'</div>'+
+    '<div class="stat-value" style="color:'+accent+';font-size:22px">'+valorTxt+'</div>'+
+    (rodape?'<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:-2px">'+rodape+'</div>':'')+
+    '<div class="no-print" style="display:flex;gap:5px;margin-top:8px">'+btn("m","METRO")+btn("valor","VALOR")+'</div>'+
+  '</div>';
+}
 
 function renderDashboardScreen(){
   const f = STATE.dashFiltro;
@@ -4173,8 +4462,59 @@ function renderDashboardScreen(){
 
   const totalMetragem = pedidosFiltrados.reduce((s,p)=>s+Number(p.metragem||0),0);
 
+  /* --- Velocímetros de meta por período --- */
+  const per = dashMetaPeriodo();
+  const mf = STATE.dashMetaFiltro;
+  const perfilarReal = producaoNoPeriodo("perfilar", per.ini, per.fim);
+  const colagemReal  = producaoNoPeriodo("colagem",  per.ini, per.fim);
+  const perfilarMetaInfo = metaNoPeriodo("perfilar", per.ini, per.fim);
+  const colagemMetaInfo  = metaNoPeriodo("colagem",  per.ini, per.fim);
+  const perfilarMeta = perfilarMetaInfo.total;
+  const colagemMeta  = colagemMetaInfo.total;
+  const gaugesHtml =
+    '<div class="pcp-card" style="margin-bottom:16px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:10px">'+
+        '<div><div class="preview-title" style="margin:0">Metas do Período</div>'+
+          '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:2px">'+
+            escapeHtml(per.label)+
+            (perfilarMetaInfo.cortado ? ' · <span style="color:#C98A00">meta acumulada até hoje ('+fmtDateBR(perfilarMetaInfo.limite)+')</span>' : '')+
+          '</div></div>'+
+      '</div>'+
+      '<div class="pcp-card filter-bar no-print" style="margin-bottom:14px;box-shadow:none;background:var(--panel-alt)">'+
+        '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashMetaFiltro(\'ano\', this.value)"><option value="">Atual</option>'+
+          anos.map(y=>'<option value="'+y+'" '+(mf.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
+        '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updateDashMetaFiltro(\'mes\', this.value)"><option value="">Ano inteiro</option>'+
+          MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(mf.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
+        '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+mf.dIni+'" onchange="updateDashMetaFiltro(\'dIni\', this.value)"/></div>'+
+        '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+mf.dFim+'" onchange="updateDashMetaFiltro(\'dFim\', this.value)"/></div>'+
+        '<button class="btn btn-ghost" onclick="clearDashMetaFiltro()">Limpar</button>'+
+      '</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">'+
+        '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:14px 10px">'+
+          '<div style="text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:'+COLORS.textMuted+';margin-bottom:6px">Perfilar</div>'+
+          gaugeChartHtml(perfilarReal.total, perfilarMeta, "metros produzidos")+
+          '<div style="text-align:center;font-size:11px;color:'+COLORS.textMuted+';margin-top:4px">'+perfilarReal.pedidos+' pedido(s) · '+perfilarMetaInfo.diasUteis+' dia(s) com meta</div>'+
+        '</div>'+
+        '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:14px 10px">'+
+          '<div style="text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:'+COLORS.textMuted+';margin-bottom:6px">Colagem</div>'+
+          gaugeChartHtml(colagemReal.total, colagemMeta, "metros produzidos")+
+          '<div style="text-align:center;font-size:11px;color:'+COLORS.textMuted+';margin-top:4px">'+colagemReal.pedidos+' pedido(s) · '+colagemMetaInfo.diasUteis+' dia(s) com meta</div>'+
+        '</div>'+
+      '</div>'+
+      '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">O realizado conta apenas pedidos cuja etapa já foi concluída, pela data programada. Perfilar aplica o fator por tipo de produto. A meta é a soma das metas diárias do período (feriados e dias sem meta não somam) e vem de Acompanhamento da Produção. Quando o período inclui datas futuras, a meta é acumulada só até hoje, para a comparação ser justa.</p>'+
+    '</div>';
+
+  const tot = dashTotais(f);
+
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("barChart","Dashboard","Produção por cidade, cor e tipo de EPS — considera apenas pedidos com a etapa Perfilar já concluída")+
+    screenHeaderHtml("barChart","Dashboard","Metas do período, compras, entregas e produção por cidade, cor e tipo de EPS")+
+    gaugesHtml+
+    '<div class="stat-row">'+
+      toggleStatCardHtml("bobinasCompradas","Bobinas Compradas", tot.bobinasCompradas, "package", COLORS.brand)+
+      toggleStatCardHtml("epsComprado","EPS Comprado", tot.epsComprado, "package", "#C98A00")+
+      toggleStatCardHtml("pedidosEntregues","Pedidos Entregues", tot.pedidosEntregues, "truck", COLORS.green, tot.pedidosEntregues.qtd+" pedido(s)")+
+      toggleStatCardHtml("enviadoPintura","Enviado para Pintura", tot.enviadoPintura, "dashboard", "#8B5CF6", tot.enviadoPintura.qtd+" pedido(s)")+
+    '</div>'+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Concluídos (Perfilar)", pedidosFiltrados.length, "dashboard")+
       statCardHtml("Metragem Total", fmtNum(totalMetragem)+" m", "package", COLORS.brand)+

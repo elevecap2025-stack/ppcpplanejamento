@@ -103,6 +103,10 @@ button,input,select{font-family:'Inter',sans-serif;}
 
 .field-input,.field-select{width:100%;background:var(--bg);border:1px solid var(--steel);color:var(--text);border-radius:6px;padding:9px 10px;font-size:13.5px;}
 .field-input:focus,.field-select:focus{outline:none;border-color:var(--brand);}
+/* Realce visual pra campo de filtro que está ativo (diferente do padrão) — ajuda a ver
+   de relance quais filtros estão restringindo a lista, na Prog. Perfiladeira e telas irmãs. */
+.field-input.filter-active,.field-select.filter-active{border-color:var(--brand);background:var(--brand)14;box-shadow:0 0 0 1px var(--brand)55 inset;}
+.field-label.filter-label-active{color:var(--brand);}
 /* ---- Campo de meta do dia (calendário Metas por Dia): sem as setinhas do number, que
    atrapalham o clique em campos pequenos, e seleciona tudo ao focar pra facilitar troca/limpeza. ---- */
 .meta-dia-input{-moz-appearance:textfield;text-align:center;cursor:text;}
@@ -1084,7 +1088,7 @@ const STATE = {
   permissoesUsuarios:{}, currentUserEmail:"", screenAnterior:"",
   /* Recados: avisos escritos por um admin e dirigidos a colaboradores.
      Cada recado guarda quem já marcou como lido e quando. */
-  recados:[], recadosPopupMostrado:false,
+  recados:[],
   materiaisAvulsos:[], avulsoFiltro:{op:"",materialId:"",status:"",tipo:""}, avulsoConcluidosFiltro:{op:"",materialId:"",dIni:"",dFim:""},
   avulsoStageState:{weekStart:toISO(mondayOfCurrentWeek()), dIni:toISO(mondayOfCurrentWeek()), dFim:toISO(addDays(mondayOfCurrentWeek(),5)), materialId:"", op:"", status:"", tipo:"", diasVisiveis:[true,true,true,true,true,true]},
 };
@@ -1135,13 +1139,13 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, recados] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
-    configGet("permissoes_usuarios"), configGet("recados"),
+    configGet("permissoes_usuarios"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1157,7 +1161,7 @@ async function loadAllData(){
   STATE.feriadosCustom = Array.isArray(feriadosCustom) ? feriadosCustom : [];
   STATE.feriadosRemovidos = Array.isArray(feriadosRemovidos) ? feriadosRemovidos : [];
   STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
-  STATE.recados = Array.isArray(recados) ? recados : [];
+  await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   /* Marca o consumo de cada pedido como "já aplicado": o estoque que veio do banco
@@ -2551,7 +2555,8 @@ const ENTITY_CONFIGS = {
       {key:"preProducao", label:"Pré-produção", render:(it)=>{
         const total = Number(preProducaoTotals()[it.id]||0);
         if(!total) return '<span style="color:'+COLORS.textMuted+'">—</span>';
-        return '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600;white-space:nowrap" title="Reservado em pedidos de Pré-produção — ainda não baixado do estoque">'+fmtNum(total)+'&nbsp;'+it.unidade+'</span>';
+        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;white-space:nowrap" title="Ver quais pedidos formam este total (e por que a Prog. Perfiladeira pode mostrar menos)" onclick="openPreProducaoMaterialModal(\''+it.id+'\')">'+
+          '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600;white-space:nowrap">'+fmtNum(total)+'&nbsp;'+it.unidade+'</span></button>';
       }},
       {key:"estoqueMinimo", label:"Mínimo", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.estoqueMinimo)+'&nbsp;'+it.unidade+'</span>'},
       {key:"loteMinimo", label:"Lote Mín. Compra", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.loteMinimo||0)+'&nbsp;'+it.unidade+'</span>'},
@@ -2928,6 +2933,179 @@ function preProducaoTotals(){
     Object.keys(map).forEach(id=>{ totals[id] = (totals[id]||0) + map[id]; });
   });
   return totals;
+}
+/* Detalha, pedido a pedido, de onde vem o total da coluna "Pré-produção" de um material.
+   Serve pra explicar diferenças entre esse número (que varre TODOS os pedidos do sistema,
+   sem filtro nenhum) e o que aparece nas telas de programação — que só mostram pedidos
+   de uma etapa específica, com data programada e dentro da semana escolhida. */
+function preProducaoDetalheMaterial(materialId){
+  const linhas = [];
+  STATE.pedidos.forEach(p=>{
+    if(!isPedidoPreProducao(p)) return;
+    const qtd = Number(computeConsumption(p)[materialId]||0);
+    if(!qtd) return;
+    const papeis = [];
+    if(p.corSupId===materialId) papeis.push("Cor Sup.");
+    if(p.corInfId===materialId) papeis.push("Cor Inf.");
+    if(p.epsId===materialId) papeis.push("EPS");
+    const st = STATE.statusOptions.find(s=>s.id===p.situacaoId);
+    const etapa = p.etapaAtual||"perfilar";
+    linhas.push({
+      pedidoId:p.id, op:p.op, cliente:p.cliente, dataProg:p.dataProg||"",
+      metragem:Number(p.metragem||0), qtd:qtd, papel:papeis.join(" + ")||"—",
+      etapa:etapa,
+      etapaLabel: etapa==="entregue" ? "Entregue" : ((STAGE_DEFS[etapa]||{}).short||etapa),
+      situacao: st?st.nome:"—",
+      semana: p.dataProg ? isoWeekNumber(p.dataProg) : null,
+    });
+  });
+  return linhas.sort((a,b)=>(a.dataProg||"9999").localeCompare(b.dataProg||"9999"));
+}
+/* Agrupa o detalhe de Pré-produção por semana ISO. É essa quebra que explica a diferença
+   mais comum: a Prog. Perfiladeira mostra UMA semana por vez, então a soma feita lá bate
+   só com a fatia daquela semana, nunca com o total da coluna da matéria-prima. */
+function preProducaoPorSemana(linhas){
+  const mapa = {};
+  linhas.forEach(r=>{
+    const chave = r.dataProg ? (r.dataProg.slice(0,4)+"-"+String(r.semana).padStart(2,"0")) : "sem-data";
+    if(!mapa[chave]) mapa[chave] = {chave:chave, semana:r.semana, ano:r.dataProg?r.dataProg.slice(0,4):"", qtd:0, pedidos:0, semData:!r.dataProg};
+    mapa[chave].qtd += r.qtd;
+    mapa[chave].pedidos += 1;
+  });
+  return Object.keys(mapa).sort().map(k=>mapa[k]);
+}
+/* Modal de conferência da coluna Pré-produção: lista os pedidos que formam o total,
+   quebra por semana e marca os que NÃO aparecem na Prog. Perfiladeira (outra etapa ou
+   sem data programada). Cobre as duas causas de divergência: etapa/data e recorte de semana. */
+function openPreProducaoMaterialModal(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const linhas = preProducaoDetalheMaterial(materialId);
+  const total = linhas.reduce((s,r)=>s+r.qtd,0);
+  const naPerfiladeira = linhas.filter(r=>r.etapa==="perfilar" && r.dataProg);
+  const totalPerfiladeira = naPerfiladeira.reduce((s,r)=>s+r.qtd,0);
+  const foraLinhas = linhas.filter(r=>!(r.etapa==="perfilar" && r.dataProg));
+  const totalFora = total - totalPerfiladeira;
+  const semanasDet = preProducaoPorSemana(naPerfiladeira);
+  const semanaAtual = STATE.stageState.perfilar && STATE.stageState.perfilar.dIni ? isoWeekNumber(STATE.stageState.perfilar.dIni) : null;
+
+  const rowsHtml = linhas.map(r=>{
+    const fora = !(r.etapa==="perfilar" && r.dataProg);
+    const motivo = r.etapa!=="perfilar"
+      ? "Está na etapa "+r.etapaLabel
+      : (!r.dataProg ? "Sem data programada" : "");
+    return '<tr'+(fora?' style="background:#C98A0012"':'')+'>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+(r.dataProg?fmtDateBR(r.dataProg):'<span style="color:'+COLORS.red+'">sem data</span>')+
+        (r.semana?'<div style="font-size:10px;color:'+COLORS.textMuted+'">Semana '+r.semana+'</div>':'')+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+escapeHtml(r.op||"—")+'</td>'+
+      '<td>'+escapeHtml(r.cliente||"—")+'</td>'+
+      '<td style="white-space:nowrap"><span style="font-size:11px;color:'+COLORS.textMuted+'">'+escapeHtml(r.papel)+'</span></td>'+
+      '<td style="white-space:nowrap">'+escapeHtml(r.etapaLabel)+
+        (motivo?'<div style="font-size:10px;color:#C98A00;font-weight:600">'+escapeHtml(motivo)+'</div>':'')+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:#C98A00;white-space:nowrap;text-align:right;font-weight:600">'+fmtNum(r.qtd)+' '+m.unidade+'</td>'+
+    '</tr>';
+  }).join("");
+  const table = linhas.length===0 ? emptyStateHtml("Nenhum pedido em Pré-produção consome este material.") :
+    '<div style="max-height:38vh;overflow:auto"><table class="pcp-table"><thead><tr><th>Data prog.</th><th>OP</th><th>Cliente</th><th>Papel</th><th>Etapa atual</th><th style="text-align:right">Quantidade</th></tr></thead><tbody>'+rowsHtml+'</tbody></table></div>';
+
+  /* Quebra por semana: mostra de imediato quanto cada semana representa do total, com
+     destaque na semana que está aberta agora na Prog. Perfiladeira. */
+  const semanasHtml = semanasDet.length===0 ? '' :
+    '<div style="margin-bottom:12px">'+
+      '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:600;margin-bottom:6px">Distribuição por semana (etapa Perfilar)</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        semanasDet.map(w=>{
+          const atual = semanaAtual && w.semana===semanaAtual;
+          const cor = atual ? COLORS.brand : "#C98A00";
+          return '<div style="border:1px solid '+cor+'55;background:'+cor+'12;border-radius:8px;padding:7px 11px;min-width:112px">'+
+            '<div style="font-size:10.5px;color:'+COLORS.textMuted+';font-weight:600">'+(w.semData?"Sem data":"Semana "+w.semana+(w.ano?"/"+w.ano:""))+
+              (atual?' <span style="color:'+COLORS.brand+'">• aberta</span>':'')+'</div>'+
+            '<div style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;font-size:14px;color:'+cor+';margin-top:2px">'+fmtNum(w.qtd)+' '+m.unidade+'</div>'+
+            '<div style="font-size:10px;color:'+COLORS.textMuted+'">'+w.pedidos+' pedido(s)</div>'+
+          '</div>';
+        }).join("")+
+      '</div>'+
+    '</div>';
+
+  const partes = [];
+  if(totalFora>0){
+    partes.push('<strong style="color:#C98A00">'+fmtNum(totalFora)+' '+m.unidade+' em '+foraLinhas.length+' pedido(s)</strong> não aparecem em nenhuma semana da Prog. Perfiladeira — já avançaram para outra etapa ou ainda estão sem data programada.');
+  }
+  if(semanasDet.length>1){
+    partes.push('Os '+fmtNum(totalPerfiladeira)+' '+m.unidade+' da etapa Perfilar estão espalhados por <strong>'+semanasDet.length+' semanas diferentes</strong>. Como a Prog. Perfiladeira mostra uma semana por vez, a soma daquela tela bate só com a fatia da semana aberta — nunca com o total desta coluna, que não filtra data.');
+  }
+  if(partes.length===0){
+    partes.push('Todos os pedidos em Pré-produção deste material estão na etapa Perfilar, com data programada e na mesma semana. A soma da Prog. Perfiladeira deve fechar com o total acima.');
+  }
+  const explicacao =
+    '<div style="border:1px solid #C98A0055;background:#C98A0012;border-radius:8px;padding:10px 12px;margin-bottom:12px;font-size:12.5px;line-height:1.55">'+partes.join(' ')+'</div>';
+
+  const resumo =
+    '<div class="stat-row" style="margin-bottom:12px">'+
+      statCardHtml("Total Pré-produção", fmtNum(total)+" "+m.unidade, "boxes", "#C98A00")+
+      statCardHtml("Etapa Perfilar (todas as semanas)", fmtNum(totalPerfiladeira)+" "+m.unidade, "calendar", COLORS.brand)+
+      statCardHtml("Fora da Prog. Perfiladeira", fmtNum(totalFora)+" "+m.unidade, "alert", totalFora?COLORS.red:COLORS.textMuted)+
+    '</div>';
+
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:900px">'+
+        '<div class="modal-header"><h3>Pré-produção — '+escapeHtml(m.nome)+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        resumo+
+        semanasHtml+
+        explicacao+
+        table+
+        '<div class="modal-actions" style="justify-content:space-between">'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+            '<button type="button" class="btn btn-ghost" title="Baixar planilha (.csv, abre no Excel)" onclick="exportarPreProducaoMaterialExcel(\''+materialId+'\')">'+icon("package",13)+' Excel</button>'+
+            '<button type="button" class="btn btn-ghost" title="Gerar PDF" onclick="exportarPreProducaoMaterialPdf(\''+materialId+'\')">'+icon("printer",13)+' PDF</button>'+
+          '</div>'+
+          '<button type="button" class="btn btn-primary" onclick="closeModal()">Fechar</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* Exportações da lista de Pré-produção por material — mesmas linhas mostradas no modal,
+   incluindo a coluna de semana e o motivo de o pedido não aparecer na Prog. Perfiladeira. */
+function preProducaoExportRows(materialId){
+  const linhas = preProducaoDetalheMaterial(materialId);
+  return linhas.map(r=>{
+    const motivo = r.etapa!=="perfilar" ? "Fora da Perfiladeira — etapa "+r.etapaLabel
+      : (!r.dataProg ? "Fora da Perfiladeira — sem data programada" : "Na Prog. Perfiladeira");
+    return {r:r, motivo:motivo};
+  });
+}
+function exportarPreProducaoMaterialExcel(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const rows = preProducaoExportRows(materialId);
+  if(rows.length===0){ showToast("info","Nenhum pedido em Pré-produção para exportar."); return; }
+  const head = ["Data Prog.","Semana","OP","Cliente","Papel","Etapa Atual","Situação","Metragem Pedido","Quantidade "+m.nome,"Unidade","Observação"];
+  const body = rows.map(function(x){
+    const r = x.r;
+    return [r.dataProg?fmtDateBR(r.dataProg):"Sem data", r.semana||"", r.op||"", r.cliente||"", r.papel,
+            r.etapaLabel, r.situacao, csvNum(r.metragem), csvNum(r.qtd), m.unidade, x.motivo];
+  });
+  baixarCsv("pre-producao-"+m.nome.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"")+"-"+todayStr()+".csv", head, body);
+}
+function exportarPreProducaoMaterialPdf(materialId){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return;
+  const rows = preProducaoExportRows(materialId);
+  if(rows.length===0){ showToast("info","Nenhum pedido em Pré-produção para exportar."); return; }
+  const total = rows.reduce(function(s,x){ return s+x.r.qtd; }, 0);
+  const semanas = preProducaoPorSemana(rows.filter(x=>x.r.etapa==="perfilar" && x.r.dataProg).map(x=>x.r));
+  const resumoSemanas = semanas.map(function(w){ return (w.semData?"Sem data":"Sem. "+w.semana)+": "+fmtNum(w.qtd)+" "+m.unidade; }).join(" · ");
+  const head = ["Data Prog.","Sem.","OP","Cliente","Papel","Etapa","Quantidade","Observação"];
+  const body = rows.map(function(x){
+    const r = x.r;
+    return [r.dataProg?fmtDateBR(r.dataProg):"Sem data", r.semana||"—", r.op||"—", r.cliente||"—", r.papel,
+            r.etapaLabel, fmtNum(r.qtd)+" "+m.unidade, x.motivo];
+  });
+  gerarPdfTabela("Pré-produção — "+m.nome,
+    "Gerado em "+fmtDateBR(todayStr())+" · "+rows.length+" pedido(s) · Total: "+fmtNum(total)+" "+m.unidade+(resumoSemanas?" · "+resumoSemanas:""),
+    head, body);
 }
 /* Serializa e torna IDEMPOTENTES as operações que baixam estoque a partir de pedidos.
    O problema original: adjustStock() calculava o delta comparando um "pedido antigo"
@@ -3643,6 +3821,11 @@ function shiftWeek(stage, n){
   renderScreen();
 }
 function updateProgFilter(stage, which, val){ STATE.stageState[stage][which]=val; renderScreen(); }
+/* Classe extra pra destacar (em azul) um campo de filtro que está ativo, ou seja,
+   diferente do valor padrão (vazio). Usado nos filtros da Prog. Perfiladeira e telas irmãs
+   (Pintura/Colagem/Entrega) pra deixar visualmente claro o que está restringindo a lista. */
+function filterActiveClass(val){ return val ? " filter-active" : ""; }
+function filterLabelActiveClass(val){ return val ? " filter-label-active" : ""; }
 function clearProgFiltro(stage){
   const s = STATE.stageState[stage];
   s.maquinaId=""; s.cidadeId=""; s.corSupId=""; s.corInfId=""; s.material=""; s.epsId=""; s.motoristaId=""; s.op="";
@@ -3786,6 +3969,11 @@ function renderStageScreen(stage){
   const year = dIni ? dIni.slice(0,4) : "";
   const metragemTotalPeriodo = ativos.reduce((s2,p)=>s2+Number(p.metragem||0),0);
   const mediaPorDia = metragemTotalPeriodo / 6;
+  /* Separa o total do período (já filtrado pelos filtros da tela) entre o que é
+     produção efetiva e o que ainda está em Pré-produção (previsto) — pedido do usuário:
+     duas caixas visíveis mostrando essa quebra, sempre respeitando os filtros ativos. */
+  const producaoQtdPeriodo = ativos.reduce((s2,p)=>s2+(isPedidoPreProducao(p)?0:Number(p.metragem||0)),0);
+  const preProducaoQtdPeriodo = ativos.reduce((s2,p)=>s2+(isPedidoPreProducao(p)?Number(p.metragem||0):0),0);
   const visibleCols = PEDIDO_COLUMNS.filter(c=>{
     if(c.key==="motorista" && stage!=="entrega") return false;
     return s.colunasVisiveis[c.key];
@@ -3830,7 +4018,7 @@ function renderStageScreen(stage){
     '</div>';
 
   const motoristaFiltroHtml = stage==="entrega"
-    ? '<div style="min-width:190px"><label class="field-label">Motorista</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'motoristaId\', this.value)"><option value="">Todos</option>'+
+    ? '<div style="min-width:190px"><label class="field-label'+filterLabelActiveClass(s.motoristaId)+'">Motorista</label><select class="field-select'+filterActiveClass(s.motoristaId)+'" onchange="updateProgFilter(\''+stage+'\',\'motoristaId\', this.value)"><option value="">Todos</option>'+
         STATE.motoristas.map(m=>'<option value="'+m.id+'" '+(s.motoristaId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'
     : '';
@@ -3850,6 +4038,8 @@ function renderStageScreen(stage){
       '<div class="stat-row">'+
         statCardHtml("Pedidos no Período", ativos.length, "dashboard")+
         statCardHtml("Metragem Total", fmtNum(metragemTotalPeriodo)+" m", "package", COLORS.brand)+
+        statCardHtml("Produção", fmtNum(producaoQtdPeriodo)+" m", "boxes", COLORS.green)+
+        statCardHtml("Pré-produção", fmtNum(preProducaoQtdPeriodo)+" m", "activity", preProducaoQtdPeriodo?"#C98A00":COLORS.textMuted)+
         statCardHtml("Média por Dia Útil", fmtNum(mediaPorDia)+" m", "calendar", COLORS.green)+
       '</div>'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px">'+
@@ -3861,24 +4051,24 @@ function renderStageScreen(stage){
     '<div class="pcp-card filter-bar no-print">'+
       '<div style="min-width:160px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+dIni+'" onchange="updateProgFilter(\''+stage+'\',\'dIni\', this.value)"/></div>'+
       '<div style="min-width:160px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+dFim+'" onchange="updateProgFilter(\''+stage+'\',\'dFim\', this.value)"/></div>'+
-      '<div style="min-width:190px"><label class="field-label">Máquina</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'maquinaId\', this.value)"><option value="">Todas as máquinas</option>'+
+      '<div style="min-width:190px"><label class="field-label'+filterLabelActiveClass(s.maquinaId)+'">Máquina</label><select class="field-select'+filterActiveClass(s.maquinaId)+'" onchange="updateProgFilter(\''+stage+'\',\'maquinaId\', this.value)"><option value="">Todas as máquinas</option>'+
         STATE.equipamentos.map(e=>'<option value="'+e.id+'" '+(s.maquinaId===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:170px"><label class="field-label">Cidade</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'cidadeId\', this.value)"><option value="">Todas</option>'+
+      '<div style="min-width:170px"><label class="field-label'+filterLabelActiveClass(s.cidadeId)+'">Cidade</label><select class="field-select'+filterActiveClass(s.cidadeId)+'" onchange="updateProgFilter(\''+stage+'\',\'cidadeId\', this.value)"><option value="">Todas</option>'+
         STATE.cidades.map(c=>'<option value="'+c.id+'" '+(s.cidadeId===c.id?"selected":"")+'>'+escapeHtml(c.nome)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">Cor Sup.</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'corSupId\', this.value)"><option value="">Todas</option>'+
+      '<div style="min-width:150px"><label class="field-label'+filterLabelActiveClass(s.corSupId)+'">Cor Sup.</label><select class="field-select'+filterActiveClass(s.corSupId)+'" onchange="updateProgFilter(\''+stage+'\',\'corSupId\', this.value)"><option value="">Todas</option>'+
         bobinas.map(m=>'<option value="'+m.id+'" '+(s.corSupId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">Cor Inf.</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'corInfId\', this.value)"><option value="">Todas</option>'+
+      '<div style="min-width:150px"><label class="field-label'+filterLabelActiveClass(s.corInfId)+'">Cor Inf.</label><select class="field-select'+filterActiveClass(s.corInfId)+'" onchange="updateProgFilter(\''+stage+'\',\'corInfId\', this.value)"><option value="">Todas</option>'+
         bobinas.map(m=>'<option value="'+m.id+'" '+(s.corInfId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">EPS</label><select class="field-select" onchange="updateProgFilter(\''+stage+'\',\'epsId\', this.value)"><option value="">Todos</option>'+
+      '<div style="min-width:150px"><label class="field-label'+filterLabelActiveClass(s.epsId)+'">EPS</label><select class="field-select'+filterActiveClass(s.epsId)+'" onchange="updateProgFilter(\''+stage+'\',\'epsId\', this.value)"><option value="">Todos</option>'+
         epsMats.map(m=>'<option value="'+m.id+'" '+(s.epsId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
       motoristaFiltroHtml+
-      '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateProgFilter(\''+stage+'\',\'op\', this.value)"/></div>'+
-      '<div style="min-width:160px"><label class="field-label">Material</label><input class="field-input" value="'+escapeAttr(s.material)+'" placeholder="Buscar material…" onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
+      '<div style="width:120px"><label class="field-label'+filterLabelActiveClass(s.op)+'">OP</label><input class="field-input'+filterActiveClass(s.op)+'" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateProgFilter(\''+stage+'\',\'op\', this.value)"/></div>'+
+      '<div style="min-width:160px"><label class="field-label'+filterLabelActiveClass(s.material)+'">Material</label><input class="field-input'+filterActiveClass(s.material)+'" value="'+escapeAttr(s.material)+'" placeholder="Buscar material…" onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
       '<div style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-'+stage+'" value="'+weekNum+'"/></div>'+
       '<div style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-'+stage+'" value="'+year+'"/></div>'+
       '<button class="btn" onclick="jumpToWeek(\''+stage+'\', document.getElementById(\'input-semana-'+stage+'\').value, document.getElementById(\'input-ano-'+stage+'\').value)">Ir</button>'+
@@ -6074,6 +6264,9 @@ function recadoEhPara(r, email){
   if(!r || r.ativo===false) return false;
   const e = (email||"").trim().toLowerCase();
   if(!e) return false;
+  /* Quem escreveu não é destinatário do próprio aviso — senão um recado para
+     "todos" bloquearia a tela de quem acabou de enviá-lo. */
+  if(String(r.autor||"").trim().toLowerCase() === e) return false;
   if(recadoDestinatarioTodos(r)) return true;
   return (r.destinatarios||[]).map(x=>String(x).toLowerCase()).indexOf(e)!==-1;
 }
@@ -6089,52 +6282,120 @@ function recadosDoUsuario(email){
 function recadosNaoLidos(email){
   return recadosDoUsuario(email).filter(r=>!recadoLidoPor(r, email));
 }
-/* Escrita segura: relê os recados do banco antes de gravar, para não sobrescrever
-   uma confirmação de leitura feita por outro usuário entre a carga e o salvamento. */
-async function salvarRecados(mutador){
-  const atuais = await configGet("recados");
-  const lista = Array.isArray(atuais) ? atuais : [];
-  const nova = mutador(lista);
-  const ok = await configSet("recados", nova);
-  if(!ok) return false;
-  STATE.recados = nova;
-  return true;
+/* Os recados moram em tabelas próprias (recados + recado_leituras), e não mais
+   dentro de um JSON em app_config. Isso é o que permite ao banco aplicar as
+   regras por autor via RLS e entregar o recado na hora via Realtime — com tudo
+   num JSON só, o Postgres enxergava uma linha e não distinguia um recado do outro.
+   As leituras são recompostas no formato {email: dataISO} para o resto da tela
+   continuar funcionando sem alteração. */
+function mapRecadoFromRow(r, leiturasPorRecado){
+  return {
+    id:r.id, titulo:r.titulo||"", mensagem:r.mensagem||"", autor:(r.autor||"").toLowerCase(),
+    destinatarios: Array.isArray(r.destinatarios) ? r.destinatarios.map(e=>String(e).toLowerCase()) : [],
+    ativo: r.ativo!==false, criadoEm: r.criado_em || r.criadoEm || "",
+    leituras: (leiturasPorRecado && leiturasPorRecado[r.id]) || {},
+  };
+}
+async function carregarRecados(){
+  const [recadosR, leiturasR] = await Promise.all([
+    sb.from("recados").select("*").order("criado_em", {ascending:false}),
+    sb.from("recado_leituras").select("*"),
+  ]);
+  if(recadosR.error){
+    /* Tabela ainda não criada (SQL não rodado): segue sem recados em vez de
+       derrubar o carregamento inteiro do sistema. */
+    STATE.recados = [];
+    return;
+  }
+  const porRecado = {};
+  (leiturasR.data||[]).forEach(function(l){
+    if(!porRecado[l.recado_id]) porRecado[l.recado_id] = {};
+    porRecado[l.recado_id][String(l.email).toLowerCase()] = l.lido_em;
+  });
+  STATE.recados = (recadosR.data||[]).map(r=>mapRecadoFromRow(r, porRecado));
 }
 async function marcarRecadoLido(id){
-  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const email = emailAtualNormalizado();
   if(!email) return;
-  const ok = await salvarRecados(function(lista){
-    return lista.map(function(r){
-      if(r.id!==id) return r;
-      const leituras = Object.assign({}, r.leituras||{});
-      if(!leituras[email]) leituras[email] = new Date().toISOString();
-      return Object.assign({}, r, {leituras: leituras});
-    });
-  });
-  if(!ok) return;
+  /* ON CONFLICT DO NOTHING: reconfirmar não sobrescreve a data original, e não
+     exige permissão de UPDATE — que o destinatário propositalmente não tem. */
+  const { error } = await sb.from("recado_leituras")
+    .upsert({recado_id:id, email:email, lido_em:new Date().toISOString()},
+            {onConflict:"recado_id,email", ignoreDuplicates:true});
+  if(error){ sbErrorToast("confirmar leitura do recado", error); return; }
+  const alvo = (STATE.recados||[]).find(r=>r.id===id);
+  if(alvo){ alvo.leituras = Object.assign({}, alvo.leituras||{}); if(!alvo.leituras[email]) alvo.leituras[email] = new Date().toISOString(); }
   renderSidebar();
   const restantes = recadosNaoLidos(email);
   if(restantes.length>0) mostrarPopupRecados();
   else { closeModal(); renderScreen(); showToast("success","Recado confirmado como lido."); }
 }
 async function marcarTodosRecadosLidos(){
-  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const email = emailAtualNormalizado();
   if(!email) return;
-  const ids = recadosNaoLidos(email).map(r=>r.id);
-  if(ids.length===0) return;
-  const ok = await salvarRecados(function(lista){
-    return lista.map(function(r){
-      if(ids.indexOf(r.id)===-1) return r;
-      const leituras = Object.assign({}, r.leituras||{});
-      if(!leituras[email]) leituras[email] = new Date().toISOString();
-      return Object.assign({}, r, {leituras: leituras});
-    });
+  const pendentes = recadosNaoLidos(email);
+  if(pendentes.length===0) return;
+  const agora = new Date().toISOString();
+  const { error } = await sb.from("recado_leituras")
+    .upsert(pendentes.map(r=>({recado_id:r.id, email:email, lido_em:agora})),
+            {onConflict:"recado_id,email", ignoreDuplicates:true});
+  if(error){ sbErrorToast("confirmar leitura dos recados", error); return; }
+  pendentes.forEach(function(r){
+    r.leituras = Object.assign({}, r.leituras||{});
+    if(!r.leituras[email]) r.leituras[email] = agora;
   });
-  if(!ok) return;
   closeModal();
   renderSidebar();
   renderScreen();
-  showToast("success", ids.length+" recado(s) confirmado(s) como lido(s).");
+  showToast("success", pendentes.length+" recado(s) confirmado(s) como lido(s).");
+}
+/* ---- Realtime: o recado abre na tela do destinatário no instante do envio ----
+   O Supabase só entrega o evento a quem a política recados_select autoriza a ler,
+   então a filtragem por destinatário acontece no servidor, não aqui. */
+let _recadosChannel = null;
+function iniciarRealtimeRecados(){
+  if(_recadosChannel) return;
+  _recadosChannel = sb.channel("recados-realtime")
+    .on("postgres_changes", {event:"INSERT", schema:"public", table:"recados"}, async function(payload){
+      const novo = mapRecadoFromRow(payload.new, {});
+      if((STATE.recados||[]).some(r=>r.id===novo.id)) return;
+      STATE.recados = [novo].concat(STATE.recados||[]);
+      renderSidebar();
+      if(STATE.screen==="recados" || STATE.screen==="gerenciarRecados") renderScreen();
+      /* Só interrompe quem é destinatário — quem enviou não é bloqueado pelo
+         próprio aviso. */
+      if(recadoEhPara(novo, emailAtualNormalizado()) && !recadoLidoPor(novo, emailAtualNormalizado())){
+        mostrarPopupRecados();
+      }
+    })
+    .on("postgres_changes", {event:"UPDATE", schema:"public", table:"recados"}, async function(payload){
+      const atual = (STATE.recados||[]).find(r=>r.id===payload.new.id);
+      const atualizado = mapRecadoFromRow(payload.new, atual ? {[payload.new.id]: atual.leituras} : {});
+      STATE.recados = (STATE.recados||[]).map(r=>r.id===atualizado.id?atualizado:r);
+      renderSidebar();
+      renderScreen();
+    })
+    .on("postgres_changes", {event:"DELETE", schema:"public", table:"recados"}, function(payload){
+      const id = payload.old && payload.old.id;
+      if(!id) return;
+      STATE.recados = (STATE.recados||[]).filter(r=>r.id!==id);
+      renderSidebar();
+      renderScreen();
+    })
+    .on("postgres_changes", {event:"INSERT", schema:"public", table:"recado_leituras"}, function(payload){
+      const l = payload.new;
+      const alvo = (STATE.recados||[]).find(r=>r.id===l.recado_id);
+      if(!alvo) return;
+      alvo.leituras = Object.assign({}, alvo.leituras||{});
+      alvo.leituras[String(l.email).toLowerCase()] = l.lido_em;
+      if(STATE.screen==="gerenciarRecados") renderScreen();
+    })
+    .subscribe();
+}
+function pararRealtimeRecados(){
+  if(!_recadosChannel) return;
+  sb.removeChannel(_recadosChannel);
+  _recadosChannel = null;
 }
 function fmtDataHora(iso){
   if(!iso) return "—";
@@ -6159,29 +6420,25 @@ function recadoCardHtml(r, opts){
     (!lido && opts.comBotao ? '<div style="margin-top:12px"><button type="button" class="btn btn-primary" onclick="marcarRecadoLido(\''+r.id+'\')">'+icon("checkCircle",14)+' Marcar como lido</button></div>' : '')+
   '</div>';
 }
-/* Pop-up de abertura: só aparece quando há recado não lido para quem está logado. */
+/* Pop-up obrigatório: aparece ao abrir o sistema E no instante em que um recado
+   chega pelo Realtime. Não tem "fechar", não tem X e não fecha clicando fora —
+   a única saída é confirmar a leitura. Por isso não existe adiarPopupRecados(). */
 function mostrarPopupRecados(){
-  const email = (STATE.currentUserEmail||"").trim().toLowerCase();
+  const email = emailAtualNormalizado();
   const pendentes = recadosNaoLidos(email);
   if(pendentes.length===0) return;
   const html =
-    '<div class="modal-overlay">'+
-      '<div class="modal-card" style="max-width:600px;max-height:85vh;display:flex;flex-direction:column">'+
-        '<div class="modal-header"><h3>'+icon("message",17)+' '+(pendentes.length===1?"Você tem um recado":"Você tem "+pendentes.length+" recados")+'</h3></div>'+
+    '<div class="modal-overlay" style="z-index:9999;background:rgba(0,0,0,.55)">'+
+      '<div class="modal-card" style="max-width:600px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid '+COLORS.brand+'">'+
+        '<div class="modal-header" style="margin-bottom:6px"><h3>'+icon("message",17)+' '+(pendentes.length===1?"Você tem um recado":"Você tem "+pendentes.length+" recados")+'</h3></div>'+
+        '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 12px;line-height:1.5">Leitura obrigatória — confirme para continuar usando o sistema.</p>'+
         '<div style="overflow-y:auto;flex:1">'+pendentes.map(r=>recadoCardHtml(r, {comBotao:true})).join("")+'</div>'+
-        '<div class="modal-actions">'+
-          (pendentes.length>1 ? '<button type="button" class="btn btn-ghost" onclick="marcarTodosRecadosLidos()">Marcar todos como lidos</button>' : '')+
-          '<button type="button" class="btn btn-ghost" onclick="adiarPopupRecados()">Ver depois</button>'+
-        '</div>'+
+        (pendentes.length>1
+          ? '<div class="modal-actions"><button type="button" class="btn btn-primary" onclick="marcarTodosRecadosLidos()">'+icon("checkCircle",14)+' Li todos e confirmo</button></div>'
+          : '')+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
-}
-/* "Ver depois" fecha sem confirmar leitura — o recado continua pendente na tela
-   Recados e volta a aparecer no próximo acesso. */
-function adiarPopupRecados(){
-  closeModal();
-  showToast("info","Os recados continuam disponíveis na tela Recados.");
 }
 function renderRecadosScreen(){
   const email = (STATE.currentUserEmail||"").trim().toLowerCase();
@@ -6274,21 +6531,30 @@ async function salvarRecado(editId){
     const alvo = (STATE.recados||[]).find(x=>x.id===editId);
     if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode editar recados enviados por você."); return; }
   }
-  const autor = emailAtualNormalizado() || "administração";
-  const ok = await salvarRecados(function(lista){
-    if(editId){
-      /* Editar mantém as leituras já registradas: quem leu não é obrigado a reler
-         uma correção de digitação. Para exigir nova leitura, crie outro recado. */
-      return lista.map(r=> r.id===editId ? Object.assign({}, r, {titulo, mensagem, destinatarios}) : r);
+  const autor = emailAtualNormalizado();
+  if(!autor){ showToast("error","Sessão sem e-mail identificado. Entre novamente."); return; }
+  const destLower = destinatarios.map(e=>String(e).toLowerCase());
+  if(editId){
+    /* Editar mantém as leituras já registradas: quem leu não é obrigado a reler
+       uma correção de digitação. Para exigir nova leitura, crie outro recado. */
+    const { error } = await sb.from("recados")
+      .update({titulo, mensagem, destinatarios:destLower}).eq("id", editId);
+    if(error){ sbErrorToast("atualizar recado", error); return; }
+    const alvo = (STATE.recados||[]).find(r=>r.id===editId);
+    if(alvo) Object.assign(alvo, {titulo, mensagem, destinatarios:destLower});
+  } else {
+    const { data, error } = await sb.from("recados")
+      .insert({titulo, mensagem, autor, destinatarios:destLower, ativo:true})
+      .select().single();
+    if(error){ sbErrorToast("publicar recado", error); return; }
+    if(data && !(STATE.recados||[]).some(r=>r.id===data.id)){
+      STATE.recados = [mapRecadoFromRow(data, {})].concat(STATE.recados||[]);
     }
-    return [{id:"rec_"+Date.now()+"_"+Math.random().toString(36).slice(2,7), titulo, mensagem,
-             destinatarios, autor, criadoEm:new Date().toISOString(), ativo:true, leituras:{}}].concat(lista);
-  });
-  if(!ok) return;
+  }
   closeModal();
   renderSidebar();
   renderScreen();
-  showToast("success", editId ? "Recado atualizado." : "Recado publicado.");
+  showToast("success", editId ? "Recado atualizado." : "Recado publicado — quem estiver com o sistema aberto recebe na hora.");
 }
 function confirmDeleteRecado(id){
   const r = (STATE.recados||[]).find(x=>x.id===id);
@@ -6307,18 +6573,19 @@ function confirmDeleteRecado(id){
 async function deleteRecado(id){
   const alvo = (STATE.recados||[]).find(x=>x.id===id);
   if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode remover recados enviados por você."); return; }
-  const ok = await salvarRecados(function(lista){ return lista.filter(r=>r.id!==id); });
-  if(!ok) return;
+  const { error } = await sb.from("recados").delete().eq("id", id);
+  if(error){ sbErrorToast("remover recado", error); return; }
+  STATE.recados = (STATE.recados||[]).filter(r=>r.id!==id);
   closeModal(); renderSidebar(); renderScreen();
   showToast("info","Recado removido.");
 }
 async function toggleRecadoAtivo(id){
   const alvo = (STATE.recados||[]).find(x=>x.id===id);
   if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode alterar recados enviados por você."); return; }
-  const ok = await salvarRecados(function(lista){
-    return lista.map(r=> r.id===id ? Object.assign({}, r, {ativo: r.ativo===false}) : r);
-  });
-  if(!ok) return;
+  const novoAtivo = alvo.ativo===false;
+  const { error } = await sb.from("recados").update({ativo:novoAtivo}).eq("id", id);
+  if(error){ sbErrorToast("alterar recado", error); return; }
+  alvo.ativo = novoAtivo;
   renderSidebar(); renderScreen();
 }
 function openLeiturasRecadoModal(id){
@@ -6883,11 +7150,9 @@ async function enterApp(userName){
   if(!telaPermitida(STATE.screen)) STATE.screen = primeiraTelaPermitida();
   renderSidebar();
   renderScreen();
-  /* Recados pendentes aparecem assim que o sistema abre, uma vez por sessão. */
-  if(!STATE.recadosPopupMostrado){
-    STATE.recadosPopupMostrado = true;
-    mostrarPopupRecados();
-  }
+  /* Recados pendentes aparecem ao abrir; o Realtime cuida dos que chegarem depois. */
+  mostrarPopupRecados();
+  iniciarRealtimeRecados();
   executarBackupAutomaticoSeNecessario();
 }
 async function handleLogin(event){
@@ -6914,6 +7179,7 @@ async function handleLogin(event){
   return false;
 }
 async function handleLogout(){
+  pararRealtimeRecados();
   await sb.auth.signOut();
   STATE.loggedIn = false;
   const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
@@ -6926,6 +7192,7 @@ async function handleLogout(){
 }
 sb.auth.onAuthStateChange((event, session)=>{
   if(event==="SIGNED_OUT" && STATE.loggedIn){
+    pararRealtimeRecados();
     STATE.loggedIn = false;
     const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
     STATE.dataLoaded = false;

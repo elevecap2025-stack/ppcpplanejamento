@@ -6204,7 +6204,23 @@ function renderRecadosScreen(){
     screenHeaderHtml("message","Recados","Avisos enviados pela administração", acoes)+
     '<div class="pcp-card">'+corpo+'</div>';
 }
-/* ---- Administração dos recados ---- */
+/* ---- Administração dos recados ----
+   Qualquer usuário pode publicar recado. O que separa um do outro é a autoria:
+   quem não é administrador só enxerga e mexe nos recados que ele mesmo enviou.
+   Administrador continua vendo tudo, para poder moderar. */
+function emailAtualNormalizado(){ return (STATE.currentUserEmail||"").trim().toLowerCase(); }
+function souAutorDoRecado(r){
+  return !!r && String(r.autor||"").trim().toLowerCase() === emailAtualNormalizado();
+}
+function podeGerenciarRecado(r){
+  return isCurrentUserAdmin() || souAutorDoRecado(r);
+}
+/* Lista que a tela "Gerenciar Recados" mostra para quem está logado. */
+function recadosGerenciaveis(){
+  const todos = (STATE.recados||[]).slice();
+  const lista = isCurrentUserAdmin() ? todos : todos.filter(souAutorDoRecado);
+  return lista.sort((a,b)=>String(b.criadoEm||"").localeCompare(String(a.criadoEm||"")));
+}
 function emailsConhecidos(){
   const set = new Set(Object.keys(STATE.permissoesUsuarios||{}));
   (STATE.recados||[]).forEach(function(r){
@@ -6215,6 +6231,7 @@ function emailsConhecidos(){
 }
 function openRecadoModal(editId){
   const r = editId ? (STATE.recados||[]).find(x=>x.id===editId) : null;
+  if(r && !podeGerenciarRecado(r)){ showToast("error","Você só pode editar recados enviados por você."); return; }
   const emails = emailsConhecidos();
   const selecionados = r ? (r.destinatarios||[]) : [];
   const paraTodos = r ? recadoDestinatarioTodos(r) : true;
@@ -6253,7 +6270,11 @@ async function salvarRecado(editId){
   const todos = document.getElementById("recado-todos").checked;
   const destinatarios = todos ? [] : Array.from(document.querySelectorAll(".recado-dest")).filter(c=>c.checked).map(c=>c.value);
   if(!todos && destinatarios.length===0){ showToast("error","Escolha ao menos um destinatário, ou marque Todos."); return; }
-  const autor = STATE.currentUserEmail || "administração";
+  if(editId){
+    const alvo = (STATE.recados||[]).find(x=>x.id===editId);
+    if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode editar recados enviados por você."); return; }
+  }
+  const autor = emailAtualNormalizado() || "administração";
   const ok = await salvarRecados(function(lista){
     if(editId){
       /* Editar mantém as leituras já registradas: quem leu não é obrigado a reler
@@ -6271,6 +6292,7 @@ async function salvarRecado(editId){
 }
 function confirmDeleteRecado(id){
   const r = (STATE.recados||[]).find(x=>x.id===id);
+  if(!podeGerenciarRecado(r)){ showToast("error","Você só pode remover recados enviados por você."); return; }
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
       '<div class="modal-card" style="max-width:380px">'+
@@ -6283,12 +6305,16 @@ function confirmDeleteRecado(id){
   document.getElementById("modal-root").innerHTML = html;
 }
 async function deleteRecado(id){
+  const alvo = (STATE.recados||[]).find(x=>x.id===id);
+  if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode remover recados enviados por você."); return; }
   const ok = await salvarRecados(function(lista){ return lista.filter(r=>r.id!==id); });
   if(!ok) return;
   closeModal(); renderSidebar(); renderScreen();
   showToast("info","Recado removido.");
 }
 async function toggleRecadoAtivo(id){
+  const alvo = (STATE.recados||[]).find(x=>x.id===id);
+  if(!podeGerenciarRecado(alvo)){ showToast("error","Você só pode alterar recados enviados por você."); return; }
   const ok = await salvarRecados(function(lista){
     return lista.map(r=> r.id===id ? Object.assign({}, r, {ativo: r.ativo===false}) : r);
   });
@@ -6298,6 +6324,7 @@ async function toggleRecadoAtivo(id){
 function openLeiturasRecadoModal(id){
   const r = (STATE.recados||[]).find(x=>x.id===id);
   if(!r) return;
+  if(!podeGerenciarRecado(r)){ showToast("error","Você só pode ver as leituras dos recados enviados por você."); return; }
   const leituras = r.leituras||{};
   const alvos = recadoDestinatarioTodos(r) ? emailsConhecidos() : (r.destinatarios||[]);
   const linhas = alvos.map(function(e){
@@ -6324,13 +6351,11 @@ function openLeiturasRecadoModal(id){
   document.getElementById("modal-root").innerHTML = html;
 }
 function renderGerenciarRecadosScreen(){
-  if(!isCurrentUserAdmin()){
-    document.getElementById("content").innerHTML =
-      screenHeaderHtml("message","Gerenciar Recados","")+
-      '<div class="pcp-card">'+emptyStateHtml("Somente administradores podem gerenciar recados.")+'</div>';
-    return;
-  }
-  const lista = (STATE.recados||[]).slice().sort((a,b)=>String(b.criadoEm||"").localeCompare(String(a.criadoEm||"")));
+  const admin = isCurrentUserAdmin();
+  const lista = recadosGerenciaveis();
+  const subtitulo = admin
+    ? "Publique avisos e acompanhe quem já deu como lido — como administrador, você vê os recados de todos"
+    : "Publique avisos e acompanhe quem já deu como lido — você vê apenas os recados enviados por você";
   const acoes = '<div class="no-print"><button class="btn btn-primary" onclick="openRecadoModal()">'+icon("plus",14)+' Novo Recado</button></div>';
   const linhas = lista.map(function(r){
     const alvos = recadoDestinatarioTodos(r) ? emailsConhecidos() : (r.destinatarios||[]);
@@ -6340,6 +6365,7 @@ function renderGerenciarRecadosScreen(){
       '<td><div style="font-weight:600">'+escapeHtml(r.titulo||"")+'</div>'+
         '<div style="font-size:11px;color:'+COLORS.textMuted+';max-width:340px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+escapeHtml(r.mensagem||"")+'</div></td>'+
       '<td style="white-space:nowrap">'+(recadoDestinatarioTodos(r)?"Todos":(r.destinatarios||[]).length+" usuário(s)")+'</td>'+
+      (admin ? '<td style="white-space:nowrap;font-size:12px">'+escapeHtml(r.autor||"—")+'</td>' : '')+
       '<td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(r.criadoEm))+'</td>'+
       '<td style="white-space:nowrap"><button type="button" class="icon-btn" style="width:auto;padding:2px 8px;font-size:11.5px" onclick="openLeiturasRecadoModal(\''+r.id+'\')" title="Ver quem já leu">'+lidos+' / '+alvos.length+' leram</button></td>'+
       '<td style="white-space:nowrap"><span style="font-size:10px;font-weight:700;color:'+(inativo?COLORS.textMuted:COLORS.green)+'">'+(inativo?"INATIVO":"ATIVO")+'</span></td>'+
@@ -6350,10 +6376,11 @@ function renderGerenciarRecadosScreen(){
       '</div></td>'+
     '</tr>';
   }).join("");
-  const tabela = lista.length===0 ? emptyStateHtml("Nenhum recado publicado ainda.") :
-    '<table class="pcp-table"><thead><tr><th>Recado</th><th>Destinatários</th><th>Publicado</th><th>Leituras</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>'+linhas+'</tbody></table>';
+  const vazio = admin ? "Nenhum recado publicado ainda." : "Você ainda não enviou nenhum recado.";
+  const tabela = lista.length===0 ? emptyStateHtml(vazio) :
+    '<table class="pcp-table"><thead><tr><th>Recado</th><th>Destinatários</th>'+(admin?'<th>Enviado por</th>':'')+'<th>Publicado</th><th>Leituras</th><th>Status</th><th class="no-print"></th></tr></thead><tbody>'+linhas+'</tbody></table>';
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("message","Gerenciar Recados","Publique avisos e acompanhe quem já deu como lido", acoes)+
+    screenHeaderHtml("message","Gerenciar Recados", subtitulo, acoes)+
     '<div class="pcp-card" style="padding:0">'+tabela+'</div>';
 }
 
@@ -6428,11 +6455,12 @@ function isSuperAdminEmail(email){
 }
 /* Telas que o admin pode ligar/desligar por usuário. O grupo "Geral" entra aqui para
    que o Dashboard seja configurável. Ficam de fora apenas as telas que se autogovernam:
-   "Permissões de Usuário" e "Gerenciar Recados" são sempre restritas a administradores,
-   e "Recados" é sempre livre — é onde o colaborador lê os avisos dirigidos a ele, então
-   bloqueá-la anularia o propósito do recado. */
-const TELAS_SEMPRE_ADMIN = ["permissoesUsuarios", "gerenciarRecados"];
-const TELAS_SEMPRE_LIVRES = ["recados"];
+   "Permissões de Usuário" é sempre restrita a administradores, enquanto "Recados" e
+   "Gerenciar Recados" são sempre livres — todo mundo pode ler os avisos dirigidos a si
+   e mandar recado para os colegas. O que limita cada um não é a permissão de tela e sim
+   o dono do recado: quem não é admin só enxerga e mexe no que ele mesmo enviou. */
+const TELAS_SEMPRE_ADMIN = ["permissoesUsuarios"];
+const TELAS_SEMPRE_LIVRES = ["recados", "gerenciarRecados"];
 function permTelasConfiguraveis(){
   const fixas = TELAS_SEMPRE_ADMIN.concat(TELAS_SEMPRE_LIVRES);
   return NAV_GROUPS

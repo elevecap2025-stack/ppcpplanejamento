@@ -833,6 +833,11 @@ function mondayOfCurrentWeek(){ const d=new Date(); const day=(d.getDay()+6)%7; 
 function weekdayFromDateStr(s){ if(!s) return ""; const [y,m,d]=s.split("-").map(Number); return DIAS_SEMANA[new Date(y,m-1,d).getDay()]; }
 function fmtDateBR(s){ if(!s) return "—"; const [y,m,d]=s.split("-"); return d+"/"+m+"/"+y; }
 function fmtNum(n){ return Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2}); }
+/* Versões sem centavos, usadas SÓ nas caixas de indicador do topo das telas: lá o que
+   importa é a ordem de grandeza, e os centavos só poluem a leitura. Tabelas, tooltips,
+   exportações e qualquer lugar que precise fechar conta continuam com 2 casas. */
+function fmtNumCard(n){ return Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}); }
+function fmtBRLCard(n){ return "R$ "+Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function fmtBRL(n){ return Number(n||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"}); }
 function fmtElapsed(ms){
   const totalSec = Math.max(0, Math.floor(ms/1000));
@@ -1070,7 +1075,8 @@ const STATE = {
   dashUnidades:{bobinasCompradas:"m", epsComprado:"m", pedidosEntregues:"m", enviadoPintura:"m"},
   /* Período dos velocímetros de meta. Vazio = mês corrente. */
   dashMetaFiltro:{ano:"",mes:"",dIni:"",dFim:""},
-  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""},
+  materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,preSemanaLimite:"",ordenarPor:""},
+  materiaisPdfColunas:{},
   fatorConversaoFiltro:{tipo:"",produto:""},
   notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
   precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
@@ -1104,6 +1110,7 @@ function initLocalDefaults(){
     STATE.theme = "light";
   }
   STATE.sidebarCollapsedGroups = loadSidebarCollapsedGroups();
+  STATE.materiaisPdfColunas = defaultMateriaisPdfColunas();
   try{ STATE.sidebarHidden = window.localStorage.getItem("eleve_sidebar_hidden")==="1"; } catch(err){}
 }
 async function loadAllData(){
@@ -1285,7 +1292,7 @@ async function removeMotivoPerda(idx){
 }
 
 function updateMateriaisFiltro(key, val){ STATE.materiaisFiltro[key]=val; renderScreen(); }
-function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,ordenarPor:""}; renderScreen(); }
+function clearMateriaisFiltro(){ STATE.materiaisFiltro = {tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,preSemanaLimite:"",ordenarPor:""}; renderScreen(); }
 /* Acessores de ordenação por coluna da tela de Matéria-Prima. A chave é a mesma
    usada em `columns`, o que permite ordenar clicando no cabeçalho e pelo seletor
    "Ordenar por" usando um único estado (materiaisFiltro.ordenarPor = "chave_dir"). */
@@ -1299,6 +1306,7 @@ const MATERIAL_SORT_ACCESSORS = {
   saidas:         (m,ctx)=> ctx.mov[m.id] ? ctx.mov[m.id].saidas : 0,
   estoque:        (m,ctx)=> Number(m.estoque||0),
   preProducao:    (m,ctx)=> Number(ctx.pre[m.id]||0),
+  saldoFuturo:    (m,ctx)=> Number(m.estoque||0) - Number(ctx.pre[m.id]||0),
   estoqueMinimo:  (m,ctx)=> Number(m.estoqueMinimo||0),
   loteMinimo:     (m,ctx)=> Number(m.loteMinimo||0),
   fator:          (m,ctx)=> Number(m.fator||1),
@@ -1316,6 +1324,9 @@ const MATERIAL_ORDENACAO_OPCOES = [
   {value:"entradas_desc", label:"Entradas (maior → menor)"},
   {value:"estoque_desc", label:"Saldo Atual (maior → menor)"},
   {value:"estoque_asc", label:"Saldo Atual (menor → maior)"},
+  {value:"saldoFuturo_asc", label:"Saldo Futuro (menor → maior)"},
+  {value:"saldoFuturo_desc", label:"Saldo Futuro (maior → menor)"},
+  {value:"preProducao_desc", label:"Pré-produção (maior → menor)"},
   {value:"valorEstoque_desc", label:"Valor em Estoque (maior → menor)"},
   {value:"valorEstoque_asc", label:"Valor em Estoque (menor → maior)"},
   {value:"dataCadastro_desc", label:"Cadastrado em (mais recente)"},
@@ -1336,7 +1347,7 @@ function ordenarMateriais(items, ordenarPor){
   const acessor = MATERIAL_SORT_ACCESSORS[ord.chave];
   /* Contexto calculado UMA vez: preProducaoTotals() varre todos os pedidos, e
      chamá-lo dentro do comparador o executaria a cada comparação. */
-  const ctx = {mov: movTotaisMap(), pre: preProducaoTotals()};
+  const ctx = {mov: movTotaisMap(), pre: preProducaoTotalsEstoque()};
   const sinal = ord.dir==="desc" ? -1 : 1;
   const porNome = (a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR", {sensitivity:"base"});
   /* Decora-ordena-desdecora: calcula a chave de cada item uma vez só. */
@@ -1387,14 +1398,14 @@ function toggleMaterialSort(chave){
 /* ---- exportação: Matéria-Prima (respeita os filtros da tela) ---- */
 function materiaisExportDados(){
   const items = ENTITY_CONFIGS.material.filterItems(STATE.materiais);
-  const head = ["Tipo","Material","É Cor?","Saldo Inicial","Entradas","Saídas","Saldo Atual","Divergência","Pré-produção","Mínimo","Lote Mín. Compra","Fator Consumo","Valor Unit.","Valor em Estoque","Unidade","Cadastrado em"];
-  const preTotals = preProducaoTotals();
+  const head = ["Tipo","Material","É Cor?","Saldo Inicial","Entradas","Saídas","Saldo Atual","Divergência","Pré-produção","Saldo Futuro","Mínimo","Lote Mín. Compra","Fator Consumo","Valor Unit.","Valor em Estoque","Unidade","Cadastrado em"];
+  const preTotals = preProducaoTotalsEstoque();
   const rows = items.map(function(m){
     const t = movTotaisDoMaterial(m.id);
     return [
       m.tipo, m.nome, m.cor==="S"?"Sim":"Não",
       Number(m.estoqueInicial||0), t.entradas, t.saidas, Number(m.estoque||0),
-      divergenciaDoMaterial(m), Number(preTotals[m.id]||0),
+      divergenciaDoMaterial(m), Number(preTotals[m.id]||0), saldoFuturoDoMaterial(m, preTotals),
       Number(m.estoqueMinimo||0), Number(m.loteMinimo||0), Number(m.fator||1),
       Number(m.valorUnitario||0), Number(m.estoque||0)*Number(m.valorUnitario||0),
       m.unidade, m.dataCadastro||"",
@@ -1402,24 +1413,102 @@ function materiaisExportDados(){
   });
   return {items:items, head:head, rows:rows};
 }
+/* Texto do horizonte escolhido — vai no subtítulo do PDF pra o número não ficar sem contexto. */
+function preProducaoLimiteLabel(){
+  const chave = STATE.materiaisFiltro.preSemanaLimite;
+  if(!chave) return "Pré-produção: todas as semanas";
+  const opt = preProducaoSemanasDisponiveis().find(w=>w.chave===chave);
+  return opt ? "Pré-produção até semana "+opt.semana+"/"+opt.ano+" ("+fmtDateBR(opt.fim)+")" : "Pré-produção: todas as semanas";
+}
 function exportarMateriaisExcel(){
   const d = materiaisExportDados();
   if(d.items.length===0){ showToast("info","Nenhum material pra exportar com os filtros atuais."); return; }
   const body = d.rows.map(function(r){
-    return [r[0],r[1],r[2], csvNum(r[3]),csvNum(r[4]),csvNum(r[5]),csvNum(r[6]),csvNum(r[7]),csvNum(r[8]),
-            csvNum(r[9]),csvNum(r[10]),csvNum(r[11]),csvNum(r[12]),csvNum(r[13]), r[14], r[15]?fmtDateBR(r[15]):""];
+    return [r[0],r[1],r[2], csvNum(r[3]),csvNum(r[4]),csvNum(r[5]),csvNum(r[6]),csvNum(r[7]),csvNum(r[8]),csvNum(r[9]),
+            csvNum(r[10]),csvNum(r[11]),csvNum(r[12]),csvNum(r[13]),csvNum(r[14]), r[15], r[16]?fmtDateBR(r[16]):""];
   });
   baixarCsv("materia-prima-"+todayStr()+".csv", d.head, body);
 }
+/* Colunas disponíveis no PDF de Matéria-Prima. Cada uma sabe se render sozinha, então
+   o relatório monta só o que estiver marcado em STATE.materiaisPdfColunas — o PDF é
+   estreito e imprimir as 16 colunas deixa tudo ilegível. */
+const MATERIAL_PDF_COLUNAS = [
+  {key:"tipo",           label:"Tipo",             valor:(m)=>m.tipo||"—"},
+  {key:"nome",           label:"Material",         valor:(m)=>m.nome||"—"},
+  {key:"cor",            label:"É Cor?",           valor:(m)=>m.cor==="S"?"Sim":"Não"},
+  {key:"estoqueInicial", label:"Saldo Inicial",    valor:(m)=>fmtNum(m.estoqueInicial||0)+" "+m.unidade},
+  {key:"entradas",       label:"Entradas",         valor:(m,c)=>fmtNum(c.t.entradas)},
+  {key:"saidas",         label:"Saídas",           valor:(m,c)=>fmtNum(c.t.saidas)},
+  {key:"estoque",        label:"Saldo Atual",      valor:(m)=>fmtNum(m.estoque||0)+" "+m.unidade},
+  {key:"divergencia",    label:"Diverg.",          valor:(m)=>{ const d=divergenciaDoMaterial(m); return Math.abs(d)>=0.01?fmtNum(d):"—"; }},
+  {key:"preProducao",    label:"Pré-produção",     valor:(m,c)=>fmtNum(c.pre[m.id]||0)+" "+m.unidade},
+  {key:"saldoFuturo",    label:"Saldo Futuro",     valor:(m,c)=>fmtNum(saldoFuturoDoMaterial(m,c.pre))+" "+m.unidade},
+  {key:"estoqueMinimo",  label:"Mínimo",           valor:(m)=>fmtNum(m.estoqueMinimo||0)+" "+m.unidade},
+  {key:"loteMinimo",     label:"Lote Mín.",        valor:(m)=>fmtNum(m.loteMinimo||0)+" "+m.unidade},
+  {key:"fator",          label:"Fator",            valor:(m)=>(m.fator||1)+"x"},
+  {key:"valorUnitario",  label:"Valor Unit.",      valor:(m)=>fmtBRL(m.valorUnitario||0)},
+  {key:"valorEstoque",   label:"Valor Estoque",    valor:(m)=>fmtBRL(Number(m.estoque||0)*Number(m.valorUnitario||0))},
+  {key:"dataCadastro",   label:"Cadastrado em",    valor:(m)=>m.dataCadastro?fmtDateBR(m.dataCadastro):"—"},
+];
+function defaultMateriaisPdfColunas(){
+  const marcadas = ["tipo","nome","estoqueInicial","entradas","saidas","estoque","preProducao","saldoFuturo","estoqueMinimo","valorEstoque"];
+  const mapa = {};
+  MATERIAL_PDF_COLUNAS.forEach(c=>{ mapa[c.key] = marcadas.indexOf(c.key)!==-1; });
+  return mapa;
+}
+function toggleMaterialPdfColuna(key, checked){ STATE.materiaisPdfColunas[key] = checked; }
+function marcarTodasMateriaisPdfColunas(valor){
+  MATERIAL_PDF_COLUNAS.forEach(c=>{ STATE.materiaisPdfColunas[c.key] = valor; });
+  openMateriaisColunasModal();
+}
+function restaurarMateriaisPdfColunas(){
+  STATE.materiaisPdfColunas = defaultMateriaisPdfColunas();
+  openMateriaisColunasModal();
+}
+function openMateriaisColunasModal(){
+  const sel = STATE.materiaisPdfColunas;
+  const marcadas = MATERIAL_PDF_COLUNAS.filter(c=>sel[c.key]).length;
+  const checks = MATERIAL_PDF_COLUNAS.map(c=>
+    '<label style="display:flex;align-items:center;gap:8px;padding:7px 0;border-bottom:1px solid var(--steel-border);cursor:pointer">'+
+      '<input type="checkbox" '+(sel[c.key]?"checked":"")+' onchange="toggleMaterialPdfColuna(\''+c.key+'\', this.checked)" style="accent-color:'+COLORS.brand+'"/>'+
+      '<span style="font-size:13.5px">'+escapeHtml(c.label)+'</span></label>').join("");
+  const aviso = marcadas>10
+    ? '<div style="border:1px solid #C98A0055;background:#C98A0012;border-radius:8px;padding:8px 11px;margin-bottom:10px;font-size:12px;line-height:1.5">'+
+        marcadas+' colunas marcadas — acima de 10 o texto começa a ficar apertado na folha.</div>'
+    : '';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this){ closeModal(); renderScreen(); }">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Colunas do Relatório PDF</h3><button type="button" class="icon-btn" onclick="closeModal(); renderScreen();">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Escolha o que sai no PDF de Matéria-Prima. A ordem segue a lista abaixo; a tela e o Excel não mudam.</p>'+
+        aviso+
+        '<div style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap">'+
+          '<button type="button" class="btn btn-ghost" style="font-size:12px" onclick="marcarTodasMateriaisPdfColunas(true)">Marcar todas</button>'+
+          '<button type="button" class="btn btn-ghost" style="font-size:12px" onclick="marcarTodasMateriaisPdfColunas(false)">Desmarcar todas</button>'+
+          '<button type="button" class="btn btn-ghost" style="font-size:12px" onclick="restaurarMateriaisPdfColunas()">Padrão</button>'+
+        '</div>'+
+        '<div style="max-height:44vh;overflow:auto">'+checks+'</div>'+
+        '<div class="modal-actions">'+
+          '<button type="button" class="btn btn-ghost" onclick="closeModal(); renderScreen();">Fechar</button>'+
+          '<button type="button" class="btn btn-primary" onclick="closeModal(); exportarMateriaisPdf();">'+icon("printer",14)+' Gerar PDF</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
 function exportarMateriaisPdf(){
-  const d = materiaisExportDados();
-  if(d.items.length===0){ showToast("info","Nenhum material pra exportar com os filtros atuais."); return; }
-  const head = ["Tipo","Material","Saldo Inicial","Entradas","Saídas","Saldo Atual","Diverg.","Mínimo","Valor Unit.","Valor Estoque"];
-  const body = d.rows.map(function(r){
-    return [r[0], r[1], fmtNum(r[3])+" "+r[14], fmtNum(r[4]), fmtNum(r[5]), fmtNum(r[6])+" "+r[14],
-            Math.abs(r[7])>=0.01?fmtNum(r[7]):"—", fmtNum(r[9])+" "+r[14], fmtBRL(r[12]), fmtBRL(r[13])];
+  const items = ENTITY_CONFIGS.material.filterItems(STATE.materiais);
+  if(items.length===0){ showToast("info","Nenhum material pra exportar com os filtros atuais."); return; }
+  const cols = MATERIAL_PDF_COLUNAS.filter(c=>STATE.materiaisPdfColunas[c.key]);
+  if(cols.length===0){ showToast("info","Escolha pelo menos uma coluna em Colunas do PDF."); return; }
+  const preTotals = preProducaoTotalsEstoque();
+  const body = items.map(function(m){
+    const ctx = {t: movTotaisDoMaterial(m.id), pre: preTotals};
+    return cols.map(c=>c.valor(m, ctx));
   });
-  gerarPdfTabela("Matéria-Prima", "Gerado em "+fmtDateBR(todayStr())+" · "+d.items.length+" material(is)", head, body);
+  gerarPdfTabela("Matéria-Prima",
+    "Gerado em "+fmtDateBR(todayStr())+" · "+items.length+" material(is) · "+preProducaoLimiteLabel(),
+    cols.map(c=>c.label), body);
 }
 
 /* ---- acerto de estoque ---- */
@@ -1636,7 +1725,7 @@ function renderBaixaEstoqueScreen(){
       '</div>')+
     '<div class="stat-row">'+
       statCardHtml("Baixas no Filtro", filtered.length, "trash", COLORS.red)+
-      statCardHtml("Valor Líquido (Perdas − Devoluções)", fmtBRL(valorTotal), "trendingUp", valorTotal>=0?COLORS.red:COLORS.green)+
+      statCardHtml("Valor Líquido (Perdas − Devoluções)", fmtBRLCard(valorTotal), "trendingUp", valorTotal>=0?COLORS.red:COLORS.green)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:200px"><label class="field-label">Material</label><select class="field-select" onchange="updateBaixaManualFiltro(\'materialId\', this.value)"><option value="">Todos</option>'+
@@ -2025,7 +2114,7 @@ function renderAvulsoLancamentoScreen(){
     '<div class="stat-row">'+
       statCardHtml("Registros no Filtro", filtered.length, "dashboard")+
       statCardHtml("Pendentes", pendentes, "calendar", COLORS.brand)+
-      statCardHtml("Quantidade Total", fmtNum(totalQtd), "package")+
+      statCardHtml("Quantidade Total", fmtNumCard(totalQtd), "package")+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:140px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateAvulsoFiltro(\'op\', this.value)"/></div>'+
@@ -2131,7 +2220,7 @@ function renderAvulsoSeparacaoScreen(){
       '</div>')+
     '<div class="stat-row">'+
       statCardHtml("Registros no Período", ativos.length, "dashboard")+
-      statCardHtml("Quantidade Total", fmtNum(qtdTotalPeriodo), "package", COLORS.brand)+
+      statCardHtml("Quantidade Total", fmtNumCard(qtdTotalPeriodo), "package", COLORS.brand)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:140px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateAvulsoStageFilter(\'op\', this.value)"/></div>'+
@@ -2207,7 +2296,7 @@ function renderAvulsoConcluidosScreen(){
       '</div>')+
     '<div class="stat-row">'+
       statCardHtml("Concluídos no Filtro", concluidos.length, "checkCircle", COLORS.green)+
-      statCardHtml("Quantidade Total", fmtNum(totalQtd), "package", COLORS.brand)+
+      statCardHtml("Quantidade Total", fmtNumCard(totalQtd), "package", COLORS.brand)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:140px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateAvulsoConcluidosFiltro(\'op\', this.value)"/></div>'+
@@ -2452,7 +2541,7 @@ const ENTITY_CONFIGS = {
     items: ()=>STATE.materiais,
     filterItems: (items)=>{
       const f = STATE.materiaisFiltro;
-      const preTotals = f.somentePreProducao ? preProducaoTotals() : null;
+      const preTotals = f.somentePreProducao ? preProducaoTotalsEstoque() : null;
       const filtrados = items.filter(m=>{
         if(f.tipo && m.tipo!==f.tipo) return false;
         if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
@@ -2467,6 +2556,7 @@ const ENTITY_CONFIGS = {
       const f = STATE.materiaisFiltro;
       const anoAtual = String(new Date().getFullYear());
       const anos = Array.from(new Set(STATE.materiais.map(m=>m.dataCadastro?m.dataCadastro.slice(0,4):null).filter(Boolean).concat([anoAtual]))).sort();
+      const semanasPre = preProducaoSemanasDisponiveis();
       return '<div class="pcp-card filter-bar no-print">'+
         '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" list="materiais-produto-datalist" value="'+escapeAttr(f.produto)+'" placeholder="Buscar e selecionar produto…" onchange="updateMateriaisFiltro(\'produto\', this.value)"/>'+
           '<datalist id="materiais-produto-datalist">'+Array.from(new Set(STATE.materiais.map(m=>m.nome))).sort().map(n=>'<option value="'+escapeAttr(n)+'">').join("")+'</datalist>'+
@@ -2475,6 +2565,10 @@ const ENTITY_CONFIGS = {
           MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
         '<div style="width:110px"><label class="field-label">Ano (cadastro)</label><select class="field-select" onchange="updateMateriaisFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
           anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
+        '<div style="min-width:220px"><label class="field-label'+(f.preSemanaLimite?" filter-label-active":"")+'">Pré-produção até</label><select class="field-select'+(f.preSemanaLimite?" filter-active":"")+'" title="Considera na Pré-produção e no Saldo Futuro apenas os pedidos programados até o fim da semana escolhida" onchange="updateMateriaisFiltro(\'preSemanaLimite\', this.value)">'+
+          '<option value="">Todas as semanas</option>'+
+          semanasPre.map(w=>'<option value="'+escapeAttr(w.chave)+'" '+(f.preSemanaLimite===w.chave?"selected":"")+'>Até semana '+w.semana+'/'+w.ano+' ('+fmtDateBR(w.fim)+')</option>').join("")+
+          '</select></div>'+
         '<div style="min-width:220px"><label class="field-label">Ordenar por</label><select class="field-select" onchange="updateMateriaisFiltro(\'ordenarPor\', this.value)">'+
           MATERIAL_ORDENACAO_OPCOES.map(o=>'<option value="'+escapeAttr(o.value)+'" '+(f.ordenarPor===o.value?"selected":"")+'>'+escapeHtml(o.label)+'</option>').join("")+
           '</select></div>'+
@@ -2487,15 +2581,24 @@ const ENTITY_CONFIGS = {
       const valorTotal = items.reduce((s,m)=>s+(Number(m.estoque||0)*Number(m.valorUnitario||0)),0);
       const metragemTotal = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(m.estoque||0),0);
       const baixoCount = items.filter(m=>m.estoque<m.estoqueMinimo).length;
-      const preTotals = preProducaoTotals();
+      const preTotals = preProducaoTotalsEstoque();
       const preProducaoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(preTotals[m.id]||0),0);
+      const saldoFuturoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+saldoFuturoDoMaterial(m, preTotals),0);
+      const negativosFuturo = items.filter(m=>saldoFuturoDoMaterial(m, preTotals)<0).length;
       const divergentes = items.filter(m=>Math.abs(divergenciaDoMaterial(m))>=0.01).length;
+      /* Com limite de semana ativo, os rótulos dizem até quando o horizonte vai — sem
+         isso o número muda na tela e não fica claro o porquê. */
+      const limChave = STATE.materiaisFiltro.preSemanaLimite;
+      const limOpt = limChave ? preProducaoSemanasDisponiveis().find(w=>w.chave===limChave) : null;
+      const sufixo = limOpt ? " (até sem. "+limOpt.semana+")" : "";
       return '<div class="stat-row">'+
-        statCardHtml("Valor Total em Estoque", fmtBRL(valorTotal), "trendingUp", COLORS.brand)+
-        statCardHtml("Metragem Total em Estoque", fmtNum(metragemTotal)+" m", "boxes", COLORS.green)+
+        statCardHtml("Valor Total em Estoque", fmtBRLCard(valorTotal), "trendingUp", COLORS.brand)+
+        statCardHtml("Metragem Total em Estoque", fmtNumCard(metragemTotal)+" m", "boxes", COLORS.green)+
         statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
         statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted, divergentes?"openDiagnosticoDivergenciasModal()":null)+
-        statCardHtml("Reservado em Pré-produção", fmtNum(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
+        statCardHtml("Reservado em Pré-produção"+sufixo, fmtNumCard(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
+        statCardHtml("Saldo Futuro"+sufixo, fmtNumCard(saldoFuturoMetragem)+" m", "activity", saldoFuturoMetragem<0?COLORS.red:COLORS.green)+
+        statCardHtml("Materiais c/ Saldo Futuro Negativo", negativosFuturo, "alert", negativosFuturo?COLORS.red:COLORS.textMuted)+
       '</div>'+
       materialTipoTabsHtml();
     },
@@ -2553,10 +2656,24 @@ const ENTITY_CONFIGS = {
         return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+fmtNum(it.estoque)+'&nbsp;'+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
       }},
       {key:"preProducao", label:"Pré-produção", render:(it)=>{
-        const total = Number(preProducaoTotals()[it.id]||0);
+        const total = Number(preProducaoTotalsEstoque()[it.id]||0);
         if(!total) return '<span style="color:'+COLORS.textMuted+'">—</span>';
         return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;white-space:nowrap" title="Ver quais pedidos formam este total (e por que a Prog. Perfiladeira pode mostrar menos)" onclick="openPreProducaoMaterialModal(\''+it.id+'\')">'+
           '<span style="color:#C98A00;font-family:\'IBM Plex Mono\',monospace;font-weight:600;white-space:nowrap">'+fmtNum(total)+'&nbsp;'+it.unidade+'</span></button>';
+      }},
+      {key:"saldoFuturo", label:"Saldo Futuro", render:(it)=>{
+        const preTotals = preProducaoTotalsEstoque();
+        const pre = Number(preTotals[it.id]||0);
+        const futuro = saldoFuturoDoMaterial(it, preTotals);
+        const negativo = futuro < 0;
+        const abaixoMinimo = !negativo && Number(it.estoqueMinimo||0)>0 && futuro < Number(it.estoqueMinimo||0);
+        const cor = negativo ? COLORS.red : (abaixoMinimo ? "#C98A00" : COLORS.green);
+        const limOpt = STATE.materiaisFiltro.preSemanaLimite
+          ? preProducaoSemanasDisponiveis().find(w=>w.chave===STATE.materiaisFiltro.preSemanaLimite) : null;
+        const tip = "Saldo Atual "+fmtNum(it.estoque)+" − Pré-produção "+fmtNum(pre)+" = "+fmtNum(futuro)+" "+it.unidade+
+          (limOpt ? " · considerando pedidos até "+fmtDateBR(limOpt.fim)+" (semana "+limOpt.semana+")" : " · considerando todas as semanas");
+        return '<span style="color:'+cor+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+
+          fmtNum(futuro)+'&nbsp;'+it.unidade+(negativo?icon("alert",12,COLORS.red):'')+'</span>';
       }},
       {key:"estoqueMinimo", label:"Mínimo", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.estoqueMinimo)+'&nbsp;'+it.unidade+'</span>'},
       {key:"loteMinimo", label:"Lote Mín. Compra", render:(it)=>'<span style="color:'+COLORS.textMuted+';white-space:nowrap">'+fmtNum(it.loteMinimo||0)+'&nbsp;'+it.unidade+'</span>'},
@@ -2880,6 +2997,7 @@ function renderGenericScreen(type){
     (type==="material" ? '<button class="btn btn-ghost" onclick="openTiposModal()">'+icon("settings",14)+' Gerenciar Tipos</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openDiagnosticoDivergenciasModal()" title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",14)+' Divergências</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisExcel()" title="Baixar planilha (.csv, abre no Excel)">'+icon("package",14)+' Excel</button>' : '')+
+    (type==="material" ? '<button class="btn btn-ghost" onclick="openMateriaisColunasModal()" title="Escolher quais colunas saem no relatório em PDF">'+icon("filter",14)+' Colunas do PDF</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisPdf()" title="Gerar PDF">'+icon("printer",14)+' PDF</button>' : '')+
     (cfg.printable ? '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Imprimir</button>' : '')+
     '<button class="btn btn-primary" onclick="openEntityModal(\''+type+'\',\'new\')">'+icon("plus",14)+' Novo</button>'+
@@ -2925,14 +3043,68 @@ function computeEffectiveConsumption(pedido){
 }
 /* Totais reservados (ainda não baixados) para pedidos em Pré-produção, por material.
    Usado apenas para visualização (coluna "Pré-produção" no estoque, filtros, etc). */
-function preProducaoTotals(){
+function preProducaoTotals(dataLimite){
   const totals = {};
   STATE.pedidos.forEach(p=>{
     if(!isPedidoPreProducao(p)) return;
+    /* Com limite de semana ativo, entram só os pedidos programados até o fim daquela
+       semana. Pedido sem data programada não tem lugar na linha do tempo, então fica
+       de fora do horizonte (ele continua aparecendo no total sem limite). */
+    if(dataLimite && (!p.dataProg || p.dataProg > dataLimite)) return;
     const map = computeConsumption(p);
     Object.keys(map).forEach(id=>{ totals[id] = (totals[id]||0) + map[id]; });
   });
   return totals;
+}
+/* Ano ISO da semana de uma data — casa com isoWeekNumber() na virada de ano
+   (31/12 pode pertencer à semana 1 do ano seguinte, e 01/01 à semana 52 do anterior). */
+function isoWeekYear(s){
+  const [y,m,d] = s.split("-").map(Number);
+  const date = new Date(Date.UTC(y,m-1,d));
+  const dayNum = (date.getUTCDay()+6)%7;
+  date.setUTCDate(date.getUTCDate()-dayNum+3);
+  return date.getUTCFullYear();
+}
+function fimDaSemanaIso(week, year){
+  const seg = mondayOfIsoWeek(week, year);
+  const dom = new Date(seg); dom.setUTCDate(seg.getUTCDate()+6);
+  return isoFromUTCParts(dom);
+}
+/* Semanas que têm pedido em Pré-produção — alimenta o filtro "Pré-produção até" da
+   tela de Matéria-Prima. Cada opção guarda o último dia da semana, que é o corte. */
+function preProducaoSemanasDisponiveis(){
+  const mapa = {};
+  STATE.pedidos.forEach(p=>{
+    if(!isPedidoPreProducao(p) || !p.dataProg) return;
+    const semana = isoWeekNumber(p.dataProg), ano = isoWeekYear(p.dataProg);
+    const chave = ano+"-W"+pad2(semana);
+    if(!mapa[chave]) mapa[chave] = {chave:chave, semana:semana, ano:ano, fim:fimDaSemanaIso(semana, ano), pedidos:0};
+    mapa[chave].pedidos++;
+  });
+  return Object.keys(mapa).sort().map(k=>mapa[k]);
+}
+/* Converte a semana escolhida no filtro na data de corte usada pelos totais. */
+function preProducaoLimiteData(){
+  const chave = (STATE.materiaisFiltro||{}).preSemanaLimite || "";
+  if(!chave) return "";
+  const opt = preProducaoSemanasDisponiveis().find(w=>w.chave===chave);
+  return opt ? opt.fim : "";
+}
+/* Totais de Pré-produção já respeitando o filtro de semana da tela de Matéria-Prima.
+   Memorizado por render porque a coluna chama isso linha a linha e cada chamada
+   varre todos os pedidos. O cache é zerado no início de renderScreen(). */
+let _preTotalsEstoqueCache = null;
+function preProducaoTotalsEstoque(){
+  const lim = preProducaoLimiteData();
+  if(_preTotalsEstoqueCache && _preTotalsEstoqueCache.lim===lim) return _preTotalsEstoqueCache.map;
+  _preTotalsEstoqueCache = {lim:lim, map:preProducaoTotals(lim)};
+  return _preTotalsEstoqueCache.map;
+}
+/* Saldo Futuro = Saldo Atual − Pré-produção (dentro do horizonte escolhido).
+   É o que sobra no estoque depois que os pedidos reservados forem produzidos. */
+function saldoFuturoDoMaterial(m, preTotals){
+  const pre = Number((preTotals||preProducaoTotalsEstoque())[m.id]||0);
+  return Math.round((Number(m.estoque||0) - pre)*100)/100;
 }
 /* Detalha, pedido a pedido, de onde vem o total da coluna "Pré-produção" de um material.
    Serve pra explicar diferenças entre esse número (que varre TODOS os pedidos do sistema,
@@ -3042,9 +3214,9 @@ function openPreProducaoMaterialModal(materialId){
 
   const resumo =
     '<div class="stat-row" style="margin-bottom:12px">'+
-      statCardHtml("Total Pré-produção", fmtNum(total)+" "+m.unidade, "boxes", "#C98A00")+
-      statCardHtml("Etapa Perfilar (todas as semanas)", fmtNum(totalPerfiladeira)+" "+m.unidade, "calendar", COLORS.brand)+
-      statCardHtml("Fora da Prog. Perfiladeira", fmtNum(totalFora)+" "+m.unidade, "alert", totalFora?COLORS.red:COLORS.textMuted)+
+      statCardHtml("Total Pré-produção", fmtNumCard(total)+" "+m.unidade, "boxes", "#C98A00")+
+      statCardHtml("Etapa Perfilar (todas as semanas)", fmtNumCard(totalPerfiladeira)+" "+m.unidade, "calendar", COLORS.brand)+
+      statCardHtml("Fora da Prog. Perfiladeira", fmtNumCard(totalFora)+" "+m.unidade, "alert", totalFora?COLORS.red:COLORS.textMuted)+
     '</div>';
 
   const html =
@@ -3787,7 +3959,7 @@ function renderPedidosScreen(){
     '<div class="stat-row">'+
       statCardHtml("Pedidos no Filtro", pedidos.length, "dashboard")+
       statCardHtml("Em Produção / Pré-Prod.", totalAtivos, "calendar", COLORS.brand)+
-      statCardHtml("Metragem Ativa", fmtNum(metragemAtiva)+" m", "package", COLORS.green)+
+      statCardHtml("Metragem Ativa", fmtNumCard(metragemAtiva)+" m", "package", COLORS.green)+
       statCardHtml("Aguard. Matéria-Prima", aguardando, "alert", aguardando?COLORS.red:COLORS.textMuted)+
       statCardHtml("Materiais c/ Estoque Baixo", estoqueBaixo, "alert", estoqueBaixo?COLORS.red:COLORS.textMuted)+
     '</div>'+
@@ -4037,10 +4209,10 @@ function renderStageScreen(stage){
     '<div class="no-print">'+
       '<div class="stat-row">'+
         statCardHtml("Pedidos no Período", ativos.length, "dashboard")+
-        statCardHtml("Metragem Total", fmtNum(metragemTotalPeriodo)+" m", "package", COLORS.brand)+
-        statCardHtml("Produção", fmtNum(producaoQtdPeriodo)+" m", "boxes", COLORS.green)+
-        statCardHtml("Pré-produção", fmtNum(preProducaoQtdPeriodo)+" m", "activity", preProducaoQtdPeriodo?"#C98A00":COLORS.textMuted)+
-        statCardHtml("Média por Dia Útil", fmtNum(mediaPorDia)+" m", "calendar", COLORS.green)+
+        statCardHtml("Metragem Total", fmtNumCard(metragemTotalPeriodo)+" m", "package", COLORS.brand)+
+        statCardHtml("Produção", fmtNumCard(producaoQtdPeriodo)+" m", "boxes", COLORS.green)+
+        statCardHtml("Pré-produção", fmtNumCard(preProducaoQtdPeriodo)+" m", "activity", preProducaoQtdPeriodo?"#C98A00":COLORS.textMuted)+
+        statCardHtml("Média por Dia Útil", fmtNumCard(mediaPorDia)+" m", "calendar", COLORS.green)+
       '</div>'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px">'+
         '<h3 class="section-label" style="margin:0">METAS POR DIA</h3>'+
@@ -4103,7 +4275,7 @@ function renderEntreguesScreen(){
     screenHeaderHtml("checkCircle","Pedidos Entregues","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
-      statCardHtml("Metragem Total", fmtNum(metragemTotal)+" m", "package", COLORS.brand)+
+      statCardHtml("Metragem Total", fmtNumCard(metragemTotal)+" m", "package", COLORS.brand)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:170px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updateEntreguesFiltro(\'cliente\', this.value)"/></div>'+
@@ -4212,9 +4384,9 @@ function renderBaixasScreen(){
     screenHeaderHtml("arrowDownCircle","Baixa de Materiais","Itens baixados do estoque conforme a produção dos pedidos — pedidos em Pré-produção ainda não têm baixa real, apenas prevista", exportBotoesHtml("exportarBaixas"), true)+
     '<div class="stat-row">'+
       statCardHtml("Baixas no Filtro", filtered.length, "arrowDownCircle", COLORS.red)+
-      statCardHtml(totalLabel, fmtNum(totalQtd)+" m", "package", COLORS.brand)+
+      statCardHtml(totalLabel, fmtNumCard(totalQtd)+" m", "package", COLORS.brand)+
       statCardHtml("Pedidos em Pré-produção", preProducaoPedidos, "activity", preProducaoPedidos?"#C98A00":COLORS.textMuted)+
-      statCardHtml("Quantidade em Pré-produção (m)", fmtNum(preProducaoQtd)+" m", "boxes", preProducaoQtd?"#C98A00":COLORS.textMuted)+
+      statCardHtml("Quantidade em Pré-produção (m)", fmtNumCard(preProducaoQtd)+" m", "boxes", preProducaoQtd?"#C98A00":COLORS.textMuted)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:190px"><label class="field-label">Situação</label><select class="field-select" onchange="updateBaixasFilter(\'situacao\', this.value)">'+
@@ -4383,11 +4555,11 @@ function renderMovimentacaoScreen(){
   document.getElementById("content").innerHTML =
     screenHeaderHtml("trendingUp","Movimentação de Estoque","Estoque inicial + compras − produção = estoque final, mês a mês", exportBotoesHtml("exportarMovimentacao"), true)+
     '<div class="stat-row">'+
-      statCardHtml("Estoque Inicial do Ano", fmtNum(data.estoqueInicialAno)+" "+data.unidade, "boxes")+
-      statCardHtml("Compras no Ano", "+"+fmtNum(data.totalCompras)+" "+data.unidade, "arrowDownCircle", COLORS.green)+
-      statCardHtml("Produção no Ano", "−"+fmtNum(data.totalProducao)+" "+data.unidade, "arrowDownCircle", COLORS.red)+
-      statCardHtml("Estoque Final do Ano", fmtNum(data.estoqueFinalAno)+" "+data.unidade, "boxes", COLORS.brand)+
-      statCardHtml("Valor do Estoque Final", fmtBRL(data.valorFinalTotal), "trendingUp", COLORS.brand)+
+      statCardHtml("Estoque Inicial do Ano", fmtNumCard(data.estoqueInicialAno)+" "+data.unidade, "boxes")+
+      statCardHtml("Compras no Ano", "+"+fmtNumCard(data.totalCompras)+" "+data.unidade, "arrowDownCircle", COLORS.green)+
+      statCardHtml("Produção no Ano", "−"+fmtNumCard(data.totalProducao)+" "+data.unidade, "arrowDownCircle", COLORS.red)+
+      statCardHtml("Estoque Final do Ano", fmtNumCard(data.estoqueFinalAno)+" "+data.unidade, "boxes", COLORS.brand)+
+      statCardHtml("Valor do Estoque Final", fmtBRLCard(data.valorFinalTotal), "trendingUp", COLORS.brand)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:220px"><label class="field-label">Material</label><select class="field-select" onchange="updateMovFiltro(\'materialId\', this.value)"><option value="">Total Geral (bobinas e EPS)</option>'+
@@ -4712,7 +4884,7 @@ function renderDashboardScreen(){
     '</div>'+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Concluídos (Perfilar)", pedidosFiltrados.length, "dashboard")+
-      statCardHtml("Metragem Total", fmtNum(totalMetragem)+" m", "package", COLORS.brand)+
+      statCardHtml("Metragem Total", fmtNumCard(totalMetragem)+" m", "package", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadeItems.length, "mapPin", COLORS.green)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
@@ -4848,7 +5020,7 @@ function renderCalendarioScreen(){
       '</div>')+
     '<div class="stat-row">'+
       statCardHtml("Pedidos no Mês", totalMesPedidos, "dashboard")+
-      statCardHtml("Metragem no Mês", fmtNum(totalMesMetragem)+" m", "package", COLORS.brand)+
+      statCardHtml("Metragem no Mês", fmtNumCard(totalMesMetragem)+" m", "package", COLORS.brand)+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:220px"><label class="field-label">Máquina</label><select class="field-select" onchange="updateCalFiltro(\'calMaquinaId\', this.value)"><option value="">Todas as máquinas</option>'+
@@ -5450,10 +5622,10 @@ function renderNotasScreen(){
   const stats = notasAggregateStats(notasFiltradas);
   const anos = Array.from(new Set(STATE.notas.map(n=>n.data?n.data.slice(0,4):null).filter(Boolean).concat([String(new Date().getFullYear())]))).sort();
   const statsHtml = '<div class="stat-row">'+
-    statCardHtml("Total Comprado (Kg)", fmtNum(stats.totalKg)+" kg", "package", COLORS.brand)+
-    statCardHtml("Total Comprado (m)", fmtNum(stats.totalM)+" m", "boxes", COLORS.green)+
-    statCardHtml("Valor Total Comprado", fmtBRL(stats.totalValor), "trendingUp", COLORS.brand)+
-    statCardHtml("Custo Médio por Metro", fmtBRL(stats.custoMedio)+"/m", "target")+
+    statCardHtml("Total Comprado (Kg)", fmtNumCard(stats.totalKg)+" kg", "package", COLORS.brand)+
+    statCardHtml("Total Comprado (m)", fmtNumCard(stats.totalM)+" m", "boxes", COLORS.green)+
+    statCardHtml("Valor Total Comprado", fmtBRLCard(stats.totalValor), "trendingUp", COLORS.brand)+
+    statCardHtml("Custo Médio por Metro", fmtBRLCard(stats.custoMedio)+"/m", "target")+
   '</div>';
   const filterBar = '<div class="pcp-card filter-bar no-print">'+
     '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" value="'+escapeAttr(f.produto)+'" placeholder="Buscar produto…" onchange="updateNotasFiltro(\'produto\', this.value)"/></div>'+
@@ -5591,8 +5763,8 @@ function renderPrecoDetalheMaterial(materialId, dIni, dFim){
   const variacao = variacaoPct(inicial, final);
   const corVariacao = variacao>0 ? COLORS.red : (variacao<0 ? COLORS.green : COLORS.textMuted);
   const statsHtml = '<div class="stat-row" style="margin-top:14px">'+
-    statCardHtml("Preço em "+fmtMesAno(mensal[0].mesAno), fmtBRL(inicial)+"/"+unidade, "calendar")+
-    statCardHtml("Preço em "+fmtMesAno(mensal[mensal.length-1].mesAno), fmtBRL(final)+"/"+unidade, "calendar", COLORS.brand)+
+    statCardHtml("Preço em "+fmtMesAno(mensal[0].mesAno), fmtBRLCard(inicial)+"/"+unidade, "calendar")+
+    statCardHtml("Preço em "+fmtMesAno(mensal[mensal.length-1].mesAno), fmtBRLCard(final)+"/"+unidade, "calendar", COLORS.brand)+
     statCardHtml("Variação no período", fmtPct(variacao), "trendingUp", corVariacao)+
   '</div>';
   const chart = '<div class="pcp-card" style="margin-top:14px">'+
@@ -7098,6 +7270,7 @@ function renderSidebar(){
 }
 function renderScreen(){
   invalidateMovTotais();
+  _preTotalsEstoqueCache = null;
   if(STATE.screen==="dashboard") renderDashboardScreen();
   else if(STATE.screen==="pedidos") renderPedidosScreen();
   else if(STATE.screen==="prog-perfilar") renderStageScreen("perfilar");

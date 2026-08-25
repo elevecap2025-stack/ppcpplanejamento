@@ -261,6 +261,8 @@ function sbErrorToast(action, error){
 const DEFAULT_CONFIG_VALUES = {
   material_tipos: ["Bobina","EPS","Outro"],
   motivos_perda: ["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
+  motivos_cancelamento: ["Cliente desistiu","Erro de lançamento","Prazo não atendido","Pedido duplicado","Falta de matéria-prima","Outro"],
+  pedidos_cancelados: [],
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -804,6 +806,8 @@ const ICON_PATHS = {
   arrowUpDown:'<polyline points="7 4 7 20"/><polyline points="4 7 7 4 10 7"/><polyline points="17 20 17 4"/><polyline points="14 17 17 20 20 17"/>',
   repeat:'<polyline points="17 1 21 5 17 9"/><path d="M3 11V9a4 4 0 0 1 4-4h14"/><polyline points="7 23 3 19 7 15"/><path d="M21 13v2a4 4 0 0 1-4 4H3"/>',
   undo:'<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
+  xCircle:'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
+  eye:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
 };
 function icon(name, size, color){
   size = size || 16; color = color || "currentColor";
@@ -997,15 +1001,18 @@ function barListHtml(items){
   }).join('');
 }
 /* Gráfico de barras verticais para comparar categorias (cidade, cor, tipo de EPS, etc). */
-function categoryBarChartHtml(items, cor, unidade){
-  unidade = unidade || "m";
+function categoryBarChartHtml(items, cor, unidade, inteiros){
+  unidade = (unidade===undefined || unidade===null) ? "m" : unidade;
+  /* inteiros=true para séries de contagem (ex.: nº de pedidos), que não fazem sentido
+     com duas casas decimais. */
+  const fmtVal = inteiros ? fmtNumCard : fmtNum;
   if(!items.length) return emptyStateHtml("Sem dados para o filtro selecionado.");
   const maxVal = Math.max.apply(null, items.map(function(i){ return i.value; }).concat([1]));
   const escala = maxVal * 1.15;
   const colWidth = 42;
   const bars = items.map(function(it){
     const alturaPct = escala>0 ? Math.min(100, (it.value/escala)*100) : 0;
-    const tip = (it.label||"")+" — "+fmtNum(it.value)+" "+unidade;
+    const tip = (it.label||"")+" — "+fmtVal(it.value)+(unidade?" "+unidade:"");
     return '<div class="chart-col" style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px" title="'+escapeAttr(tip)+'">'+
       (it.value>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(it.value)+'</div>' : '')+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+cor+'"></div>'+
@@ -1085,6 +1092,12 @@ const STATE = {
   obsProducao:{}, obsProducaoLoading:{},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
+  /* Cancelamento de pedidos. Motivos e histórico moram em app_config (chaves
+     motivos_cancelamento e pedidos_cancelados), então o recurso funciona sem precisar
+     criar tabela nova no Supabase. */
+  motivosCancelamento:["Cliente desistiu","Erro de lançamento","Prazo não atendido","Pedido duplicado","Falta de matéria-prima","Outro"],
+  pedidosCancelados:[],
+  canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
   baixasManual:[], transferencias:[], fatorConversaoHistorico:[], movimentacoes:[],
@@ -1146,13 +1159,14 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
     configGet("permissoes_usuarios"),
+    configGet("motivos_cancelamento"), configGet("pedidos_cancelados"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1168,6 +1182,8 @@ async function loadAllData(){
   STATE.feriadosCustom = Array.isArray(feriadosCustom) ? feriadosCustom : [];
   STATE.feriadosRemovidos = Array.isArray(feriadosRemovidos) ? feriadosRemovidos : [];
   STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
+  STATE.motivosCancelamento = Array.isArray(motivosCancelamento) && motivosCancelamento.length ? motivosCancelamento : DEFAULT_CONFIG_VALUES.motivos_cancelamento;
+  STATE.pedidosCancelados = Array.isArray(pedidosCancelados) ? pedidosCancelados : [];
   await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
@@ -3955,6 +3971,7 @@ function renderPedidosScreen(){
     '<div class="screen-fixed"><div class="screen-fixed-head">'+
     screenHeaderHtml("dashboard","Lançamentos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho ou use \"Classificar\" para ordenar",
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+pedidosSortControlHtml()+
+      '<button class="btn btn-ghost" onclick="setScreen(\'pedidosCancelados\')">'+icon("xCircle",14)+' Pedidos Cancelados</button>'+
       '<button class="btn btn-primary" onclick="openPedidoModal(\'new\')">'+icon("plus",14)+' Novo Pedido</button></div>')+
     '<div class="stat-row">'+
       statCardHtml("Pedidos no Filtro", pedidos.length, "dashboard")+
@@ -3980,8 +3997,469 @@ function renderPedidosScreen(){
       '<button class="btn btn-ghost" onclick="clearPedidosFiltro()">Limpar filtros</button>'+
     '</div>'+
     '</div>'+
-    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(pedidos, false, false, false, true, null, false)+'</div></div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+
+      pedidoTableHtml(pedidos, false, false, false, true, null, false, false, function(p){
+        return '<button class="icon-btn" title="Cancelar pedido" style="color:'+COLORS.red+'" onclick="openCancelarPedidoModal(\''+p.id+'\')">'+icon("xCircle",13)+'</button>';
+      })+
+    '</div></div>'+
     '</div>';
+}
+
+/* ============================== PEDIDOS CANCELADOS ==============================
+   Um pedido cancelado SAI da tabela `pedidos` e passa a viver como registro histórico
+   em app_config → chave "pedidos_cancelados". Fazer assim (em vez de marcar uma flag no
+   próprio pedido) tem duas vantagens: o pedido some sozinho de todas as telas que já
+   existem — programação, calendário, baixas, dashboard, pré-produção — sem precisar de
+   um filtro novo em cada uma delas; e nada precisa ser criado no Supabase para o recurso
+   funcionar, já que app_config é a mesma tabela chave/valor usada pelos motivos de perda,
+   metas e permissões.
+
+   Como o registro guarda o pedido inteiro, o botão "Reverter" é só uma reinserção fiel
+   do que existia antes.
+
+   Estoque: o cancelamento chama adjustStock(pedido, null) — a mesma rotina usada na
+   exclusão de pedido. Ela devolve exatamente aquilo que tinha sido baixado. Ou seja:
+   pedido que estava só em Pré-produção (planejamento) não movimenta nada, porque nada
+   tinha sido consumido ainda. Não há regra duplicada aqui: quem decide é o mesmo
+   computeEffectiveConsumption() que o resto do sistema usa. */
+function novoCanceladoId(){ return "canc-"+Date.now()+"-"+Math.random().toString(36).slice(2,7); }
+function nomeSituacao(situacaoId){
+  const s = STATE.statusOptions.find(function(x){ return x.id===situacaoId; });
+  return s ? s.nome : "";
+}
+function anosCancelamentoDisponiveis(){
+  const anos = {};
+  (STATE.pedidosCancelados||[]).forEach(function(c){
+    const a = (c.canceladoEm||"").slice(0,4);
+    if(a) anos[a] = true;
+  });
+  anos[String(new Date().getFullYear())] = true;
+  return Object.keys(anos).sort().reverse();
+}
+/* Grava relendo a lista do banco antes de escrever: dois usuários cancelando ao mesmo
+   tempo não sobrescrevem o cancelamento um do outro. */
+async function pushPedidoCancelado(rec){
+  const atual = await configGet("pedidos_cancelados");
+  const lista = Array.isArray(atual) ? atual.slice() : [];
+  lista.unshift(rec);
+  const ok = await configSet("pedidos_cancelados", lista);
+  if(ok) STATE.pedidosCancelados = lista;
+  return ok;
+}
+async function removePedidoCancelado(id){
+  const atual = await configGet("pedidos_cancelados");
+  const base = Array.isArray(atual) ? atual : (STATE.pedidosCancelados||[]);
+  const lista = base.filter(function(c){ return c.id!==id; });
+  const ok = await configSet("pedidos_cancelados", lista);
+  if(ok) STATE.pedidosCancelados = lista;
+  return ok;
+}
+
+/* ---- Motivos de cancelamento (cadastro configurável, igual aos motivos de perda) ---- */
+function openMotivosCancelamentoModal(){
+  const rows = STATE.motivosCancelamento.map(function(t,i){
+    const usos = (STATE.pedidosCancelados||[]).filter(function(c){ return c.motivo===t; }).length;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--steel-border)">'+
+      '<span style="font-size:13.5px">'+escapeHtml(t)+(usos?' <span style="font-size:10.5px;color:'+COLORS.textMuted+'">· '+usos+' uso(s)</span>':'')+'</span>'+
+      '<button type="button" class="icon-btn" title="Remover motivo" onclick="removeMotivoCancelamento('+i+')">'+icon("trash",13)+'</button>'+
+    '</div>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Motivos de Cancelamento</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="margin-bottom:14px">'+(rows||'<p style="font-size:12.5px;color:'+COLORS.textMuted+'">Nenhum motivo cadastrado.</p>')+'</div>'+
+        '<label class="field-label">Novo motivo</label>'+
+        '<div style="display:flex;gap:8px"><input class="field-input" id="novo-motivo-cancelamento" placeholder="Ex: Cliente alterou o projeto"/>'+
+        '<button type="button" class="btn btn-primary" onclick="addMotivoCancelamento()">Adicionar</button></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">Remover um motivo daqui não altera os cancelamentos já registrados com ele — o histórico continua mostrando o motivo original.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal(); renderScreen();">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function addMotivoCancelamento(){
+  const input = document.getElementById("novo-motivo-cancelamento");
+  const val = input ? input.value.trim() : "";
+  if(!val) return;
+  if(STATE.motivosCancelamento.indexOf(val)===-1){
+    STATE.motivosCancelamento.push(val);
+    const ok = await configSet("motivos_cancelamento", STATE.motivosCancelamento);
+    if(!ok){ STATE.motivosCancelamento.pop(); openMotivosCancelamentoModal(); return; }
+    showToast("success","Motivo cadastrado.");
+  }
+  openMotivosCancelamentoModal();
+}
+async function removeMotivoCancelamento(idx){
+  const removido = STATE.motivosCancelamento[idx];
+  STATE.motivosCancelamento.splice(idx,1);
+  const ok = await configSet("motivos_cancelamento", STATE.motivosCancelamento);
+  if(!ok){ STATE.motivosCancelamento.splice(idx,0,removido); }
+  openMotivosCancelamentoModal();
+}
+
+/* ---- Tela de cancelamento, aberta pelo botão da tela de Lançamentos ---- */
+function openCancelarPedidoModal(pedidoId, motivoSel, obsAtual){
+  const p = STATE.pedidos.find(function(x){ return x.id===pedidoId; });
+  if(!p) return;
+  const pre = isPedidoPreProducao(p);
+  /* O que de fato foi baixado deste pedido: em Pré-produção o mapa vem vazio. */
+  const consumo = Object.prototype.hasOwnProperty.call(_consumoAplicado, p.id)
+    ? _consumoAplicado[p.id]
+    : computeEffectiveConsumption(p);
+  const idsConsumo = Object.keys(consumo||{});
+  const linhasConsumo = idsConsumo.map(function(id){
+    const m = STATE.materiais.find(function(x){ return x.id===id; });
+    return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:2px 0">'+
+      '<span>'+(m?escapeHtml(m.nome):"?")+'</span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.green+';white-space:nowrap">+'+fmtNum(consumo[id])+' '+(m?m.unidade:"")+'</span>'+
+    '</div>';
+  }).join("");
+  const avisoEstoque = idsConsumo.length>0
+    ? '<div style="border:1px solid '+COLORS.green+'55;background:'+COLORS.green+'12;border-radius:8px;padding:10px 12px;margin:14px 0;font-size:12.5px;line-height:1.5">'+
+        '<strong style="color:'+COLORS.green+'">A matéria-prima volta para o estoque</strong><div style="margin-top:6px">'+linhasConsumo+'</div></div>'
+    : '<div style="border:1px solid var(--steel-border);background:var(--panel-alt);border-radius:8px;padding:10px 12px;margin:14px 0;font-size:12.5px;line-height:1.5;color:'+COLORS.textMuted+'">'+
+        'Este pedido está '+(pre?'em <strong>Pré-produção</strong>':'sem consumo lançado')+' — nada foi baixado do estoque, então <strong>nenhum material será movimentado</strong>.</div>';
+  const opcoes = STATE.motivosCancelamento.map(function(m){
+    return '<option value="'+escapeAttr(m)+'" '+(motivoSel===m?"selected":"")+'>'+escapeHtml(m)+'</option>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>Cancelar Pedido</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.6">'+
+          '<div><strong>OP</strong> '+escapeHtml(p.op||"—")+' · <strong>Cliente</strong> '+escapeHtml(p.cliente||"—")+'</div>'+
+          '<div style="color:'+COLORS.textMuted+'">'+escapeHtml(p.material||"—")+' · '+fmtNum(p.metragem)+' m · Situação: '+escapeHtml(nomeSituacao(p.situacaoId)||"—")+'</div>'+
+        '</div>'+
+        avisoEstoque+
+        '<label class="field-label">Motivo do cancelamento *</label>'+
+        '<select class="field-select" id="cancel-motivo-select"><option value="">Selecione…</option>'+opcoes+'</select>'+
+        '<div style="margin-top:10px"><label class="field-label">Incluir novo motivo</label>'+
+          '<div style="display:flex;gap:8px">'+
+            '<input class="field-input" id="novo-motivo-cancel-inline" placeholder="Digite um motivo que não está na lista"/>'+
+            '<button type="button" class="btn btn-ghost" onclick="addMotivoCancelamentoInline(\''+pedidoId+'\')">'+icon("plus",13)+' Incluir</button>'+
+          '</div>'+
+          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:6px 0 0">O motivo incluído fica salvo para os próximos cancelamentos.</p>'+
+        '</div>'+
+        '<div style="margin-top:12px"><label class="field-label">Observação (opcional)</label>'+
+          '<textarea class="field-input" id="cancel-observacao" rows="2" placeholder="Detalhe o que aconteceu…">'+escapeHtml(obsAtual||"")+'</textarea></div>'+
+        '<div class="modal-actions">'+
+          '<button type="button" class="btn btn-ghost" onclick="closeModal()">Voltar</button>'+
+          '<button type="button" class="btn btn-primary" id="cancel-confirm-btn" onclick="confirmarCancelamentoPedido(\''+pedidoId+'\')">Confirmar Cancelamento</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* Cadastra um motivo sem sair da tela de cancelamento — preserva o que já foi digitado. */
+async function addMotivoCancelamentoInline(pedidoId){
+  const input = document.getElementById("novo-motivo-cancel-inline");
+  const val = input ? input.value.trim() : "";
+  if(!val){ showToast("info","Digite o motivo antes de incluir."); return; }
+  const obsEl = document.getElementById("cancel-observacao");
+  const obs = obsEl ? obsEl.value : "";
+  if(STATE.motivosCancelamento.indexOf(val)===-1){
+    STATE.motivosCancelamento.push(val);
+    const ok = await configSet("motivos_cancelamento", STATE.motivosCancelamento);
+    if(!ok){ STATE.motivosCancelamento.pop(); return; }
+    showToast("success","Motivo incluído.");
+  }
+  openCancelarPedidoModal(pedidoId, val, obs);
+}
+async function confirmarCancelamentoPedido(pedidoId){
+  const p = STATE.pedidos.find(function(x){ return x.id===pedidoId; });
+  if(!p) return;
+  const sel = document.getElementById("cancel-motivo-select");
+  const motivo = sel ? sel.value : "";
+  if(!motivo){ showToast("error","Escolha o motivo do cancelamento."); return; }
+  const obsEl = document.getElementById("cancel-observacao");
+  const observacao = obsEl ? obsEl.value.trim() : "";
+  const btn = document.getElementById("cancel-confirm-btn");
+  if(btn){ btn.disabled = true; btn.textContent = "Cancelando…"; }
+  const pre = isPedidoPreProducao(p);
+  const consumo = Object.assign({}, Object.prototype.hasOwnProperty.call(_consumoAplicado, p.id)
+    ? _consumoAplicado[p.id]
+    : computeEffectiveConsumption(p));
+  const devolvido = Object.keys(consumo).length>0;
+  const rec = {
+    id: novoCanceladoId(),
+    pedido: Object.assign({}, p),
+    motivo: motivo,
+    observacao: observacao,
+    canceladoEm: todayStr(),
+    canceladoEmISO: new Date().toISOString(),
+    canceladoPor: STATE.currentUserEmail || STATE.userName || "",
+    situacaoNome: nomeSituacao(p.situacaoId),
+    eraPreProducao: pre,
+    materialDevolvido: devolvido,
+    consumoDevolvido: consumo,
+    metragem: Number(p.metragem||0),
+  };
+  /* Grava o histórico ANTES de apagar o pedido: se a gravação falhar, nada se perde. */
+  const okCfg = await pushPedidoCancelado(rec);
+  if(!okCfg){
+    if(btn){ btn.disabled = false; btn.textContent = "Confirmar Cancelamento"; }
+    return;
+  }
+  const { error } = await sb.from("pedidos").delete().eq("id", p.id);
+  if(error){
+    sbErrorToast("cancelar pedido", error);
+    await removePedidoCancelado(rec.id);   // desfaz o histórico, o pedido continua ativo
+    if(btn){ btn.disabled = false; btn.textContent = "Confirmar Cancelamento"; }
+    return;
+  }
+  STATE.pedidos = STATE.pedidos.filter(function(x){ return x.id!==p.id; });
+  await adjustStock(p, null);              // devolve o que tinha sido baixado (nada, se era planejamento)
+  closeModal();
+  if(telaPermitida("pedidosCancelados")) setScreen("pedidosCancelados"); else renderScreen();
+  showToast("success", devolvido
+    ? "Pedido cancelado — matéria-prima devolvida ao estoque."
+    : "Pedido cancelado — estava só no planejamento, nenhum material foi movimentado.");
+}
+
+/* ---- Reverter: recria o pedido exatamente como estava e refaz a baixa, se houver ---- */
+function confirmReverterCancelamento(id){
+  const c = (STATE.pedidosCancelados||[]).find(function(x){ return x.id===id; });
+  if(!c) return;
+  const p = c.pedido || {};
+  const aviso = c.materialDevolvido
+    ? 'A matéria-prima que voltou ao estoque no cancelamento será <strong>baixada novamente</strong>.'
+    : 'O pedido estava em planejamento — <strong>nenhum material será movimentado</strong>.';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:460px">'+
+        '<div class="modal-header"><h3>Reverter cancelamento</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:13.5px;line-height:1.55;margin:0">O pedido <strong>OP '+escapeHtml(p.op||"—")+'</strong> ('+escapeHtml(p.cliente||"—")+' · '+fmtNum(p.metragem)+' m) volta para os Lançamentos com a situação e a etapa que tinha antes.</p>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';line-height:1.55;margin:10px 0 0">'+aviso+'</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Voltar</button>'+
+        '<button type="button" class="btn btn-primary" id="reverter-cancel-btn" onclick="doReverterCancelamento(\''+id+'\')">Reverter</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function doReverterCancelamento(id){
+  const c = (STATE.pedidosCancelados||[]).find(function(x){ return x.id===id; });
+  if(!c) return;
+  const btn = document.getElementById("reverter-cancel-btn");
+  if(btn){ btn.disabled = true; btn.textContent = "Revertendo…"; }
+  const snap = c.pedido || {};
+  const { data:row, error } = await sb.from("pedidos").insert(pedidoToRow(snap)).select().single();
+  if(error){
+    sbErrorToast("reverter cancelamento", error);
+    if(btn){ btn.disabled = false; btn.textContent = "Reverter"; }
+    return;
+  }
+  const novo = mapPedidoFromRow(row);
+  STATE.pedidos = [novo, ...STATE.pedidos];
+  await adjustStock(null, novo);   // rebaixa o consumo só se o pedido não estiver em Pré-produção
+  const ok = await removePedidoCancelado(id);
+  closeModal();
+  renderScreen();
+  if(!ok){
+    showToast("error","Pedido restaurado, mas o registro de cancelamento não saiu da lista. Atualize a página.");
+    return;
+  }
+  showToast("success", c.materialDevolvido
+    ? "Pedido restaurado — matéria-prima baixada novamente do estoque."
+    : "Pedido restaurado nos Lançamentos.");
+}
+/* Exclusão definitiva do registro histórico. Não recria o pedido nem mexe em estoque. */
+function confirmExcluirCancelado(id){
+  const c = (STATE.pedidosCancelados||[]).find(function(x){ return x.id===id; });
+  if(!c) return;
+  const p = c.pedido || {};
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Excluir do histórico</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:13.5px;line-height:1.55;margin:0">O registro de cancelamento da <strong>OP '+escapeHtml(p.op||"—")+'</strong> some da lista e dos gráficos, e não poderá mais ser revertido. O estoque não é alterado.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Voltar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="doExcluirCancelado(\''+id+'\')">Excluir</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function doExcluirCancelado(id){
+  const ok = await removePedidoCancelado(id);
+  closeModal();
+  renderScreen();
+  if(ok) showToast("info","Registro removido do histórico.");
+}
+function openDetalheCanceladoModal(id){
+  const c = (STATE.pedidosCancelados||[]).find(function(x){ return x.id===id; });
+  if(!c) return;
+  const p = c.pedido || {};
+  const nomeMat = function(mid){ const m = STATE.materiais.find(function(x){ return x.id===mid; }); return m ? m.nome : "—"; };
+  const unidMat = function(mid){ const m = STATE.materiais.find(function(x){ return x.id===mid; }); return m ? m.unidade : ""; };
+  const devolucao = Object.keys(c.consumoDevolvido||{}).map(function(mid){
+    return '<div style="display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:2px 0">'+
+      '<span>'+escapeHtml(nomeMat(mid))+'</span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.green+'">+'+fmtNum(c.consumoDevolvido[mid])+' '+unidMat(mid)+'</span></div>';
+  }).join("") || '<span style="font-size:12.5px;color:'+COLORS.textMuted+'">Nenhum material foi movimentado (pedido em planejamento).</span>';
+  const linha = function(rot, val){
+    return '<div style="display:flex;justify-content:space-between;gap:12px;padding:5px 0;border-bottom:1px solid var(--steel-border);font-size:12.5px">'+
+      '<span style="color:'+COLORS.textMuted+'">'+rot+'</span><span style="text-align:right">'+val+'</span></div>';
+  };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>Pedido Cancelado — OP '+escapeHtml(p.op||"—")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        linha("Cliente", escapeHtml(p.cliente||"—"))+
+        linha("Produto", escapeHtml(p.material||"—"))+
+        linha("Cor Sup. / Inf.", escapeHtml(nomeMat(p.corSupId))+" / "+escapeHtml(nomeMat(p.corInfId)))+
+        linha("EPS", escapeHtml(nomeMat(p.epsId)))+
+        linha("Metragem", '<span style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(p.metragem)+' m</span>')+
+        linha("Data programada", fmtDateBR(p.dataProg))+
+        linha("Situação no cancelamento", escapeHtml(c.situacaoNome||"—"))+
+        linha("Etapa", escapeHtml(STAGE_DEFS[p.etapaAtual] ? STAGE_DEFS[p.etapaAtual].short : (p.etapaAtual||"—")))+
+        linha("Motivo", '<strong>'+escapeHtml(c.motivo||"—")+'</strong>')+
+        linha("Cancelado em", fmtDateBR(c.canceladoEm))+
+        linha("Cancelado por", escapeHtml(c.canceladoPor||"—"))+
+        '<div style="margin-top:14px"><div class="field-label">Observação</div>'+
+          '<p style="font-size:12.5px;line-height:1.55;margin:4px 0 0">'+(c.observacao?escapeHtml(c.observacao):'<span style="color:'+COLORS.textMuted+'">—</span>')+'</p></div>'+
+        '<div style="margin-top:14px"><div class="field-label">Material devolvido ao estoque</div>'+
+          '<div style="margin-top:4px">'+devolucao+'</div></div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="confirmReverterCancelamento(\''+id+'\')">'+icon("undo",14)+' Reverter</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+
+/* ---- Tela: lista, caixas de totais e filtros ---- */
+function updateCanceladosFiltro(key, val){ STATE.canceladosFiltro[key]=val; renderScreen(); }
+function clearCanceladosFiltro(){ STATE.canceladosFiltro = {mes:"",ano:"",motivo:"",cliente:"",op:""}; renderScreen(); }
+function filtrarCancelados(){
+  const f = STATE.canceladosFiltro;
+  return (STATE.pedidosCancelados||[]).filter(function(c){
+    const d = c.canceladoEm||"";
+    if(f.ano && d.slice(0,4)!==f.ano) return false;
+    if(f.mes && d.slice(5,7)!==f.mes) return false;
+    if(f.motivo && c.motivo!==f.motivo) return false;
+    const p = c.pedido||{};
+    if(f.cliente && !(p.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
+    if(f.op && !(p.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
+    return true;
+  }).sort(function(a,b){
+    return (b.canceladoEmISO||b.canceladoEm||"").localeCompare(a.canceladoEmISO||a.canceladoEm||"");
+  });
+}
+function renderPedidosCanceladosScreen(){
+  const f = STATE.canceladosFiltro;
+  const lista = filtrarCancelados();
+  const metragemCancelada = lista.reduce(function(s,c){ return s+Number(c.metragem!=null ? c.metragem : (c.pedido||{}).metragem||0); }, 0);
+  const comDevolucao = lista.filter(function(c){ return c.materialDevolvido; }).length;
+  const admin = isCurrentUserAdmin();
+  const nomeMat = function(mid){ const m = STATE.materiais.find(function(x){ return x.id===mid; }); return m ? m.nome : null; };
+
+  const rows = lista.map(function(c){
+    const p = c.pedido||{};
+    const badge = c.materialDevolvido
+      ? '<span style="font-size:9.5px;font-weight:700;color:'+COLORS.green+';background:'+COLORS.green+'18;border:1px solid '+COLORS.green+'55;border-radius:10px;padding:2px 8px;white-space:nowrap">DEVOLVIDO</span>'
+      : '<span style="font-size:9.5px;font-weight:700;color:'+COLORS.textMuted+';background:var(--panel-alt);border:1px solid var(--steel-border);border-radius:10px;padding:2px 8px;white-space:nowrap">PLANEJAMENTO</span>';
+    const excluirBtn = admin
+      ? '<button class="icon-btn" title="Excluir do histórico" onclick="confirmExcluirCancelado(\''+c.id+'\')">'+icon("trash",13)+'</button>'
+      : '';
+    return '<tr>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+fmtDateBR(c.canceladoEm)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+'</td>'+
+      '<td>'+escapeHtml(p.cliente||"—")+'</td>'+
+      '<td style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeAttr(p.material||"")+'">'+escapeHtml(p.material||"—")+'</td>'+
+      '<td>'+coilSwatchHtml(nomeMat(p.corSupId))+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtNum(p.metragem)+' m</td>'+
+      '<td>'+escapeHtml(c.motivo||"—")+'</td>'+
+      '<td>'+badge+'</td>'+
+      '<td class="no-print"><div style="display:flex;gap:6px;justify-content:flex-end">'+
+        '<button class="icon-btn" title="Ver detalhes" onclick="openDetalheCanceladoModal(\''+c.id+'\')">'+icon("eye",13)+'</button>'+
+        '<button class="icon-btn" title="Reverter — recria o pedido nos Lançamentos" onclick="confirmReverterCancelamento(\''+c.id+'\')">'+icon("undo",13)+'</button>'+
+        excluirBtn+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+  const table = lista.length===0
+    ? emptyStateHtml("Nenhum pedido cancelado com os filtros atuais.")
+    : '<table class="pcp-table"><thead><tr><th>Cancelado em</th><th>OP</th><th>Cliente</th><th>Produto</th><th>Cor Sup.</th><th>Metragem</th><th>Motivo</th><th>Estoque</th><th class="no-print" style="width:110px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+
+  const motivosUsados = {};
+  (STATE.pedidosCancelados||[]).forEach(function(c){ if(c.motivo) motivosUsados[c.motivo] = true; });
+  STATE.motivosCancelamento.forEach(function(m){ motivosUsados[m] = true; });
+
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("xCircle","Pedidos Cancelados","Histórico dos pedidos cancelados, com devolução de matéria-prima e opção de reverter",
+      '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+        '<button class="btn btn-ghost" onclick="setScreen(\'pedidos\')">'+icon("chevronLeft",14)+' Voltar aos Lançamentos</button>'+
+        '<button class="btn btn-ghost" onclick="openMotivosCancelamentoModal()">'+icon("settings",14)+' Motivos</button>'+
+        '<button class="btn btn-primary" onclick="exportarCanceladosPdf()">'+icon("printer",14)+' Gerar PDF</button>'+
+      '</div>')+
+    '<div class="stat-row">'+
+      statCardHtml("Pedidos Cancelados", lista.length, "xCircle", lista.length?COLORS.red:COLORS.textMuted)+
+      statCardHtml("Metragem Cancelada", fmtNumCard(metragemCancelada)+" m", "package", COLORS.red)+
+      statCardHtml("Com Material Devolvido", comDevolucao, "undo", COLORS.green)+
+      statCardHtml("Só no Planejamento", lista.length-comDevolucao, "calendar", COLORS.textMuted)+
+    '</div>'+
+    '<div class="pcp-card filter-bar">'+
+      '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updateCanceladosFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+      '<div style="width:120px"><label class="field-label">Ano</label><select class="field-select" onchange="updateCanceladosFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
+        anosCancelamentoDisponiveis().map(function(a){ return '<option value="'+a+'" '+(f.ano===a?"selected":"")+'>'+a+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:190px"><label class="field-label">Motivo</label><select class="field-select" onchange="updateCanceladosFiltro(\'motivo\', this.value)"><option value="">Todos</option>'+
+        Object.keys(motivosUsados).sort().map(function(m){ return '<option value="'+escapeAttr(m)+'" '+(f.motivo===m?"selected":"")+'>'+escapeHtml(m)+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:170px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updateCanceladosFiltro(\'cliente\', this.value)"/></div>'+
+      '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateCanceladosFiltro(\'op\', this.value)"/></div>'+
+      '<button class="btn btn-ghost" onclick="clearCanceladosFiltro()">Limpar filtros</button>'+
+    '</div>'+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+function canceladosExportLinhas(){
+  return filtrarCancelados().map(function(c){
+    const p = c.pedido||{};
+    const nome = function(mid){ const m = STATE.materiais.find(function(x){ return x.id===mid; }); return m ? m.nome : "—"; };
+    return [
+      fmtDateBR(c.canceladoEm), p.op||"—", p.cliente||"—", p.material||"—",
+      nome(p.corSupId), nome(p.corInfId), fmtNum(p.metragem)+" m",
+      c.motivo||"—", c.situacaoNome||"—",
+      c.materialDevolvido ? "Devolvido" : "Planejamento",
+      c.observacao||"—",
+    ];
+  });
+}
+const CANCELADOS_EXPORT_HEAD = ["Cancelado em","OP","Cliente","Produto","Cor Sup.","Cor Inf.","Metragem","Motivo","Situação","Estoque","Observação"];
+function exportarCanceladosExcel(){
+  const body = canceladosExportLinhas();
+  if(body.length===0){ showToast("info","Nenhum pedido cancelado pra exportar com os filtros atuais."); return; }
+  baixarCsv("pedidos-cancelados-"+todayStr()+".csv", CANCELADOS_EXPORT_HEAD, body);
+}
+function exportarCanceladosPdf(){
+  const body = canceladosExportLinhas();
+  if(body.length===0){ showToast("info","Nenhum pedido cancelado pra exportar com os filtros atuais."); return; }
+  const metragem = filtrarCancelados().reduce(function(s,c){ return s+Number(c.metragem||0); }, 0);
+  gerarPdfTabela("ELEVE — Pedidos Cancelados",
+    "Gerado em "+fmtDateBR(todayStr())+" · "+body.length+" pedido(s) · "+fmtNum(metragem)+" m cancelados",
+    CANCELADOS_EXPORT_HEAD, body, "landscape");
+}
+/* ---- Séries usadas pelos gráficos do dashboard ---- */
+function canceladosPorMes(ano){
+  const contagem = new Array(12).fill(0);
+  const metragem = new Array(12).fill(0);
+  (STATE.pedidosCancelados||[]).forEach(function(c){
+    const d = c.canceladoEm||"";
+    if(d.slice(0,4)!==String(ano)) return;
+    const idx = parseInt(d.slice(5,7),10)-1;
+    if(idx<0 || idx>11) return;
+    contagem[idx] += 1;
+    metragem[idx] += Number(c.metragem||0);
+  });
+  return {contagem:contagem, metragem:metragem};
+}
+function canceladosPorMotivo(f){
+  const mapa = {};
+  (STATE.pedidosCancelados||[]).forEach(function(c){
+    if(f && !matchesDateFilters(c.canceladoEm, f)) return;
+    const k = c.motivo || "Sem motivo";
+    mapa[k] = (mapa[k]||0) + 1;
+  });
+  return Object.keys(mapa).map(function(k){ return {label:k, value:mapa[k]}; })
+    .sort(function(a,b){ return b.value-a.value; });
 }
 
 /* ============================== PROGRAMAÇÃO POR ETAPA (Perfilar / Pintura / Colagem / Entrega) ============================== */
@@ -4901,6 +5379,37 @@ function renderDashboardScreen(){
       '<div class="pcp-card"><div class="preview-title">Produção por Cidade (m)</div>'+categoryBarChartHtml(cidadeItems, COLORS.brand)+'</div>'+
       '<div class="pcp-card"><div class="preview-title">Quantidade por Cor — Bobinas (m)</div>'+categoryBarChartHtml(corItems, COLORS.green)+'</div>'+
       '<div class="pcp-card"><div class="preview-title">Quantidade por Tipo de EPS (m)</div>'+categoryBarChartHtml(epsItems, "#C98A00")+'</div>'+
+    '</div>'+
+    canceladosDashboardHtml(f);
+}
+/* Bloco de cancelamentos do dashboard: um gráfico de pedidos cancelados mês a mês
+   (ano inteiro, para a comparação fazer sentido) e outro com a distribuição dos motivos,
+   este sim respeitando o período escolhido nos filtros da tela. */
+function canceladosDashboardHtml(f){
+  const anoGrafico = f.ano || (f.dIni ? f.dIni.slice(0,4) : "") || (f.dia ? f.dia.slice(0,4) : "") || String(new Date().getFullYear());
+  const serie = canceladosPorMes(anoGrafico);
+  const mesItems = MESES.map(function(nome,i){ return {label:nome.slice(0,3), value:serie.contagem[i]}; });
+  const totalAno = serie.contagem.reduce(function(s,v){ return s+v; }, 0);
+  const metragemAno = serie.metragem.reduce(function(s,v){ return s+v; }, 0);
+  const motivoItems = canceladosPorMotivo(f);
+  const totalMotivos = motivoItems.reduce(function(s,i){ return s+i.value; }, 0);
+  const vazioAno = totalAno===0
+    ? emptyStateHtml("Nenhum pedido cancelado em "+anoGrafico+".")
+    : categoryBarChartHtml(mesItems, COLORS.red, "pedido(s)", true);
+  const vazioMotivos = motivoItems.length===0
+    ? emptyStateHtml("Nenhum pedido cancelado no período selecionado.")
+    : categoryBarChartHtml(motivoItems, "#C98A00", "pedido(s)", true);
+  return '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px,1fr));gap:16px;margin-top:16px">'+
+      '<div class="pcp-card">'+
+        '<div class="preview-title">Pedidos Cancelados por Mês — '+escapeHtml(String(anoGrafico))+'</div>'+
+        vazioAno+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+totalAno+' pedido(s) · '+fmtNumCard(metragemAno)+' m cancelados no ano. O gráfico mostra o ano inteiro, independente do filtro de mês.</div>'+
+      '</div>'+
+      '<div class="pcp-card">'+
+        '<div class="preview-title">Motivos de Cancelamento</div>'+
+        vazioMotivos+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+totalMotivos+' pedido(s) cancelado(s) no período dos filtros acima.</div>'+
+      '</div>'+
     '</div>';
 }
 
@@ -6836,6 +7345,7 @@ const NAV_GROUPS = [
     {id:"prog-colagem", label:"Prog. Coladeira", icon:"layers"},
     {id:"prog-entrega", label:"Prog. Entregas", icon:"truck"},
     {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
+    {id:"pedidosCancelados", label:"Pedidos Cancelados", icon:"xCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
     {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
     {id:"metasCalendario", label:"Metas por Dia", icon:"target"},
@@ -7094,10 +7604,12 @@ function coletarDadosBackup(){
       transferencias: STATE.transferencias,
       fatorConversaoHistorico: STATE.fatorConversaoHistorico,
       materiaisAvulsos: STATE.materiaisAvulsos,
+      pedidosCancelados: STATE.pedidosCancelados,
     },
     configuracoes: {
       materialTipos: STATE.materialTipos,
       motivosPerda: STATE.motivosPerda,
+      motivosCancelamento: STATE.motivosCancelamento,
       tipoOptions: STATE.tipoOptions,
       cumeeiraOptions: STATE.cumeeiraOptions,
       metasPerfilar: (STATE.stageState.perfilar||{}).metas||[],
@@ -7278,6 +7790,7 @@ function renderScreen(){
   else if(STATE.screen==="prog-colagem") renderStageScreen("colagem");
   else if(STATE.screen==="prog-entrega") renderStageScreen("entrega");
   else if(STATE.screen==="entregues") renderEntreguesScreen();
+  else if(STATE.screen==="pedidosCancelados") renderPedidosCanceladosScreen();
   else if(STATE.screen==="calendario") renderCalendarioScreen();
   else if(STATE.screen==="acompanhamento") renderAcompanhamentoScreen();
   else if(STATE.screen==="metasCalendario") renderMetasCalendarioScreen();

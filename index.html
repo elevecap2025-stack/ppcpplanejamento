@@ -99,6 +99,17 @@ button,input,select{font-family:'Inter',sans-serif;}
 .icon-btn.atencao-on{color:#C98A00;border-color:#C98A00;}
 .icon-btn.retirada-on{color:var(--brand);border-color:var(--brand);}
 .retirada-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.03em;background:var(--brand)22;color:var(--brand);border:1px solid var(--brand)55;white-space:nowrap;margin-right:6px;vertical-align:middle;}
+/* ---- Item 3: cluster compacto de Lead Time no Dashboard (Média/Mínimo/Máximo/Retirada) ---- */
+.lead-time-card{padding:12px 16px;margin-bottom:22px;}
+.lead-time-card-header{display:flex;align-items:center;gap:8px;margin-bottom:10px;}
+.lead-time-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(108px,1fr));gap:8px;}
+.lead-time-item{border:1px solid var(--steel-border);border-radius:8px;padding:7px 10px;cursor:pointer;transition:border-color .15s,background .15s;background:var(--panel-alt);}
+.lead-time-item:hover{border-color:#C98A00;}
+.lead-time-item.active{border-color:#C98A00;background:#C98A0015;}
+.lead-time-item-label{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-muted);font-weight:700;}
+.lead-time-item-value{font-size:16px;font-weight:700;font-family:'IBM Plex Mono',monospace;margin-top:2px;white-space:nowrap;}
+.lead-time-item-sub{font-size:10px;color:var(--text-muted);margin-top:1px;}
+.lead-time-dropdown{margin-top:12px;border-top:1px solid var(--steel-border);padding-top:10px;max-height:280px;overflow:auto;}
 
 .drag-target{transition:box-shadow .15s,border-color .15s;}
 .drag-target.drag-over{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand) inset;}
@@ -291,6 +302,16 @@ const DEFAULT_CONFIG_VALUES = {
      motorista). Guardado como lista de ids em app_config — igual ao padrão já usado para
      pedidos_cancelados — para não depender de coluna nova na tabela pedidos. */
   pedidos_retirada: [],
+  /* Data da Venda por pedido — base exclusiva do cálculo de Lead Time quando preenchida
+     (se vazia, o Lead Time cai de volta pra Data Prog.). Guardado como mapa {id: "aaaa-mm-dd"}
+     em app_config, pelo mesmo motivo de pedidos_retirada: não depende de coluna nova na
+     tabela pedidos. */
+  pedidos_data_venda: {},
+  /* Item: data real de conclusão de cada etapa (perfilar/pintura/colagem), guardada por
+     pedido — {id: {perfilar:"aaaa-mm-dd", pintura:"...", colagem:"..."}}. É o que permite o
+     velocímetro e o gráfico de Acompanhamento da Produção usarem a data em que o trabalho foi
+     de fato feito (quando a etapa foi concluída), em vez da Data Prog. (que é só o agendado). */
+  pedidos_datas_conclusao: {},
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -410,6 +431,75 @@ function movTotaisMap(){
 function movTotaisDoMaterial(materialId){
   const t = movTotaisMap()[materialId];
   return t ? {entradas:t.entradas, saidas:t.saidas} : {entradas:0, saidas:0};
+}
+/* ---- Item 4 do pedido do usuário: "dias em estoque" por material ----
+   Idade média (ponderada pela quantidade) do que está fisicamente em estoque HOJE, calculada
+   de verdade a partir do histórico real de entradas (saldo inicial na data de cadastro, notas
+   de compra, transferências recebidas, devoluções) — não um número fixo. Cada entrada vira um
+   "lote" datado; as saídas totais do material (mesma fonte que já alimenta a coluna Saídas)
+   consomem os lotes mais antigos primeiro (FIFO), que é a forma correta de fazer "os novos
+   lançamentos ajustarem pela média real": um lote novo entra com 0 dia e só pesa a média para
+   baixo na proporção da própria quantidade, sem descartar a idade dos lotes antigos que ainda
+   não foram consumidos. */
+let _diasEstoqueCache = null;
+function invalidateDiasEstoque(){ _diasEstoqueCache = null; }
+function materialDiasEstoqueMap(){
+  if(_diasEstoqueCache) return _diasEstoqueCache;
+  const lotes = {};
+  function addLote(id, data, qtd){
+    if(!id || !(qtd>0)) return;
+    if(!lotes[id]) lotes[id] = [];
+    lotes[id].push({data: data||todayStr(), qtd: qtd});
+  }
+  STATE.materiais.forEach(function(m){
+    if(Number(m.estoqueInicial||0) > 0) addLote(m.id, m.dataCadastro, Number(m.estoqueInicial));
+  });
+  STATE.notas.forEach(function(n){
+    (n.itens||[]).forEach(function(it){ addLote(it.materialId, n.data, Number(it.quantidade||0)); });
+  });
+  STATE.baixasManual.forEach(function(b){
+    const q = Number(b.quantidade||0);
+    if(q<0) addLote(b.materialId, b.data, -q); // devolução ao estoque
+  });
+  STATE.transferencias.forEach(function(t){ addLote(t.materialDestinoId, t.data, Number(t.quantidade||0)); });
+
+  const totais = movTotaisMap();
+  const hoje = new Date(todayStr()+"T00:00:00");
+  const resultado = {};
+  Object.keys(lotes).forEach(function(materialId){
+    const batches = lotes[materialId].slice().sort(function(a,b){ return (a.data||"").localeCompare(b.data||""); });
+    let saidaRestante = totais[materialId] ? totais[materialId].saidas : 0;
+    for(let i=0;i<batches.length && saidaRestante>0.0001;i++){
+      const consumir = Math.min(batches[i].qtd, saidaRestante);
+      batches[i].qtd -= consumir;
+      saidaRestante -= consumir;
+    }
+    const restantes = batches.filter(function(b){ return b.qtd>0.0001; });
+    const totalRestante = restantes.reduce(function(s,b){ return s+b.qtd; }, 0);
+    if(totalRestante<=0){ resultado[materialId] = null; return; }
+    let somaPonderada = 0;
+    restantes.forEach(function(b){
+      const dataLote = new Date((b.data||todayStr())+"T00:00:00");
+      const dias = Math.max(0, Math.round((hoje-dataLote)/86400000));
+      somaPonderada += dias*b.qtd;
+    });
+    resultado[materialId] = Math.round((somaPonderada/totalRestante)*10)/10;
+  });
+  _diasEstoqueCache = resultado;
+  return resultado;
+}
+function diasEstoqueDoMaterial(materialId){
+  const map = materialDiasEstoqueMap();
+  return Object.prototype.hasOwnProperty.call(map, materialId) ? map[materialId] : null;
+}
+/* Classificação estilo DIO (Days Inventory Outstanding), conforme a legenda pedida:
+   0–30 Excelente, 31–60 Atenção, 61–90 Alto, +90 Crítico. */
+function classificacaoDiasEstoque(dias){
+  if(dias===null || dias===undefined) return null;
+  if(dias<=30) return {cor:"#2FBF8F", label:"Excelente"};
+  if(dias<=60) return {cor:"#F2C94C", label:"Atenção"};
+  if(dias<=90) return {cor:"#F2994A", label:"Alto"};
+  return {cor:"#EB5757", label:"Crítico"};
 }
 /* Saldo inicial que FARIA a conta fechar, dado o saldo atual e os movimentos reais. */
 function saldoInicialSugerido(m){
@@ -926,9 +1016,36 @@ function sleep(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms
    lançamento do pedido na produção) e a data em que o pedido foi efetivamente entregue.
    Retorna null quando falta alguma das duas datas (pedido ainda não entregue, por exemplo),
    para que quem consome o valor decida como tratar a ausência. ---- */
+/* ---- Lead time: tempo, em dias corridos, entre a data-base do pedido e a data em que ele foi
+   efetivamente entregue. A data-base é a Data da Venda quando ela foi preenchida — é o pedido
+   do usuário: essa data é exclusiva pro cálculo de Lead Time — e cai de volta pra Data Prog.
+   (PROG) quando a Data da Venda está vazia. Guardada à parte (não é coluna da tabela pedidos,
+   ver pedidos_data_venda em app_config), pelo mesmo motivo de pedidoEhRetirada(). ---- */
+function dataVendaDoPedido(p){ return (p && STATE.pedidosDataVenda[p.id]) || ""; }
+function dataBaseLeadTime(p){ return dataVendaDoPedido(p) || (p ? (p.dataProg||"") : ""); }
+/* ---- Data real de conclusão de etapa (perfilar/pintura/colagem) ----
+   Gravada no momento em que a etapa é marcada como concluída (ver registrarDataConclusaoEtapa,
+   chamada por concludeTimer). Usada pelo velocímetro (Metas do Período) e pelo gráfico de
+   Acompanhamento da Produção pra contar a produção na data em que ela de fato aconteceu, em
+   vez da Data Prog. (que é só o agendamento). Pedidos concluídos antes dessa funcionalidade
+   existir não têm essa data guardada — nesse caso cai de volta pra Data Prog., pra não sumir
+   do histórico. */
+function dataConclusaoEtapa(p, stage){
+  const m = p && STATE.pedidosDatasConclusao[p.id];
+  return (m && m[stage]) || "";
+}
+/* base: "prog" força sempre a Data Prog. (mesmo se a etapa já tiver data de conclusão
+   registrada); qualquer outro valor (inclusive vazio/"concl") usa a data real de conclusão
+   quando existir, com fallback pra Data Prog. */
+function dataBaseProducao(p, stage, base){
+  if(base==="prog") return p.dataProg||"";
+  return dataConclusaoEtapa(p, stage) || (p.dataProg||"");
+}
 function leadTimeDias(p){
-  if(!p || !p.dataProg || !p.dataEntregue) return null;
-  const ini = new Date(p.dataProg+"T00:00:00");
+  if(!p || !p.dataEntregue) return null;
+  const base = dataBaseLeadTime(p);
+  if(!base) return null;
+  const ini = new Date(base+"T00:00:00");
   const fim = new Date(p.dataEntregue+"T00:00:00");
   if(isNaN(ini.getTime()) || isNaN(fim.getTime())) return null;
   return Math.round((fim-ini)/86400000);
@@ -936,6 +1053,78 @@ function leadTimeDias(p){
 function leadTimeLabel(dias){
   if(dias===null || dias===undefined) return "—";
   return dias+(dias===1?" dia":" dias");
+}
+/* ---- Item 3 do pedido do usuário: caixas compactas de Lead Time no Dashboard (Média, Mínimo,
+   Máximo e específico de Retirada), clicáveis para abrir a lista de pedidos por trás do número,
+   sem precisar sair da tela nem ir em Pedidos Entregues. ---- */
+function dashLeadTimeStats(f){
+  const registros = [];
+  STATE.pedidos.forEach(function(p){
+    if(p.etapaAtual!=="entregue") return;
+    if(!matchesDateFilters(p.dataEntregue||p.dataProg, f)) return;
+    const dias = leadTimeDias(p);
+    if(dias===null) return;
+    const dataVenda = dataVendaDoPedido(p);
+    registros.push({id:p.id, op:p.op||"", cliente:p.cliente||"", dataBase:dataBaseLeadTime(p), usaDataVenda:!!dataVenda, dataEntregue:p.dataEntregue, dias:dias, retirada:pedidoEhRetirada(p)});
+  });
+  registros.sort(function(a,b){ return a.dias-b.dias; });
+  const retiradaRegistros = registros.filter(function(r){ return r.retirada; });
+  const media = function(arr){ return arr.length ? Math.round((arr.reduce(function(s,r){ return s+r.dias; },0)/arr.length)*10)/10 : null; };
+  return {
+    todos: registros,
+    retirada: retiradaRegistros,
+    media: media(registros),
+    minimo: registros.length ? registros[0].dias : null,
+    maximo: registros.length ? registros[registros.length-1].dias : null,
+    mediaRetirada: media(retiradaRegistros),
+    qtd: registros.length,
+    qtdRetirada: retiradaRegistros.length,
+  };
+}
+function toggleDashLeadTimeDrop(chave){
+  STATE.dashLeadTimeAberto = STATE.dashLeadTimeAberto===chave ? null : chave;
+  renderScreen();
+}
+function dashLeadTimeDropdownHtml(stats, chave){
+  const lista = chave==="retirada" ? stats.retirada : stats.todos;
+  if(!lista.length){
+    return '<div class="lead-time-dropdown no-print">'+emptyStateHtml("Nenhum pedido com lead time calculado para este filtro.")+'</div>';
+  }
+  const extremo = chave==="minimo" ? stats.minimo : (chave==="maximo" ? stats.maximo : null);
+  const linhas = lista.map(function(r){
+    const destaque = extremo!==null && r.dias===extremo;
+    return '<tr'+(destaque?' style="background:'+COLORS.brand+'15"':'')+'>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(r.op||"—")+'</td>'+
+      '<td>'+(r.retirada?'<span class="retirada-badge" style="margin-right:5px">'+icon("package",10)+' RETIRA</span>':'')+escapeHtml(r.cliente||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap" title="'+(r.usaDataVenda?"Base: Data da Venda":"Base: Data Prog. (sem Data da Venda cadastrada)")+'">'+fmtDateBR(r.dataBase)+(r.usaDataVenda?' <span style="color:'+COLORS.brand+'">(venda)</span>':'')+' → '+fmtDateBR(r.dataEntregue)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700;text-align:right;white-space:nowrap">'+leadTimeLabel(r.dias)+'</td>'+
+    '</tr>';
+  }).join("");
+  return '<div class="lead-time-dropdown no-print"><table class="pcp-table" style="font-size:12px"><thead><tr>'+
+      '<th>OP</th><th>Cliente</th><th>Base → Entrega</th><th style="text-align:right">Lead Time</th>'+
+    '</tr></thead><tbody>'+linhas+'</tbody></table></div>';
+}
+function dashLeadTimeCardHtml(f){
+  const stats = dashLeadTimeStats(f);
+  const aberto = STATE.dashLeadTimeAberto;
+  const item = function(chave, label, valor, sub){
+    const ativo = aberto===chave;
+    return '<div class="lead-time-item'+(ativo?' active':'')+'" onclick="toggleDashLeadTimeDrop(\''+chave+'\')" title="Clique para ver os pedidos">'+
+      '<div class="lead-time-item-label">'+label+'</div>'+
+      '<div class="lead-time-item-value" style="color:'+(valor===null?COLORS.textMuted:"#C98A00")+'">'+leadTimeLabel(valor)+'</div>'+
+      (sub?'<div class="lead-time-item-sub">'+sub+'</div>':'')+
+    '</div>';
+  };
+  return '<div class="pcp-card lead-time-card">'+
+    '<div class="lead-time-card-header">'+icon("clock",15,"#C98A00")+'<span class="preview-title" style="margin:0">Lead Time — Data Prog. → Entrega</span></div>'+
+    '<div class="lead-time-grid">'+
+      item("media","Média", stats.media, stats.qtd+" pedido(s)")+
+      item("minimo","Mínimo", stats.minimo, "")+
+      item("maximo","Máximo", stats.maximo, "")+
+      item("retirada","Retirada", stats.mediaRetirada, stats.qtdRetirada+" pedido(s)")+
+    '</div>'+
+    (aberto ? dashLeadTimeDropdownHtml(stats, aberto) : '')+
+  '</div>';
 }
 function isStatusEmProducao(nome){ return !!nome && nome.toLowerCase().indexOf("em produ")===0; }
 function isStatusPreProducao(nome){ const n=(nome||"").toLowerCase(); return n.indexOf("pré-produ")===0 || n.indexOf("pre-produ")===0; }
@@ -1148,10 +1337,13 @@ const STATE = {
      padrão = "todos os pedidos") e por período (mesmos campos usados no resto do painel). */
   mapaFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:"",etapas:{producao:true,entrega:true,entregue:true}},
   mapaExpandido:false,
+  /* Item 3: qual caixa de Lead Time está com a lista de pedidos aberta no Dashboard —
+     null | "media" | "minimo" | "maximo" | "retirada". Só uma por vez. */
+  dashLeadTimeAberto:null,
   /* Dashboard: unidade escolhida em cada caixa de total (m = metragem, valor = R$). */
   dashUnidades:{bobinasCompradas:"m", epsComprado:"m", pedidosEntregues:"m", enviadoPintura:"m"},
   /* Período dos velocímetros de meta. Vazio = mês corrente. */
-  dashMetaFiltro:{ano:"",mes:"",dIni:"",dFim:""},
+  dashMetaFiltro:{ano:"",mes:"",dIni:"",dFim:"",base:"concl"},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,preSemanaLimite:"",ordenarPor:""},
   materiaisPdfColunas:{},
   fatorConversaoFiltro:{tipo:"",produto:""},
@@ -1170,6 +1362,11 @@ const STATE = {
   /* Item 2: ids de pedidos marcados como "cliente retira" (sem entrega por motorista) —
      ver pedidoEhRetirada()/toggleRetiradaPedido(). */
   pedidosRetiradaIds:[],
+  /* Item: {id: "aaaa-mm-dd"} — data da venda por pedido, usada como base do Lead Time. */
+  pedidosDataVenda:{},
+  /* Item: {id: {perfilar:"aaaa-mm-dd", pintura:"...", colagem:"..."}} — datas reais de
+     conclusão de cada etapa, ver dataConclusaoEtapa()/registrarDataConclusaoEtapa(). */
+  pedidosDatasConclusao:{},
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
@@ -1232,14 +1429,14 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
     configGet("permissoes_usuarios"),
-    configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"),
+    configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"), configGet("pedidos_data_venda"), configGet("pedidos_datas_conclusao"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1258,6 +1455,8 @@ async function loadAllData(){
   STATE.motivosCancelamento = Array.isArray(motivosCancelamento) && motivosCancelamento.length ? motivosCancelamento : DEFAULT_CONFIG_VALUES.motivos_cancelamento;
   STATE.pedidosCancelados = Array.isArray(pedidosCancelados) ? pedidosCancelados : [];
   STATE.pedidosRetiradaIds = Array.isArray(pedidosRetirada) ? pedidosRetirada : [];
+  STATE.pedidosDataVenda = (pedidosDataVenda && typeof pedidosDataVenda==="object") ? pedidosDataVenda : {};
+  STATE.pedidosDatasConclusao = (pedidosDatasConclusao && typeof pedidosDatasConclusao==="object") ? pedidosDatasConclusao : {};
   await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
@@ -1403,6 +1602,7 @@ const MATERIAL_SORT_ACCESSORS = {
   valorUnitario:  (m,ctx)=> Number(m.valorUnitario||0),
   valorEstoque:   (m,ctx)=> Number(m.estoque||0)*Number(m.valorUnitario||0),
   dataCadastro:   (m,ctx)=> m.dataCadastro||"",
+  diasEstoque:    (m,ctx)=> { const d = ctx.dias[m.id]; return (d===null||d===undefined) ? -1 : d; },
 };
 /* Opções do seletor "Ordenar por" — mesmo formato "chave_dir" dos cliques no cabeçalho. */
 const MATERIAL_ORDENACAO_OPCOES = [
@@ -1421,6 +1621,8 @@ const MATERIAL_ORDENACAO_OPCOES = [
   {value:"valorEstoque_asc", label:"Valor em Estoque (menor → maior)"},
   {value:"dataCadastro_desc", label:"Cadastrado em (mais recente)"},
   {value:"dataCadastro_asc", label:"Cadastrado em (mais antigo)"},
+  {value:"diasEstoque_desc", label:"Dias em Estoque (maior → menor)"},
+  {value:"diasEstoque_asc", label:"Dias em Estoque (menor → maior)"},
 ];
 /* Separa "chave_dir" em {chave, dir}. A chave pode conter "_", então corta no último. */
 function parseOrdenacao(ordenarPor){
@@ -1437,7 +1639,7 @@ function ordenarMateriais(items, ordenarPor){
   const acessor = MATERIAL_SORT_ACCESSORS[ord.chave];
   /* Contexto calculado UMA vez: preProducaoTotals() varre todos os pedidos, e
      chamá-lo dentro do comparador o executaria a cada comparação. */
-  const ctx = {mov: movTotaisMap(), pre: preProducaoTotalsEstoque()};
+  const ctx = {mov: movTotaisMap(), pre: preProducaoTotalsEstoque(), dias: materialDiasEstoqueMap()};
   const sinal = ord.dir==="desc" ? -1 : 1;
   const porNome = (a,b)=> (a.nome||"").localeCompare(b.nome||"", "pt-BR", {sensitivity:"base"});
   /* Decora-ordena-desdecora: calcula a chave de cada item uma vez só. */
@@ -2690,6 +2892,13 @@ const ENTITY_CONFIGS = {
         statCardHtml("Saldo Futuro"+sufixo, fmtNumCard(saldoFuturoMetragem)+" m", "activity", saldoFuturoMetragem<0?COLORS.red:COLORS.green)+
         statCardHtml("Materiais c/ Saldo Futuro Negativo", negativosFuturo, "alert", negativosFuturo?COLORS.red:COLORS.textMuted)+
       '</div>'+
+      '<div class="no-print" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:11.5px;color:'+COLORS.textMuted+';margin:-6px 0 14px;padding:8px 2px">'+
+        '<span style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:10px">Dias em Estoque</span>'+
+        '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#2FBF8F;display:inline-block"></span>0–30 dias · Excelente</span>'+
+        '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#F2C94C;display:inline-block"></span>31–60 dias · Atenção</span>'+
+        '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#F2994A;display:inline-block"></span>61–90 dias · Alto</span>'+
+        '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#EB5757;display:inline-block"></span>+90 dias · Crítico</span>'+
+      '</div>'+
       materialTipoTabsHtml();
     },
     /* Cabeçalho clicável: ordena pela coluna, alternando asc → desc → padrão.
@@ -2744,6 +2953,17 @@ const ENTITY_CONFIGS = {
         const t = movTotaisDoMaterial(it.id);
         const tip = "Saldo Inicial "+fmtNum(it.estoqueInicial||0)+" + Entradas "+fmtNum(t.entradas)+" − Saídas "+fmtNum(t.saidas)+" = "+fmtNum(Number(it.estoqueInicial||0)+t.entradas-t.saidas)+" "+it.unidade;
         return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+fmtNum(it.estoque)+'&nbsp;'+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
+      }},
+      {key:"diasEstoque", label:"Dias em Estoque", render:(it)=>{
+        const dias = diasEstoqueDoMaterial(it.id);
+        const cls = classificacaoDiasEstoque(dias);
+        if(dias===null || !cls) return '<span style="color:'+COLORS.textMuted+'">—</span>';
+        const tip = "Idade média ponderada do estoque atual ("+cls.label+"): entradas mais antigas ainda não consumidas pesam mais. Novos lançamentos entram com 0 dia e reduzem a média na proporção da quantidade recebida.";
+        return '<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+
+          '<span style="width:9px;height:9px;border-radius:50%;background:'+cls.cor+';flex-shrink:0;display:inline-block"></span>'+
+          '<span style="font-family:\'IBM Plex Mono\',monospace;font-weight:600">'+dias+' dia'+(dias===1?'':'s')+'</span>'+
+          '<span style="font-size:10.5px;color:'+cls.cor+'">'+cls.label+'</span>'+
+        '</span>';
       }},
       {key:"preProducao", label:"Pré-produção", render:(it)=>{
         const total = Number(preProducaoTotalsEstoque()[it.id]||0);
@@ -3472,6 +3692,16 @@ async function deletePedido(id){
   STATE.pedidos = STATE.pedidos.filter(p=>p.id!==id);
   await adjustStock(old, null);
   if(STATE.pedidosRetiradaIds.indexOf(id)!==-1) await syncRetiradaAposSalvar(id, false);
+  if(STATE.pedidosDataVenda[id]) await syncDataVendaAposSalvar(id, "");
+  if(STATE.pedidosDatasConclusao[id]){
+    const atualStore = (await configGet("pedidos_datas_conclusao")) || {};
+    if(atualStore[id]){
+      const novoStore = Object.assign({}, atualStore);
+      delete novoStore[id];
+      const ok = await configSet("pedidos_datas_conclusao", novoStore);
+      if(ok) STATE.pedidosDatasConclusao = novoStore;
+    }
+  }
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -3554,6 +3784,11 @@ async function concludeTimer(id){
     const stDef = STAGE_DEFS[to];
     showToast("success", (STAGE_DEFS[fromStage]?STAGE_DEFS[fromStage].short:fromStage)+" concluída — pedido movido para "+(stDef?stDef.label:to)+".");
   }
+  /* fromStage aqui é sempre perfilar/pintura/colagem, nunca "entrega": quando to==="entregue"
+     é porque fromStage já ERA "entrega", e essa etapa tem sua própria data (dataEntregue). */
+  if(fromStage==="perfilar" || fromStage==="pintura" || fromStage==="colagem"){
+    await registrarDataConclusaoEtapa(id, fromStage, todayStr());
+  }
   await adjustStock(oldSnapshot, p);
   renderScreen();
 }
@@ -3591,6 +3826,11 @@ async function voltarEtapaAnterior(id){
   p.producaoStatus = patch.producao_status;
   p.producaoStartedAt = null;
   p.producaoElapsedMs = 0;
+  /* etapaAnterior deixa de estar concluída ao voltar pra ela — limpa a data registrada,
+     pra ganhar uma data nova e correta quando for concluída de novo. */
+  if(etapaAnterior==="perfilar" || etapaAnterior==="pintura" || etapaAnterior==="colagem"){
+    await limparDataConclusaoEtapa(id, etapaAnterior);
+  }
   await adjustStock(oldSnapshot, p);
   renderScreen();
   showToast("info","Pedido retornado para "+(STAGE_DEFS[etapaAnterior]?STAGE_DEFS[etapaAnterior].label:etapaAnterior)+".");
@@ -3775,6 +4015,7 @@ function uniqueClientNames(){
 function openPedidoModal(mode, id){
   const p = mode==="edit" ? STATE.pedidos.find(x=>x.id===id) : null;
   const f = p || {tipo:"",cliente:"",op:"",dataEntrega:"",dataProg:"",ligacao:"",situacaoId:"",material:"",cumeeira:"-",corSupId:"",corInfId:"",metragem:"",epsId:"",cidadeId:"",equipamentoId:"",temPintura:false,temColagem:false};
+  const dataVendaAtual = dataVendaDoPedido(p);
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
   const epsMats = STATE.materiais.filter(m=>m.tipo==="EPS");
   const clientNames = uniqueClientNames();
@@ -3792,9 +4033,13 @@ function openPedidoModal(mode, id){
           '<div><label class="field-label">OP (nº do pedido)</label><input class="field-input" name="op" value="'+escapeAttr(f.op)+'"/></div>'+
           '<div><label class="field-label">Data de Entrega</label><input class="field-input" type="date" name="dataEntrega" value="'+(f.dataEntrega||"")+'"/></div>'+
 
-          '<div style="grid-column:1 / span 2"><label class="field-label">Cliente *</label>'+
+          '<div><label class="field-label">Cliente *</label>'+
             '<input class="field-input" list="cliente-list" name="cliente" value="'+escapeAttr(f.cliente)+'" placeholder="Nome do cliente" required/>'+
             '<datalist id="cliente-list">'+clientNames.map(n=>'<option value="'+escapeAttr(n)+'">').join("")+'</datalist></div>'+
+
+          '<div><label class="field-label">Data da Venda</label>'+
+            '<input class="field-input" type="date" name="dataVenda" value="'+(dataVendaAtual||"")+'"/>'+
+            '<div style="margin-top:6px;font-size:10.5px;color:'+COLORS.textMuted+';line-height:1.4">Base do Lead Time. Se vazia, usa a Data Prog.</div></div>'+
 
           '<div><label class="field-label">Data Prog. (PROG)</label>'+
             '<input class="field-input" type="date" id="f-dataProg" name="dataProg" value="'+(f.dataProg||"")+'" onchange="updateWeekdayPreview()"/>'+
@@ -3858,6 +4103,7 @@ async function submitPedidoForm(event, mode, id){
   data.temPintura = !!(event.target.elements["temPintura"] && event.target.elements["temPintura"].checked);
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
   const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
+  const dataVendaValor = (data.dataVenda||"").trim();
   /* Trava o botão e aguarda o salvamento (que baixa/estorna estoque) terminar antes de
      fechar o modal. Sem isso, um duplo clique ou uma segunda tentativa de salvar antes da
      primeira terminar pode disparar adjustStock() duas vezes para a mesma alteração —
@@ -3869,7 +4115,10 @@ async function submitPedidoForm(event, mode, id){
   const salvo = await savePedido(mode==="edit"?id:null, data);
   if(submitBtn) submitBtn.disabled = false;
   if(salvo===false) return false;
-  if(salvo && salvo.id) await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
+  if(salvo && salvo.id){
+    await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
+    await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
+  }
   closeModal();
   renderScreen();
   return false;
@@ -3884,6 +4133,40 @@ async function syncRetiradaAposSalvar(id, marcado){
   const nova = marcado ? (atual.indexOf(id)===-1 ? atual.concat([id]) : atual) : atual.filter(function(x){ return x!==id; });
   const ok = await configSet("pedidos_retirada", nova);
   if(ok) STATE.pedidosRetiradaIds = nova;
+}
+/* Data da Venda também mora em app_config, pelo mesmo motivo — não depende de coluna nova
+   na tabela pedidos. Só grava se o valor realmente mudou. */
+async function syncDataVendaAposSalvar(id, novaData){
+  const atualValor = STATE.pedidosDataVenda[id] || "";
+  if(atualValor===novaData) return;
+  const atualStore = (await configGet("pedidos_data_venda")) || {};
+  const novoStore = Object.assign({}, atualStore);
+  if(novaData) novoStore[id] = novaData; else delete novoStore[id];
+  const ok = await configSet("pedidos_data_venda", novoStore);
+  if(ok) STATE.pedidosDataVenda = novoStore;
+}
+/* Grava a data real em que uma etapa (perfilar/pintura/colagem) foi concluída — chamada por
+   concludeTimer() no momento em que o pedido sai dessa etapa pra próxima. Best-effort: se
+   falhar, não desfaz a conclusão da etapa em si (que já foi salva com sucesso). */
+async function registrarDataConclusaoEtapa(id, stage, data){
+  const atualStore = (await configGet("pedidos_datas_conclusao")) || {};
+  const novoStore = Object.assign({}, atualStore);
+  novoStore[id] = Object.assign({}, novoStore[id]||{}, { [stage]: data });
+  const ok = await configSet("pedidos_datas_conclusao", novoStore);
+  if(ok) STATE.pedidosDatasConclusao = novoStore;
+}
+/* Limpa a data de conclusão de uma etapa quando o pedido retorna pra ela (voltarEtapaAnterior) —
+   ela deixa de estar concluída, então a data antiga não faz mais sentido; quando for concluída
+   de novo, uma nova data é gravada. */
+async function limparDataConclusaoEtapa(id, stage){
+  const atualStore = (await configGet("pedidos_datas_conclusao")) || {};
+  if(!atualStore[id] || !atualStore[id][stage]) return;
+  const novoStore = Object.assign({}, atualStore);
+  novoStore[id] = Object.assign({}, novoStore[id]);
+  delete novoStore[id][stage];
+  if(Object.keys(novoStore[id]).length===0) delete novoStore[id];
+  const ok = await configSet("pedidos_datas_conclusao", novoStore);
+  if(ok) STATE.pedidosDatasConclusao = novoStore;
 }
 function confirmDeletePedido(id){
   const p = STATE.pedidos.find(x=>x.id===id);
@@ -5407,7 +5690,7 @@ function updateDashFiltro(key, val){ STATE.dashFiltro[key]=val; renderScreen(); 
 function clearDashFiltro(){ STATE.dashFiltro = {ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dia:"",dIni:"",dFim:""}; renderScreen(); }
 function updateDashUnidade(key, val){ STATE.dashUnidades[key]=val; renderScreen(); }
 function updateDashMetaFiltro(key, val){ STATE.dashMetaFiltro[key]=val; renderScreen(); }
-function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:"",mes:"",dIni:"",dFim:""}; renderScreen(); }
+function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:"",mes:"",dIni:"",dFim:"",base:"concl"}; renderScreen(); }
 /* Resolve o período dos velocímetros a partir do filtro.
    Prioridade: intervalo entre datas > mês+ano > ano inteiro > mês corrente. */
 function dashMetaPeriodo(){
@@ -5432,12 +5715,13 @@ function dashMetaPeriodo(){
   return {ini:ano+"-"+m+"-01", fim:ano+"-"+m+"-"+pad(ultimo), label:MESES[hoje.getMonth()]+" de "+ano};
 }
 /* Produção real de uma etapa dentro de um intervalo de datas. */
-function producaoNoPeriodo(stage, ini, fim){
+function producaoNoPeriodo(stage, ini, fim, base){
   let total = 0, pedidos = 0;
   STATE.pedidos.forEach(function(p){
-    if(!p.dataProg || p.dataProg < ini || p.dataProg > fim) return;
     if(stage==="colagem" && !p.temColagem) return;
-    if(!stageConcluido(p, stage)) return;
+    if(base!=="prog" && !stageConcluido(p, stage)) return;
+    const dataRef = dataBaseProducao(p, stage, base);
+    if(!dataRef || dataRef < ini || dataRef > fim) return;
     const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
     total += Number(p.metragem||0)*fator;
     pedidos += 1;
@@ -5577,21 +5861,18 @@ function dashTotais(f){
       else if(mat.tipo==="EPS"){ epsM+=q; epsV+=v; }
     });
   });
-  let entM=0, entV=0, entQtd=0, leadTimeSoma=0, leadTimeQtd=0;
+  let entM=0, entV=0, entQtd=0;
   STATE.pedidos.forEach(function(p){
     if(p.etapaAtual!=="entregue") return;
     /* Usa a data em que foi efetivamente entregue; se faltar, cai na programada. */
     if(!matchesDateFilters(p.dataEntregue||p.dataProg, f)) return;
     entM += Number(p.metragem||0); entV += valorMateriaisDoPedido(p); entQtd += 1;
-    const lt = leadTimeDias(p);
-    if(lt!==null){ leadTimeSoma += lt; leadTimeQtd += 1; }
   });
-  const leadTimeMedio = leadTimeQtd ? Math.round((leadTimeSoma/leadTimeQtd)*10)/10 : null;
   let pintM=0, pintV=0, pintQtd=0;
   STATE.pedidos.forEach(function(p){
     if(!p.temPintura) return;
     if(!stageConcluido(p, "pintura")) return;
-    if(!matchesDateFilters(p.dataProg, f)) return;
+    if(!matchesDateFilters(dataConclusaoEtapa(p,"pintura") || p.dataProg, f)) return;
     pintM += Number(p.metragem||0); pintV += valorMateriaisDoPedido(p); pintQtd += 1;
   });
   return {
@@ -5599,7 +5880,6 @@ function dashTotais(f){
     epsComprado:{m:r2(epsM), valor:r2(epsV)},
     pedidosEntregues:{m:r2(entM), valor:r2(entV), qtd:entQtd},
     enviadoPintura:{m:r2(pintM), valor:r2(pintV), qtd:pintQtd},
-    leadTimeMedio: leadTimeMedio, leadTimeQtd: leadTimeQtd,
   };
 }
 /* Caixa de total com alternador metro / R$. */
@@ -5623,8 +5903,13 @@ function renderDashboardScreen(){
   const anoAtual = new Date().getFullYear();
   const anos = [String(anoAtual-1), String(anoAtual), String(anoAtual+1)];
 
-  /* Só entra no dashboard o que já passou pela etapa de Perfilar (produção real, não apenas programada). */
-  const pedidosFiltrados = STATE.pedidos.filter(p=>matchesDateFilters(p.dataProg, f) && stageConcluido(p,"perfilar"));
+  /* Só entra no dashboard o que já passou pela etapa de Perfilar (produção real, não apenas
+     programada) — contado pela data em que o Perfilar foi de fato concluído, com fallback pra
+     Data Prog. em pedidos concluídos antes dessa funcionalidade existir. */
+  const pedidosFiltrados = STATE.pedidos.filter(function(p){
+    if(!stageConcluido(p,"perfilar")) return false;
+    return matchesDateFilters(dataConclusaoEtapa(p,"perfilar") || p.dataProg, f);
+  });
   const pedidosConcluidosIds = new Set(pedidosFiltrados.map(p=>p.id));
   const baixasFiltradas = getEfetivaBaixaRows().filter(r=>matchesDateFilters(r.data, f) && pedidosConcluidosIds.has(r.pedidoId));
 
@@ -5662,8 +5947,8 @@ function renderDashboardScreen(){
   /* --- Velocímetros de meta por período --- */
   const per = dashMetaPeriodo();
   const mf = STATE.dashMetaFiltro;
-  const perfilarReal = producaoNoPeriodo("perfilar", per.ini, per.fim);
-  const colagemReal  = producaoNoPeriodo("colagem",  per.ini, per.fim);
+  const perfilarReal = producaoNoPeriodo("perfilar", per.ini, per.fim, mf.base);
+  const colagemReal  = producaoNoPeriodo("colagem",  per.ini, per.fim, mf.base);
   const perfilarMetaInfo = metaNoPeriodo("perfilar", per.ini, per.fim);
   const colagemMetaInfo  = metaNoPeriodo("colagem",  per.ini, per.fim);
   const perfilarMeta = perfilarMetaInfo.total;
@@ -5684,6 +5969,10 @@ function renderDashboardScreen(){
           MESES.map((nome,i)=>'<option value="'+pad2(i+1)+'" '+(mf.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>').join("")+'</select></div>'+
         '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+mf.dIni+'" onchange="updateDashMetaFiltro(\'dIni\', this.value)"/></div>'+
         '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+mf.dFim+'" onchange="updateDashMetaFiltro(\'dFim\', this.value)"/></div>'+
+        '<div style="min-width:210px"><label class="field-label">Base do Cálculo</label><select class="field-select" onchange="updateDashMetaFiltro(\'base\', this.value)">'+
+          '<option value="prog" '+(mf.base==="prog"?"selected":"")+'>Programado (data de prog.)</option>'+
+          '<option value="concl" '+(mf.base!=="prog"?"selected":"")+'>Somente etapas concluídas</option>'+
+          '</select></div>'+
         '<button class="btn btn-ghost" onclick="clearDashMetaFiltro()">Limpar</button>'+
       '</div>'+
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">'+
@@ -5698,7 +5987,7 @@ function renderDashboardScreen(){
           '<div style="text-align:center;font-size:11px;color:'+COLORS.textMuted+';margin-top:4px">'+colagemReal.pedidos+' pedido(s) · '+colagemMetaInfo.diasUteis+' dia(s) com meta</div>'+
         '</div>'+
       '</div>'+
-      '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">O realizado conta apenas pedidos cuja etapa já foi concluída, pela data programada. Perfilar aplica o fator por tipo de produto. A meta é a soma das metas diárias do período (feriados e dias sem meta não somam) e vem de Acompanhamento da Produção. Quando o período inclui datas futuras, a meta é acumulada só até hoje, para a comparação ser justa.</p>'+
+      '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">'+(mf.base==="prog" ? "O realizado conta todo pedido programado para o período (pela Data Prog.), tenha ou não concluído a etapa ainda." : "O realizado conta pedidos cuja etapa já foi concluída, na data em que a conclusão de fato aconteceu (com fallback pra Data Prog. em pedidos concluídos antes dessa contagem existir).")+' Perfilar aplica o fator por tipo de produto. A meta é a soma das metas diárias do período (feriados e dias sem meta não somam) e vem de Acompanhamento da Produção. Quando o período inclui datas futuras, a meta é acumulada só até hoje, para a comparação ser justa.</p>'+
     '</div>';
 
   const tot = dashTotais(f);
@@ -5716,8 +6005,8 @@ function renderDashboardScreen(){
       statCardHtml("Pedidos Concluídos (Perfilar)", pedidosFiltrados.length, "dashboard")+
       statCardHtml("Metragem Total", fmtNumCard(totalMetragem)+" m", "package", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadeItems.length, "mapPin", COLORS.green)+
-      statCardHtml("Lead Time Médio", leadTimeLabel(tot.leadTimeMedio)+(tot.leadTimeQtd?' <span style="font-size:11px;color:'+COLORS.textMuted+'">('+tot.leadTimeQtd+' pedido(s))</span>':""), "clock", "#C98A00")+
     '</div>'+
+    dashLeadTimeCardHtml(f)+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
         anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
@@ -6941,13 +7230,14 @@ function producaoDiariaPorEtapa(stage){
   const dias = new Array(31).fill(0);
   const pedidosDia = new Array(31).fill(0);
   STATE.pedidos.forEach(function(p){
-    if(!p.dataProg) return;
-    if(f.ano && p.dataProg.slice(0,4)!==String(f.ano)) return;
-    if(f.mes && p.dataProg.slice(5,7)!==String(f.mes)) return;
-    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
     if(stage==="colagem" && !p.temColagem) return;
     if(f.base==="concl" && !stageConcluido(p, stage)) return;
-    const d = Number(p.dataProg.slice(8,10));
+    const dataRef = dataBaseProducao(p, stage, f.base);
+    if(!dataRef) return;
+    if(f.ano && dataRef.slice(0,4)!==String(f.ano)) return;
+    if(f.mes && dataRef.slice(5,7)!==String(f.mes)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    const d = Number(dataRef.slice(8,10));
     if(!(d>=1 && d<=31)) return;
     const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
     dias[d-1] += Number(p.metragem||0)*fator;
@@ -8143,6 +8433,7 @@ function renderSidebar(){
 }
 function renderScreen(){
   invalidateMovTotais();
+  invalidateDiasEstoque();
   _preTotalsEstoqueCache = null;
   if(STATE.screen==="dashboard") renderDashboardScreen();
   else if(STATE.screen==="pedidos") renderPedidosScreen();

@@ -97,6 +97,8 @@ button,input,select{font-family:'Inter',sans-serif;}
 .row-atencao td{background:rgba(255,193,7,0.20);-webkit-print-color-adjust:exact;print-color-adjust:exact;color-adjust:exact;}
 .row-atencao:hover td{background:rgba(255,193,7,0.34) !important;}
 .icon-btn.atencao-on{color:#C98A00;border-color:#C98A00;}
+.icon-btn.retirada-on{color:var(--brand);border-color:var(--brand);}
+.retirada-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.03em;background:var(--brand)22;color:var(--brand);border:1px solid var(--brand)55;white-space:nowrap;margin-right:6px;vertical-align:middle;}
 
 .drag-target{transition:box-shadow .15s,border-color .15s;}
 .drag-target.drag-over{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand) inset;}
@@ -174,6 +176,12 @@ button,input,select{font-family:'Inter',sans-serif;}
   .screen-fixed-body .pcp-table thead th{position:static !important;}
   #sidebar-float-btn{display:none !important;}
 
+  /* Mapa de Pedidos — item 3: altura menor pra caber melhor na página impressa/PDF, e some
+     com o controle de zoom do Leaflet, que não faz sentido no papel. */
+  #pedidos-map{height:480px !important;}
+  .leaflet-control-zoom, .leaflet-control-attribution{display:none !important;}
+  .mapa-etapa-chip{border:1px solid #999 !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+
   /* Acompanhamento da Produção — compactado para caber em 1 folha A4 */
   .acomp-print-page{display:block;}
   .acomp-print-page .chart-card{margin-bottom:6px !important;page-break-inside:avoid;break-inside:avoid;}
@@ -216,7 +224,22 @@ button,input,select{font-family:'Inter',sans-serif;}
 }
 /* ---- Campo de busca de matéria-prima (Lanç.de Pedidos) ---- */
 .avulso-material-option:hover{background:var(--row-hover);}
+/* ---- Mapa de Pedidos (Leaflet / OpenStreetMap) ---- */
+.mapa-etapa-chip{display:inline-flex;align-items:center;gap:7px;padding:8px 14px;border-radius:8px;border:1px solid var(--steel);background:var(--panel);color:var(--text-muted);font-size:12.5px;font-weight:600;cursor:pointer;transition:all .15s;}
+.mapa-etapa-chip .mapa-etapa-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0;}
+.mapa-etapa-chip.active{color:var(--text);border-color:currentColor;}
+#pedidos-map{height:560px;border-radius:10px;overflow:hidden;background:var(--panel-alt);}
+#pedidos-map .leaflet-popup-content-wrapper{background:var(--panel);color:var(--text);}
+#pedidos-map .leaflet-popup-tip{background:var(--panel);}
+.mapa-card-toolbar{display:none;align-items:center;justify-content:space-between;gap:12px;padding:12px 16px;border-bottom:1px solid var(--steel-border);flex-wrap:wrap;}
+@media screen{
+  #mapa-card.mapa-fullscreen{position:fixed !important;inset:0;z-index:300;margin:0 !important;border-radius:0;display:flex;flex-direction:column;background:var(--panel);}
+  #mapa-card.mapa-fullscreen #pedidos-map{flex:1 1 auto;height:auto !important;border-radius:0;}
+  #mapa-card.mapa-fullscreen .mapa-card-toolbar{display:flex;}
+  body.mapa-fullscreen-active{overflow:hidden;}
+}
 </style>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 </head>
 <body>
 
@@ -247,6 +270,7 @@ button,input,select{font-family:'Inter',sans-serif;}
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
 <script>
 /* ============================== SUPABASE (AUTENTICAÇÃO) ============================== */
 const SUPABASE_URL = "https://sqzabewrqhfqqwgoypyh.supabase.co";
@@ -263,6 +287,10 @@ const DEFAULT_CONFIG_VALUES = {
   motivos_perda: ["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
   motivos_cancelamento: ["Cliente desistiu","Erro de lançamento","Prazo não atendido","Pedido duplicado","Falta de matéria-prima","Outro"],
   pedidos_cancelados: [],
+  /* Item 2 do pedido do usuário: pedidos marcados como "cliente retira" (sem entrega por
+     motorista). Guardado como lista de ids em app_config — igual ao padrão já usado para
+     pedidos_cancelados — para não depender de coluna nova na tabela pedidos. */
+  pedidos_retirada: [],
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -808,6 +836,9 @@ const ICON_PATHS = {
   undo:'<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
   xCircle:'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
   eye:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
+  maximize:'<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
+  minimize:'<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
 };
 function icon(name, size, color){
   size = size || 16; color = color || "currentColor";
@@ -889,6 +920,22 @@ function matchesDateFilters(dateStr, f){
   if(f.ano && dateStr.slice(0,4)!==String(f.ano)) return false;
   if(f.mes && dateStr.slice(5,7)!==String(f.mes).padStart(2,"0")) return false;
   return true;
+}
+function sleep(ms){ return new Promise(function(resolve){ setTimeout(resolve, ms); }); }
+/* ---- Lead time (itens 2 e 3 do painel): tempo, em dias corridos, entre a Data Prog. (data de
+   lançamento do pedido na produção) e a data em que o pedido foi efetivamente entregue.
+   Retorna null quando falta alguma das duas datas (pedido ainda não entregue, por exemplo),
+   para que quem consome o valor decida como tratar a ausência. ---- */
+function leadTimeDias(p){
+  if(!p || !p.dataProg || !p.dataEntregue) return null;
+  const ini = new Date(p.dataProg+"T00:00:00");
+  const fim = new Date(p.dataEntregue+"T00:00:00");
+  if(isNaN(ini.getTime()) || isNaN(fim.getTime())) return null;
+  return Math.round((fim-ini)/86400000);
+}
+function leadTimeLabel(dias){
+  if(dias===null || dias===undefined) return "—";
+  return dias+(dias===1?" dia":" dias");
 }
 function isStatusEmProducao(nome){ return !!nome && nome.toLowerCase().indexOf("em produ")===0; }
 function isStatusPreProducao(nome){ const n=(nome||"").toLowerCase(); return n.indexOf("pré-produ")===0 || n.indexOf("pre-produ")===0; }
@@ -1066,6 +1113,22 @@ function pedidoTemAtencao(p){
   const ids = [p.corSupId, p.corInfId, p.epsId].filter(Boolean);
   return ids.some(function(id){ const m=STATE.materiais.find(function(x){return x.id===id;}); return m && m.atencao; });
 }
+/* ---- Item 2 do pedido do usuário: "cliente retira o pedido". A marcação vale para o pedido
+   inteiro, independente da etapa em que ele estiver — por isso fica guardada por id (não por
+   etapa) e o botão de alternar aparece na linha do pedido em TODAS as telas de produção
+   (Lançamentos, Prog. Perfiladeira/Pintura/Coladeira/Entregas, Pedidos Entregues), já que todas
+   elas renderizam a linha através de pedidoRowHtml(). ---- */
+function pedidoEhRetirada(p){ return !!p && STATE.pedidosRetiradaIds.indexOf(p.id)!==-1; }
+async function toggleRetiradaPedido(id){
+  const atual = (await configGet("pedidos_retirada")) || [];
+  const jaTem = atual.indexOf(id)!==-1;
+  const nova = jaTem ? atual.filter(function(x){ return x!==id; }) : atual.concat([id]);
+  const ok = await configSet("pedidos_retirada", nova);
+  if(!ok) return;
+  STATE.pedidosRetiradaIds = nova;
+  renderScreen();
+  showToast("success", jaTem ? "Marcação de retirada removida do pedido." : "Pedido marcado como retirada pelo cliente — sem necessidade de motorista.");
+}
 const STATE = {
   loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
   sidebarCollapsedGroups:{},
@@ -1077,7 +1140,14 @@ const STATE = {
   baixaManualFiltro:{materialId:"",motivo:"",dIni:"",dFim:""},
   transferenciaFiltro:{materialOrigemId:"",materialDestinoId:"",dIni:"",dFim:""},
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
-  dashFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:""},
+  /* Dashboard: por padrão sempre mostra o mês/ano atual (nunca "todos"), igual ao
+     Acompanhamento da Produção — evita abrir a tela olhando pra métricas do histórico
+     inteiro sem querer. */
+  dashFiltro:{ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dia:"",dIni:"",dFim:""},
+  /* Mapa de Pedidos: filtro por etapa (produção / em entrega / entregues, todas ligadas por
+     padrão = "todos os pedidos") e por período (mesmos campos usados no resto do painel). */
+  mapaFiltro:{ano:"",mes:"",dia:"",dIni:"",dFim:"",etapas:{producao:true,entrega:true,entregue:true}},
+  mapaExpandido:false,
   /* Dashboard: unidade escolhida em cada caixa de total (m = metragem, valor = R$). */
   dashUnidades:{bobinasCompradas:"m", epsComprado:"m", pedidosEntregues:"m", enviadoPintura:"m"},
   /* Período dos velocímetros de meta. Vazio = mês corrente. */
@@ -1097,6 +1167,9 @@ const STATE = {
      criar tabela nova no Supabase. */
   motivosCancelamento:["Cliente desistiu","Erro de lançamento","Prazo não atendido","Pedido duplicado","Falta de matéria-prima","Outro"],
   pedidosCancelados:[],
+  /* Item 2: ids de pedidos marcados como "cliente retira" (sem entrega por motorista) —
+     ver pedidoEhRetirada()/toggleRetiradaPedido(). */
+  pedidosRetiradaIds:[],
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
@@ -1159,14 +1232,14 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
     configGet("metas_dia_colagem"), configGet("metas_dia_perfilar"),
     configGet("feriados_custom"), configGet("feriados_removidos"),
     configGet("permissoes_usuarios"),
-    configGet("motivos_cancelamento"), configGet("pedidos_cancelados"),
+    configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1184,6 +1257,7 @@ async function loadAllData(){
   STATE.permissoesUsuarios = (permissoesUsuarios && typeof permissoesUsuarios==="object") ? permissoesUsuarios : {};
   STATE.motivosCancelamento = Array.isArray(motivosCancelamento) && motivosCancelamento.length ? motivosCancelamento : DEFAULT_CONFIG_VALUES.motivos_cancelamento;
   STATE.pedidosCancelados = Array.isArray(pedidosCancelados) ? pedidosCancelados : [];
+  STATE.pedidosRetiradaIds = Array.isArray(pedidosRetirada) ? pedidosRetirada : [];
   await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
@@ -3379,6 +3453,7 @@ async function savePedido(id, data){
     STATE.pedidos = STATE.pedidos.map(p=>p.id===id?updated:p);
     await adjustStock(old, updated);
     showToast("success", repositioned ? "Pedido atualizado — etapa reposicionada para "+(STAGE_DEFS[updated.etapaAtual]?STAGE_DEFS[updated.etapaAtual].label:updated.etapaAtual)+" conforme o novo fluxo." : "Pedido atualizado e estoque ajustado.");
+    return updated;
   } else {
     const base = Object.assign({etapaAtual:"perfilar", motoristaId:"", dataEntregue:"", producaoStatus:"idle", producaoElapsedMs:0, producaoStartedAt:null}, parsed);
     const { data:row, error } = await sb.from("pedidos").insert(pedidoToRow(base)).select().single();
@@ -3387,6 +3462,7 @@ async function savePedido(id, data){
     STATE.pedidos = [novo, ...STATE.pedidos];
     await adjustStock(null, novo);
     showToast("success","Pedido lançado e estoque atualizado.");
+    return novo;
   }
 }
 async function deletePedido(id){
@@ -3395,6 +3471,7 @@ async function deletePedido(id){
   if(error){ sbErrorToast("remover pedido", error); return false; }
   STATE.pedidos = STATE.pedidos.filter(p=>p.id!==id);
   await adjustStock(old, null);
+  if(STATE.pedidosRetiradaIds.indexOf(id)!==-1) await syncRetiradaAposSalvar(id, false);
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -3754,13 +3831,15 @@ function openPedidoModal(mode, id){
 
           '<div style="grid-column:1/-1;border-top:1px solid var(--steel-border);padding-top:14px">'+
             '<label class="field-label">Fluxo de Produção — etapas adicionais após Perfilar</label>'+
-            '<div style="display:flex;gap:22px;margin-top:6px">'+
+            '<div style="display:flex;gap:22px;margin-top:6px;flex-wrap:wrap">'+
               '<label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer">'+
                 '<input type="checkbox" name="temPintura" '+(f.temPintura?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> '+icon("droplet",14)+' Pintura</label>'+
               '<label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer">'+
                 '<input type="checkbox" name="temColagem" '+(f.temColagem?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> '+icon("layers",14)+' Colagem</label>'+
+              '<label style="display:flex;align-items:center;gap:7px;font-size:13.5px;cursor:pointer">'+
+                '<input type="checkbox" name="retirada" '+(pedidoEhRetirada(p)?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> '+icon("package",14)+' Cliente retira (sem motorista)</label>'+
             '</div>'+
-            '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Perfilar e Entrega são sempre obrigatórios. O pedido segue automaticamente para as etapas marcadas, nesta ordem: Perfilar → Pintura → Colagem → Entrega.</p>'+
+            '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Perfilar e Entrega são sempre obrigatórios. O pedido segue automaticamente para as etapas marcadas, nesta ordem: Perfilar → Pintura → Colagem → Entrega. "Cliente retira" só sinaliza o pedido pro PPCP em todas as telas — não pula etapas.</p>'+
           '</div>'+
 
         '</div>'+
@@ -3778,6 +3857,7 @@ async function submitPedidoForm(event, mode, id){
   const data = Object.fromEntries(fd.entries());
   data.temPintura = !!(event.target.elements["temPintura"] && event.target.elements["temPintura"].checked);
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
+  const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
   /* Trava o botão e aguarda o salvamento (que baixa/estorna estoque) terminar antes de
      fechar o modal. Sem isso, um duplo clique ou uma segunda tentativa de salvar antes da
      primeira terminar pode disparar adjustStock() duas vezes para a mesma alteração —
@@ -3786,12 +3866,24 @@ async function submitPedidoForm(event, mode, id){
      consumo é baixado do estoque real duas vezes, mesmo aparecendo só um lançamento. */
   const submitBtn = event.target.querySelector('button[type="submit"]');
   if(submitBtn) submitBtn.disabled = true;
-  const ok = await savePedido(mode==="edit"?id:null, data);
+  const salvo = await savePedido(mode==="edit"?id:null, data);
   if(submitBtn) submitBtn.disabled = false;
-  if(ok===false) return false;
+  if(salvo===false) return false;
+  if(salvo && salvo.id) await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
   closeModal();
   renderScreen();
   return false;
+}
+/* "Cliente retira" mora em app_config (não na tabela pedidos), então depois de salvar o
+   pedido em si é preciso, à parte, incluir/remover o id dele na lista — só se o valor do
+   checkbox realmente mudou, pra não gravar à toa em todo salvamento. */
+async function syncRetiradaAposSalvar(id, marcado){
+  const estaMarcado = STATE.pedidosRetiradaIds.indexOf(id)!==-1;
+  if(estaMarcado===marcado) return;
+  const atual = (await configGet("pedidos_retirada")) || [];
+  const nova = marcado ? (atual.indexOf(id)===-1 ? atual.concat([id]) : atual) : atual.filter(function(x){ return x!==id; });
+  const ok = await configSet("pedidos_retirada", nova);
+  if(ok) STATE.pedidosRetiradaIds = nova;
 }
 function confirmDeletePedido(id){
   const p = STATE.pedidos.find(x=>x.id===id);
@@ -3811,7 +3903,7 @@ const PEDIDO_COLUMNS = [
   {key:"dataProg", label:"Prog."}, {key:"cliente", label:"Cliente"}, {key:"op", label:"OP"},
   {key:"situacao", label:"Situação"}, {key:"material", label:"Material"}, {key:"corSup", label:"Cor Sup."},
   {key:"corInf", label:"Cor Inf."}, {key:"eps", label:"EPS"}, {key:"metragem", label:"Metragem"}, {key:"cidade", label:"Cidade"},
-  {key:"motorista", label:"Motorista"},
+  {key:"motorista", label:"Motorista"}, {key:"leadTime", label:"Lead Time"},
 ];
 const PEDIDO_SORT_ACCESSORS = {
   dataProg: p=>p.dataProg||"",
@@ -3825,6 +3917,7 @@ const PEDIDO_SORT_ACCESSORS = {
   metragem: p=>Number(p.metragem||0),
   cidade: p=>{ const c=STATE.cidades.find(x=>x.id===p.cidadeId); return c?c.nome.toLowerCase():""; },
   motorista: p=>{ const m=STATE.motoristas.find(x=>x.id===p.motoristaId); return m?m.nome.toLowerCase():""; },
+  leadTime: p=>{ const d=leadTimeDias(p); return d===null ? -1 : d; },
 };
 function pedidoCellHtml(key, p, opts){
   switch(key){
@@ -3837,7 +3930,7 @@ function pedidoCellHtml(key, p, opts){
         : progInner;
       return '<td>'+inner+'</td>';
     }
-    case "cliente": return '<td>'+escapeHtml(p.cliente||"—")+'</td>';
+    case "cliente": return '<td>'+(pedidoEhRetirada(p)?'<span class="retirada-badge" title="Cliente retira o pedido — não precisa de motorista">'+icon("package",10)+' RETIRA</span>':"")+escapeHtml(p.cliente||"—")+'</td>';
     case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+'</td>';
     case "situacao": {
       const inner = opts.fixedStatusLabel
@@ -3863,6 +3956,11 @@ function pedidoCellHtml(key, p, opts){
         : (m?escapeHtml(m.nome):'<span style="color:'+COLORS.textMuted+'">—</span>');
       return '<td>'+inner+'</td>';
     }
+    case "leadTime": {
+      const d = leadTimeDias(p);
+      const cor = d===null ? COLORS.textMuted : COLORS.text;
+      return '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+cor+'">'+leadTimeLabel(d)+'</td>';
+    }
   }
   return "";
 }
@@ -3877,9 +3975,10 @@ function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, h
   const classAttr = rowClasses.length ? ' class="'+rowClasses.join(" ")+'"' : '';
   const extraAction = extraActionHtml ? extraActionHtml(p) : '';
   const excluirBtn = permitirExcluir===false ? '' : '<button class="icon-btn" title="Excluir" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button>';
+  const retiradaBtn = '<button class="icon-btn'+(pedidoEhRetirada(p)?' retirada-on':'')+'" title="'+(pedidoEhRetirada(p)?'Desmarcar retirada pelo cliente':'Marcar como retirada pelo cliente (sem motorista)')+'" onclick="toggleRetiradaPedido(\''+p.id+'\')">'+icon("package",13)+'</button>';
   return '<tr'+classAttr+dragAttrs+'>'+
     cellsHtml+timerCell+
-    '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+'<button class="icon-btn" title="Editar" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button>'+excluirBtn+'</div></td>'+
+    '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+retiradaBtn+'<button class="icon-btn" title="Editar" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button>'+excluirBtn+'</div></td>'+
   '</tr>';
 }
 function setPedidosSort(campo){
@@ -4746,7 +4845,9 @@ function renderEntreguesScreen(){
     return true;
   }).sort((a,b)=> (b.dataEntregue||"").localeCompare(a.dataEntregue||""));
   const metragemTotal = entregues.reduce((s,p)=>s+Number(p.metragem||0),0);
-  const visibleCols = ["dataProg","cliente","op","material","corSup","corInf","eps","metragem","cidade","motorista"];
+  const visibleCols = ["dataProg","cliente","op","material","corSup","corInf","eps","metragem","cidade","motorista","leadTime"];
+  const leadTimes = entregues.map(p=>leadTimeDias(p)).filter(d=>d!==null);
+  const leadTimeMedio = leadTimes.length ? Math.round((leadTimes.reduce((s,d)=>s+d,0)/leadTimes.length)*10)/10 : null;
 
   document.getElementById("content").innerHTML =
     '<div class="screen-fixed"><div class="screen-fixed-head">'+
@@ -4754,6 +4855,7 @@ function renderEntreguesScreen(){
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
       statCardHtml("Metragem Total", fmtNumCard(metragemTotal)+" m", "package", COLORS.brand)+
+      statCardHtml("Lead Time Médio", leadTimeLabel(leadTimeMedio), "clock", "#C98A00")+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:170px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updateEntreguesFiltro(\'cliente\', this.value)"/></div>'+
@@ -4767,6 +4869,242 @@ function renderEntreguesScreen(){
     '</div>'+
     '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false, function(p){ return '<button class="icon-btn" title="Retornar para Programação de Entrega" onclick="confirmVoltarDeEntregue(\''+p.id+'\')">'+icon("chevronLeft",13)+'</button>'; })+'</div></div>'+
     '</div>';
+}
+
+/* ============================== MAPA DE PEDIDOS (item 1 do pedido do usuário) ==============================
+   Mostra todos os pedidos que têm cidade cadastrada num mapa (Leaflet + OpenStreetMap — gratuito,
+   sem necessidade de chave de API). Cada pedido é classificado em um de 3 grupos conforme a etapa
+   atual — Produção (perfilando/pintando/colando), Em Entrega (etapa "entrega", já programado mas
+   ainda não confirmado) e Entregues — e cada grupo pode ser ligado/desligado individualmente pelos
+   chips no topo. O filtro de período usa a mesma Data Prog. (PROG) já usada no resto do painel.
+   Como as cidades cadastradas só têm nome (sem lat/lng), as coordenadas são obtidas por
+   geocodificação gratuita (Nominatim/OpenStreetMap) e ficam em cache no localStorage do navegador,
+   para não repetir a consulta a cada visita à tela. */
+function mapaEtapaDefs(){
+  return {
+    producao: {label:"Produção",   cor:"#C98A00"},
+    entrega:  {label:"Em Entrega", cor:COLORS.brand},
+    entregue: {label:"Entregues",  cor:COLORS.green},
+  };
+}
+function pedidoGrupoMapa(p){
+  if(p.etapaAtual==="entregue") return "entregue";
+  if(p.etapaAtual==="entrega") return "entrega";
+  return "producao";
+}
+function mapaPedidosFiltrados(){
+  const f = STATE.mapaFiltro;
+  return STATE.pedidos.filter(function(p){
+    if(!p.cidadeId) return false;
+    if(!matchesDateFilters(p.dataProg, f)) return false;
+    return !!f.etapas[pedidoGrupoMapa(p)];
+  });
+}
+function updateMapaFiltro(key, val){ STATE.mapaFiltro[key] = val; renderScreen(); }
+function toggleMapaEtapa(key){ STATE.mapaFiltro.etapas[key] = !STATE.mapaFiltro.etapas[key]; renderScreen(); }
+function clearMapaFiltro(){ STATE.mapaFiltro = Object.assign({}, STATE.mapaFiltro, {ano:"",mes:"",dia:"",dIni:"",dFim:""}); renderScreen(); }
+
+/* ---- Geocodificação (nome da cidade -> lat/lng) com cache em localStorage ---- */
+const MAPA_GEOCODE_CACHE_KEY = "eleve_geocode_cache_v1";
+function mapaGeocodeCacheGet(){
+  try{ return JSON.parse(window.localStorage.getItem(MAPA_GEOCODE_CACHE_KEY) || "{}"); }catch(err){ return {}; }
+}
+function mapaGeocodeCacheSet(cache){
+  try{ window.localStorage.setItem(MAPA_GEOCODE_CACHE_KEY, JSON.stringify(cache)); }catch(err){}
+}
+async function geocodeCidade(nome){
+  const chave = String(nome||"").trim().toLowerCase();
+  if(!chave) return null;
+  const cache = mapaGeocodeCacheGet();
+  if(Object.prototype.hasOwnProperty.call(cache, chave)) return cache[chave];
+  let resultado = null;
+  try{
+    const resp = await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=br&q="+encodeURIComponent(nome+", Brasil"));
+    const dados = await resp.json();
+    if(dados && dados[0]) resultado = {lat:Number(dados[0].lat), lng:Number(dados[0].lon)};
+  }catch(err){ resultado = null; }
+  cache[chave] = resultado;
+  mapaGeocodeCacheSet(cache);
+  return resultado;
+}
+
+/* ---- Renderização do mapa Leaflet. Usa um "token" de renderização para cancelar a
+   geocodificação em andamento se o usuário mudar o filtro (ou trocar de tela) antes de terminar,
+   evitando adicionar marcadores num mapa que já foi substituído/removido. ---- */
+let mapaLeafletMap = null;
+let mapaRenderToken = 0;
+async function initMapaLeaflet(){
+  mapaRenderToken++;
+  const meuToken = mapaRenderToken;
+  const el = document.getElementById("pedidos-map");
+  if(!el) return;
+  if(typeof L === "undefined"){
+    el.innerHTML = '<div style="height:100%;display:flex;align-items:center;justify-content:center;color:'+COLORS.textMuted+';font-size:12.5px">Carregando mapa…</div>';
+    await sleep(400);
+    if(meuToken!==mapaRenderToken) return;
+    return initMapaLeaflet();
+  }
+  if(mapaLeafletMap){ try{ mapaLeafletMap.remove(); }catch(err){} mapaLeafletMap = null; }
+  el.innerHTML = "";
+  mapaLeafletMap = L.map(el, {scrollWheelZoom:true}).setView([-14.2, -51.9], 4);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom:18, attribution:"&copy; colaboradores do OpenStreetMap"
+  }).addTo(mapaLeafletMap);
+
+  const pedidosFiltrados = mapaPedidosFiltrados();
+  const porCidade = {};
+  pedidosFiltrados.forEach(function(p){ (porCidade[p.cidadeId] = porCidade[p.cidadeId] || []).push(p); });
+  const cidadeIds = Object.keys(porCidade);
+  const emptyEl = document.getElementById("mapa-empty-msg");
+  if(emptyEl) emptyEl.style.display = cidadeIds.length ? "none" : "flex";
+
+  const defs = mapaEtapaDefs();
+  const bounds = [];
+  for(let i=0;i<cidadeIds.length;i++){
+    if(meuToken!==mapaRenderToken) return;
+    const cid = cidadeIds[i];
+    const cidade = STATE.cidades.find(function(c){ return c.id===cid; });
+    if(!cidade){ continue; }
+    const coord = await geocodeCidade(cidade.nome);
+    if(meuToken!==mapaRenderToken) return;
+    if(!coord){ continue; }
+    const pedidosDaCidade = porCidade[cid];
+    const contagem = {producao:0, entrega:0, entregue:0};
+    pedidosDaCidade.forEach(function(p){ contagem[pedidoGrupoMapa(p)]++; });
+    const grupoDominante = contagem.entrega>0 ? "entrega" : (contagem.producao>0 ? "producao" : "entregue");
+    const cor = defs[grupoDominante].cor;
+    const raio = 8 + Math.min(12, pedidosDaCidade.length*1.5);
+    const marker = L.circleMarker([coord.lat, coord.lng], {radius:raio, color:cor, fillColor:cor, fillOpacity:0.7, weight:2});
+    const itensHtml = pedidosDaCidade.slice(0,10).map(function(p){
+      const st = STATE.statusOptions.find(function(s){ return s.id===p.situacaoId; });
+      const g = defs[pedidoGrupoMapa(p)];
+      return '<div style="margin-top:6px;padding-top:6px;border-top:1px solid rgba(128,128,128,.25)">'+
+        '<strong>OP '+escapeHtml(p.op||"—")+'</strong> · '+escapeHtml(p.cliente||"—")+'<br/>'+
+        '<span style="color:'+g.cor+'">'+g.label+'</span>'+(st?' · '+escapeHtml(st.nome):"")+
+      '</div>';
+    }).join("");
+    const maisHtml = pedidosDaCidade.length>10 ? '<div style="margin-top:6px;color:'+COLORS.textMuted+'">+'+(pedidosDaCidade.length-10)+' outro(s)</div>' : "";
+    marker.bindPopup('<div style="font-family:Inter,sans-serif;font-size:12.5px;max-width:250px"><strong>'+escapeHtml(cidade.nome)+'</strong> — '+pedidosDaCidade.length+' pedido(s)'+itensHtml+maisHtml+'</div>');
+    marker.addTo(mapaLeafletMap);
+    bounds.push([coord.lat, coord.lng]);
+    await sleep(200);
+  }
+  if(meuToken!==mapaRenderToken) return;
+  if(bounds.length) mapaLeafletMap.fitBounds(bounds, {padding:[30,30], maxZoom:10});
+}
+
+/* ---- Item 3 do pedido do usuário: botão de PDF na tela do Mapa, com escolha de paisagem ou
+   retrato. O app já gera PDF em outras telas simplesmente chamando window.print() (o usuário
+   escolhe "Salvar como PDF" na caixa de impressão do navegador) com uma regra @page fixa em
+   paisagem. Aqui, como a tela precisa oferecer as duas orientações, a gente injeta uma folha de
+   estilo só na hora de imprimir, sobrescrevendo aquela regra @page global — e remove essa folha
+   logo depois (evento "afterprint"), pra não afetar a impressão de nenhuma outra tela. Os
+   próprios tiles do mapa (imagens do OpenStreetMap) imprimem normalmente pelo navegador; isso é
+   diferente de "exportar" o mapa via canvas, que esbarraria em bloqueio de CORS dos tiles. */
+function printMapaComo(orientacao){
+  const antigo = document.getElementById("print-orientation-override");
+  if(antigo) antigo.remove();
+  const style = document.createElement("style");
+  style.id = "print-orientation-override";
+  style.media = "print";
+  style.textContent = "@page{ size: "+orientacao+"; margin: 8mm; }";
+  document.head.appendChild(style);
+  const limpar = function(){
+    const el = document.getElementById("print-orientation-override");
+    if(el) el.remove();
+    window.removeEventListener("afterprint", limpar);
+  };
+  window.addEventListener("afterprint", limpar);
+  window.print();
+}
+function renderMapaScreen(){
+  const f = STATE.mapaFiltro;
+  const anoAtual = new Date().getFullYear();
+  const anos = [String(anoAtual-1), String(anoAtual), String(anoAtual+1)];
+  const pedidosFiltrados = mapaPedidosFiltrados();
+  const cidadesAtendidas = new Set(pedidosFiltrados.map(function(p){ return p.cidadeId; })).size;
+  const defs = mapaEtapaDefs();
+
+  const chip = function(key){
+    const ativo = f.etapas[key];
+    const d = defs[key];
+    const qtd = STATE.pedidos.filter(function(p){ return p.cidadeId && matchesDateFilters(p.dataProg, f) && pedidoGrupoMapa(p)===key; }).length;
+    return '<button type="button" class="mapa-etapa-chip'+(ativo?" active":"")+'" style="'+(ativo?"color:"+d.cor+";border-color:"+d.cor:"")+'" onclick="toggleMapaEtapa(\''+key+'\')">'+
+      '<span class="mapa-etapa-dot" style="background:'+d.cor+'"></span>'+d.label+' ('+qtd+')'+
+    '</button>';
+  };
+
+  const acoesPdf = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+      '<button class="btn mapa-fullscreen-toggle-btn" onclick="toggleMapaFullscreen()">'+icon("maximize",14)+' Expandir Mapa</button>'+
+      '<button class="btn" onclick="printMapaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
+      '<button class="btn" onclick="printMapaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
+    '</div>';
+
+  /* Barra que só aparece dentro do mapa quando ele está expandido em tela cheia (item 1) —
+     repete os chips de etapa e os botões de PDF/recolher ali dentro, pra dar pra filtrar e
+     imprimir sem precisar sair do modo tela cheia. */
+  const toolbarExpandido = '<div class="mapa-card-toolbar no-print">'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+chip("producao")+chip("entrega")+chip("entregue")+'</div>'+
+      '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+        '<button class="btn" onclick="printMapaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
+        '<button class="btn" onclick="printMapaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
+        '<button class="btn btn-primary mapa-fullscreen-toggle-btn" onclick="toggleMapaFullscreen()">'+icon("minimize",14)+' Recolher</button>'+
+      '</div>'+
+    '</div>';
+
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("mapPin","Mapa de Pedidos","Todos os pedidos com cidade cadastrada, agrupados por etapa — clique num marcador para ver os detalhes", acoesPdf)+
+    '<div class="stat-row">'+
+      statCardHtml("Pedidos no Mapa", pedidosFiltrados.length, "truck", COLORS.brand)+
+      statCardHtml("Cidades Atendidas", cidadesAtendidas, "mapPin", COLORS.green)+
+    '</div>'+
+    '<div class="pcp-card filter-bar" style="margin-bottom:14px;gap:10px">'+
+      chip("producao")+chip("entrega")+chip("entregue")+
+    '</div>'+
+    '<div class="pcp-card filter-bar">'+
+      '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateMapaFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
+        anos.map(function(y){ return '<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updateMapaFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:150px"><label class="field-label">Dia específico</label><input class="field-input" type="date" value="'+f.dia+'" onchange="updateMapaFiltro(\'dia\', this.value)"/></div>'+
+      '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateMapaFiltro(\'dIni\', this.value)"/></div>'+
+      '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateMapaFiltro(\'dFim\', this.value)"/></div>'+
+      '<button class="btn btn-ghost" onclick="clearMapaFiltro()">Limpar filtros</button>'+
+    '</div>'+
+    '<div class="pcp-card" id="mapa-card" style="padding:0;position:relative;margin-top:14px">'+
+      toolbarExpandido+
+      '<div id="pedidos-map"></div>'+
+      '<div id="mapa-empty-msg" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;pointer-events:none;background:'+COLORS.panel+'cc">'+
+        emptyStateHtml("Nenhum pedido com cidade cadastrada para os filtros selecionados.")+
+      '</div>'+
+    '</div>'+
+    '<p class="no-print" style="font-size:11px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O período usa a Data Prog. (PROG) de cada pedido. As coordenadas das cidades são obtidas por geocodificação gratuita (OpenStreetMap/Nominatim) e ficam salvas no navegador — o primeiro carregamento pode demorar alguns segundos.</p>';
+
+  if(STATE.mapaExpandido){
+    const card = document.getElementById("mapa-card");
+    if(card) card.classList.add("mapa-fullscreen");
+    document.body.classList.add("mapa-fullscreen-active");
+  }
+  initMapaLeaflet();
+}
+/* ---- Item 1 do pedido do usuário: abrir o mapa em tela cheia, com opção de recolher, e sem
+   precisar sair da tela pra imprimir (a barra de ferramentas em tela cheia já tem os botões de
+   PDF). Usa um overlay em position:fixed (não a Fullscreen API do navegador) pra funcionar de
+   forma previsível em qualquer contexto, sem depender de permissão especial. O mapa Leaflet
+   precisa ser avisado do novo tamanho do contêiner (invalidateSize) depois da transição. ---- */
+function mapaFullscreenKeyHandler(evt){ if(evt.key==="Escape") toggleMapaFullscreen(); }
+function toggleMapaFullscreen(){
+  const card = document.getElementById("mapa-card");
+  if(!card) return;
+  STATE.mapaExpandido = !STATE.mapaExpandido;
+  card.classList.toggle("mapa-fullscreen", STATE.mapaExpandido);
+  document.body.classList.toggle("mapa-fullscreen-active", STATE.mapaExpandido);
+  document.querySelectorAll(".mapa-fullscreen-toggle-btn").forEach(function(b){
+    b.innerHTML = STATE.mapaExpandido ? (icon("minimize",14)+' Recolher') : (icon("maximize",14)+' Expandir Mapa');
+  });
+  if(STATE.mapaExpandido) window.addEventListener("keydown", mapaFullscreenKeyHandler);
+  else window.removeEventListener("keydown", mapaFullscreenKeyHandler);
+  setTimeout(function(){ if(mapaLeafletMap) mapaLeafletMap.invalidateSize(); }, 80);
 }
 
 /* ============================== BAIXA DE MATERIAIS ============================== */
@@ -5056,7 +5394,7 @@ function renderMovimentacaoScreen(){
 
 /* ============================== DASHBOARD ============================== */
 function updateDashFiltro(key, val){ STATE.dashFiltro[key]=val; renderScreen(); }
-function clearDashFiltro(){ STATE.dashFiltro = {ano:"",mes:"",dia:"",dIni:"",dFim:""}; renderScreen(); }
+function clearDashFiltro(){ STATE.dashFiltro = {ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dia:"",dIni:"",dFim:""}; renderScreen(); }
 function updateDashUnidade(key, val){ STATE.dashUnidades[key]=val; renderScreen(); }
 function updateDashMetaFiltro(key, val){ STATE.dashMetaFiltro[key]=val; renderScreen(); }
 function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:"",mes:"",dIni:"",dFim:""}; renderScreen(); }
@@ -5229,13 +5567,16 @@ function dashTotais(f){
       else if(mat.tipo==="EPS"){ epsM+=q; epsV+=v; }
     });
   });
-  let entM=0, entV=0, entQtd=0;
+  let entM=0, entV=0, entQtd=0, leadTimeSoma=0, leadTimeQtd=0;
   STATE.pedidos.forEach(function(p){
     if(p.etapaAtual!=="entregue") return;
     /* Usa a data em que foi efetivamente entregue; se faltar, cai na programada. */
     if(!matchesDateFilters(p.dataEntregue||p.dataProg, f)) return;
     entM += Number(p.metragem||0); entV += valorMateriaisDoPedido(p); entQtd += 1;
+    const lt = leadTimeDias(p);
+    if(lt!==null){ leadTimeSoma += lt; leadTimeQtd += 1; }
   });
+  const leadTimeMedio = leadTimeQtd ? Math.round((leadTimeSoma/leadTimeQtd)*10)/10 : null;
   let pintM=0, pintV=0, pintQtd=0;
   STATE.pedidos.forEach(function(p){
     if(!p.temPintura) return;
@@ -5248,6 +5589,7 @@ function dashTotais(f){
     epsComprado:{m:r2(epsM), valor:r2(epsV)},
     pedidosEntregues:{m:r2(entM), valor:r2(entV), qtd:entQtd},
     enviadoPintura:{m:r2(pintM), valor:r2(pintV), qtd:pintQtd},
+    leadTimeMedio: leadTimeMedio, leadTimeQtd: leadTimeQtd,
   };
 }
 /* Caixa de total com alternador metro / R$. */
@@ -5364,6 +5706,7 @@ function renderDashboardScreen(){
       statCardHtml("Pedidos Concluídos (Perfilar)", pedidosFiltrados.length, "dashboard")+
       statCardHtml("Metragem Total", fmtNumCard(totalMetragem)+" m", "package", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadeItems.length, "mapPin", COLORS.green)+
+      statCardHtml("Lead Time Médio", leadTimeLabel(tot.leadTimeMedio)+(tot.leadTimeQtd?' <span style="font-size:11px;color:'+COLORS.textMuted+'">('+tot.leadTimeQtd+' pedido(s))</span>':""), "clock", "#C98A00")+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
@@ -7347,6 +7690,7 @@ const NAV_GROUPS = [
     {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
     {id:"pedidosCancelados", label:"Pedidos Cancelados", icon:"xCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
+    {id:"mapa", label:"Mapa de Pedidos", icon:"mapPin"},
     {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
     {id:"metasCalendario", label:"Metas por Dia", icon:"target"},
   ]},
@@ -7734,6 +8078,13 @@ function setScreen(id){
     showToast("error","Você não tem permissão para acessar esta tela.");
     return;
   }
+  if(STATE.screen!==id && STATE.screen==="mapa" && STATE.mapaExpandido){
+    /* Sai da tela do Mapa com ele ainda expandido em tela cheia — desfaz o "trancamento" do
+       body, senão as outras telas ficam sem rolagem. */
+    STATE.mapaExpandido = false;
+    document.body.classList.remove("mapa-fullscreen-active");
+    window.removeEventListener("keydown", mapaFullscreenKeyHandler);
+  }
   if(STATE.screen!==id) STATE.screenAnterior = STATE.screen;
   STATE.screen=id;
   const groupId = findNavGroupFor(id);
@@ -7792,6 +8143,7 @@ function renderScreen(){
   else if(STATE.screen==="entregues") renderEntreguesScreen();
   else if(STATE.screen==="pedidosCancelados") renderPedidosCanceladosScreen();
   else if(STATE.screen==="calendario") renderCalendarioScreen();
+  else if(STATE.screen==="mapa") renderMapaScreen();
   else if(STATE.screen==="acompanhamento") renderAcompanhamentoScreen();
   else if(STATE.screen==="metasCalendario") renderMetasCalendarioScreen();
   else if(STATE.screen==="baixas") renderBaixasScreen();

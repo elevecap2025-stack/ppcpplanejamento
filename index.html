@@ -4016,6 +4016,9 @@ function openPedidoModal(mode, id){
   const p = mode==="edit" ? STATE.pedidos.find(x=>x.id===id) : null;
   const f = p || {tipo:"",cliente:"",op:"",dataEntrega:"",dataProg:"",ligacao:"",situacaoId:"",material:"",cumeeira:"-",corSupId:"",corInfId:"",metragem:"",epsId:"",cidadeId:"",equipamentoId:"",temPintura:false,temColagem:false};
   const dataVendaAtual = dataVendaDoPedido(p);
+  const concPerfilarAtual = dataConclusaoEtapa(p, "perfilar");
+  const concPinturaAtual = dataConclusaoEtapa(p, "pintura");
+  const concColagemAtual = dataConclusaoEtapa(p, "colagem");
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
   const epsMats = STATE.materiais.filter(m=>m.tipo==="EPS");
   const clientNames = uniqueClientNames();
@@ -4087,6 +4090,18 @@ function openPedidoModal(mode, id){
             '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Perfilar e Entrega são sempre obrigatórios. O pedido segue automaticamente para as etapas marcadas, nesta ordem: Perfilar → Pintura → Colagem → Entrega. "Cliente retira" só sinaliza o pedido pro PPCP em todas as telas — não pula etapas.</p>'+
           '</div>'+
 
+          (mode==="edit" ? (
+          '<div style="grid-column:1/-1;border-top:1px solid var(--steel-border);padding-top:14px">'+
+            '<label class="field-label">Datas Reais de Conclusão por Etapa</label>'+
+            '<div style="font-size:11px;color:'+COLORS.textMuted+';margin:2px 0 8px;line-height:1.4">É o que o velocímetro (Metas do Período) e o gráfico de Acompanhamento da Produção usam pra contar a produção no dia certo. Preenchida automaticamente quando você clica em "Concluir" na etapa — ajuste aqui se precisar corrigir. Vazia = usa a Data Prog.</div>'+
+            '<div style="display:flex;gap:16px;flex-wrap:wrap">'+
+              '<div style="min-width:170px"><label class="field-label" style="font-size:10px">Perfilar concluído em</label><input class="field-input" type="date" name="concPerfilar" value="'+(concPerfilarAtual||"")+'"/></div>'+
+              (f.temPintura ? '<div style="min-width:170px"><label class="field-label" style="font-size:10px">Pintura concluída em</label><input class="field-input" type="date" name="concPintura" value="'+(concPinturaAtual||"")+'"/></div>' : '')+
+              (f.temColagem ? '<div style="min-width:170px"><label class="field-label" style="font-size:10px">Colagem concluída em</label><input class="field-input" type="date" name="concColagem" value="'+(concColagemAtual||"")+'"/></div>' : '')+
+            '</div>'+
+          '</div>'
+          ) : '')+
+
         '</div>'+
         '<div id="stock-preview-wrap"></div>'+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="submit" class="btn btn-primary">Salvar Pedido</button></div>'+
@@ -4104,6 +4119,10 @@ async function submitPedidoForm(event, mode, id){
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
   const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
   const dataVendaValor = (data.dataVenda||"").trim();
+  const valoresConclusao = {};
+  if("concPerfilar" in data) valoresConclusao.perfilar = (data.concPerfilar||"").trim();
+  if("concPintura" in data) valoresConclusao.pintura = (data.concPintura||"").trim();
+  if("concColagem" in data) valoresConclusao.colagem = (data.concColagem||"").trim();
   /* Trava o botão e aguarda o salvamento (que baixa/estorna estoque) terminar antes de
      fechar o modal. Sem isso, um duplo clique ou uma segunda tentativa de salvar antes da
      primeira terminar pode disparar adjustStock() duas vezes para a mesma alteração —
@@ -4118,6 +4137,7 @@ async function submitPedidoForm(event, mode, id){
   if(salvo && salvo.id){
     await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
     await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
+    if(Object.keys(valoresConclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, valoresConclusao);
   }
   closeModal();
   renderScreen();
@@ -4165,6 +4185,28 @@ async function limparDataConclusaoEtapa(id, stage){
   novoStore[id] = Object.assign({}, novoStore[id]);
   delete novoStore[id][stage];
   if(Object.keys(novoStore[id]).length===0) delete novoStore[id];
+  const ok = await configSet("pedidos_datas_conclusao", novoStore);
+  if(ok) STATE.pedidosDatasConclusao = novoStore;
+}
+/* Correção manual feita pelo usuário no modal de edição do pedido (campos "Datas Reais de
+   Conclusão por Etapa") — só grava as etapas que realmente mudaram de valor, pra não bater
+   no banco à toa em todo salvamento do pedido. */
+async function syncDatasConclusaoAposSalvar(id, valores){
+  const atualStore = (await configGet("pedidos_datas_conclusao")) || {};
+  const atualPedido = atualStore[id] || {};
+  let mudou = false;
+  const novoPedido = Object.assign({}, atualPedido);
+  ["perfilar","pintura","colagem"].forEach(function(stage){
+    if(!(stage in valores)) return;
+    const novoValor = valores[stage] || "";
+    const valorAtual = atualPedido[stage] || "";
+    if(novoValor===valorAtual) return;
+    mudou = true;
+    if(novoValor) novoPedido[stage] = novoValor; else delete novoPedido[stage];
+  });
+  if(!mudou) return;
+  const novoStore = Object.assign({}, atualStore);
+  if(Object.keys(novoPedido).length) novoStore[id] = novoPedido; else delete novoStore[id];
   const ok = await configSet("pedidos_datas_conclusao", novoStore);
   if(ok) STATE.pedidosDatasConclusao = novoStore;
 }

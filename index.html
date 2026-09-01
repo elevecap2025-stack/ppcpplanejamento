@@ -5054,14 +5054,14 @@ function renderMapaScreen(){
 
   document.getElementById("content").innerHTML =
     screenHeaderHtml("mapPin","Mapa de Pedidos","Todos os pedidos com cidade cadastrada, agrupados por etapa — clique num marcador para ver os detalhes", acoesPdf)+
-    '<div class="stat-row">'+
+    '<div class="stat-row no-print">'+
       statCardHtml("Pedidos no Mapa", pedidosFiltrados.length, "truck", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadesAtendidas, "mapPin", COLORS.green)+
     '</div>'+
-    '<div class="pcp-card filter-bar" style="margin-bottom:14px;gap:10px">'+
+    '<div class="pcp-card filter-bar no-print" style="margin-bottom:14px;gap:10px">'+
       chip("producao")+chip("entrega")+chip("entregue")+
     '</div>'+
-    '<div class="pcp-card filter-bar">'+
+    '<div class="pcp-card filter-bar no-print">'+
       '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateMapaFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
         anos.map(function(y){ return '<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select></div>'+
       '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updateMapaFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
@@ -5096,6 +5096,12 @@ function mapaFullscreenKeyHandler(evt){ if(evt.key==="Escape") toggleMapaFullscr
 function toggleMapaFullscreen(){
   const card = document.getElementById("mapa-card");
   if(!card) return;
+  /* Guarda o centro/zoom atuais ANTES de mudar o tamanho do contêiner. O invalidateSize()
+     do Leaflet, sozinho, só tenta compensar a diferença de tamanho — numa mudança grande
+     (caixa pequena -> tela inteira) isso não recentraliza de verdade no que estava sendo
+     visto, daí a necessidade de guardar e reaplicar o centro manualmente. */
+  const centroAnterior = mapaLeafletMap ? mapaLeafletMap.getCenter() : null;
+  const zoomAnterior = mapaLeafletMap ? mapaLeafletMap.getZoom() : null;
   STATE.mapaExpandido = !STATE.mapaExpandido;
   card.classList.toggle("mapa-fullscreen", STATE.mapaExpandido);
   document.body.classList.toggle("mapa-fullscreen-active", STATE.mapaExpandido);
@@ -5104,7 +5110,11 @@ function toggleMapaFullscreen(){
   });
   if(STATE.mapaExpandido) window.addEventListener("keydown", mapaFullscreenKeyHandler);
   else window.removeEventListener("keydown", mapaFullscreenKeyHandler);
-  setTimeout(function(){ if(mapaLeafletMap) mapaLeafletMap.invalidateSize(); }, 80);
+  setTimeout(function(){
+    if(!mapaLeafletMap) return;
+    mapaLeafletMap.invalidateSize();
+    if(centroAnterior) mapaLeafletMap.setView(centroAnterior, zoomAnterior, {animate:false});
+  }, 80);
 }
 
 /* ============================== BAIXA DE MATERIAIS ============================== */

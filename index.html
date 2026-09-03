@@ -312,6 +312,12 @@ const DEFAULT_CONFIG_VALUES = {
      velocímetro e o gráfico de Acompanhamento da Produção usarem a data em que o trabalho foi
      de fato feito (quando a etapa foi concluída), em vez da Data Prog. (que é só o agendado). */
   pedidos_datas_conclusao: {},
+  /* Item: quando um pedido tem Cor Sup. e Cor Inf., cada lado pode rodar em uma Perfiladeira
+     diferente. equipamentoId (coluna real da tabela pedidos) continua representando a máquina
+     da Cor Sup.; a máquina da Cor Inf. e seu cronômetro próprio moram à parte, no mesmo
+     padrão de app_config já usado pros outros itens. */
+  pedidos_equipamento_inf: {},
+  pedidos_producao_inf: {},
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -1041,6 +1047,12 @@ function dataBaseProducao(p, stage, base){
   if(base==="prog") return p.dataProg||"";
   return dataConclusaoEtapa(p, stage) || (p.dataProg||"");
 }
+/* ---- Item: segunda máquina (Cor Inf.) no Perfilar ----
+   Quando o pedido tem Cor Sup. e Cor Inf., cada lado pode estar numa Perfiladeira diferente.
+   equipamentoId (coluna real) segue representando a máquina da Cor Sup.; esta função lê a
+   máquina da Cor Inf., guardada à parte (mesmo motivo de sempre: não depende de coluna nova
+   na tabela pedidos). */
+function equipamentoInfDoPedido(p){ return (p && STATE.pedidosEquipamentoInf[p.id]) || ""; }
 function leadTimeDias(p){
   if(!p || !p.dataEntregue) return null;
   const base = dataBaseLeadTime(p);
@@ -1367,6 +1379,10 @@ const STATE = {
   /* Item: {id: {perfilar:"aaaa-mm-dd", pintura:"...", colagem:"..."}} — datas reais de
      conclusão de cada etapa, ver dataConclusaoEtapa()/registrarDataConclusaoEtapa(). */
   pedidosDatasConclusao:{},
+  /* Item: {id: equipamentoId} — máquina da Cor Inf. (perfilar), e {id: {status,startedAt,elapsedMs}}
+     — cronômetro dela, independente do cronômetro principal (Cor Sup.) do próprio pedido. */
+  pedidosEquipamentoInf:{},
+  pedidosProducaoInf:{},
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
@@ -1429,7 +1445,7 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
@@ -1437,6 +1453,7 @@ async function loadAllData(){
     configGet("feriados_custom"), configGet("feriados_removidos"),
     configGet("permissoes_usuarios"),
     configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"), configGet("pedidos_data_venda"), configGet("pedidos_datas_conclusao"),
+    configGet("pedidos_equipamento_inf"), configGet("pedidos_producao_inf"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1457,6 +1474,8 @@ async function loadAllData(){
   STATE.pedidosRetiradaIds = Array.isArray(pedidosRetirada) ? pedidosRetirada : [];
   STATE.pedidosDataVenda = (pedidosDataVenda && typeof pedidosDataVenda==="object") ? pedidosDataVenda : {};
   STATE.pedidosDatasConclusao = (pedidosDatasConclusao && typeof pedidosDatasConclusao==="object") ? pedidosDatasConclusao : {};
+  STATE.pedidosEquipamentoInf = (pedidosEquipamentoInf && typeof pedidosEquipamentoInf==="object") ? pedidosEquipamentoInf : {};
+  STATE.pedidosProducaoInf = (pedidosProducaoInf && typeof pedidosProducaoInf==="object") ? pedidosProducaoInf : {};
   await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
@@ -3702,6 +3721,8 @@ async function deletePedido(id){
       if(ok) STATE.pedidosDatasConclusao = novoStore;
     }
   }
+  if(STATE.pedidosEquipamentoInf[id]) await syncEquipamentoInfAposSalvar(id, "");
+  if(STATE.pedidosProducaoInf[id]) await resetTimerInf(id);
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -3752,6 +3773,59 @@ async function pauseTimer(id){
   const { error } = await sb.from("pedidos").update({producao_status:"pausado", producao_elapsed_ms:elapsed, producao_started_at:null}).eq("id", id);
   if(error) sbErrorToast("pausar produção", error);
 }
+/* ---- Cronômetro independente da segunda máquina (Cor Inf., item do pedido do usuário) ----
+   Espelha startTimer/pauseTimer, mas guarda o estado em app_config (pedidos_producao_inf) em
+   vez de colunas da tabela pedidos, pelo mesmo motivo de sempre. Atualiza o STATE local na hora
+   (otimista) e persiste em segundo plano — se a gravação falhar, avisa mas não desfaz o that já
+   foi refletido na tela, consistente com o restante do cronômetro principal. */
+function producaoInfDoPedido(id){ return STATE.pedidosProducaoInf[id] || {status:"idle", startedAt:null, elapsedMs:0}; }
+async function startTimerInf(id){
+  const atual = producaoInfDoPedido(id);
+  if(atual.status==="concluido") return;
+  const novoEstado = {status:"rodando", startedAt:Date.now(), elapsedMs:atual.elapsedMs||0};
+  STATE.pedidosProducaoInf = Object.assign({}, STATE.pedidosProducaoInf, {[id]: novoEstado});
+  renderScreen();
+  const atualStore = (await configGet("pedidos_producao_inf")) || {};
+  const novoStore = Object.assign({}, atualStore, {[id]: novoEstado});
+  const ok = await configSet("pedidos_producao_inf", novoStore);
+  if(ok) STATE.pedidosProducaoInf = novoStore;
+}
+async function pauseTimerInf(id){
+  const atual = producaoInfDoPedido(id);
+  if(atual.status!=="rodando") return;
+  const elapsed = (atual.elapsedMs||0) + (Date.now()-(atual.startedAt||Date.now()));
+  const novoEstado = {status:"pausado", startedAt:null, elapsedMs:elapsed};
+  STATE.pedidosProducaoInf = Object.assign({}, STATE.pedidosProducaoInf, {[id]: novoEstado});
+  renderScreen();
+  const atualStore = (await configGet("pedidos_producao_inf")) || {};
+  const novoStore = Object.assign({}, atualStore, {[id]: novoEstado});
+  const ok = await configSet("pedidos_producao_inf", novoStore);
+  if(ok) STATE.pedidosProducaoInf = novoStore;
+}
+/* Chamada por concludeTimer() quando o Perfilar é concluído: congela o cronômetro da Cor Inf.
+   (some da tela porque o pedido já não está mais em "perfilar", mas o tempo fica registrado). */
+async function finalizarTimerInfNaConclusao(id){
+  const atual = STATE.pedidosProducaoInf[id];
+  if(!atual) return;
+  let elapsed = atual.elapsedMs||0;
+  if(atual.status==="rodando") elapsed += (Date.now()-(atual.startedAt||Date.now()));
+  const novoEstado = {status:"concluido", startedAt:null, elapsedMs:elapsed};
+  const atualStore = (await configGet("pedidos_producao_inf")) || {};
+  const novoStore = Object.assign({}, atualStore, {[id]: novoEstado});
+  const ok = await configSet("pedidos_producao_inf", novoStore);
+  if(ok) STATE.pedidosProducaoInf = novoStore;
+}
+/* Chamada por voltarEtapaAnterior() quando o pedido volta pra "perfilar": zera o cronômetro
+   da Cor Inf. pra começar do zero quando o Perfilar for refeito. */
+async function resetTimerInf(id){
+  if(!STATE.pedidosProducaoInf[id]) return;
+  const atualStore = (await configGet("pedidos_producao_inf")) || {};
+  if(!atualStore[id]) return;
+  const novoStore = Object.assign({}, atualStore);
+  delete novoStore[id];
+  const ok = await configSet("pedidos_producao_inf", novoStore);
+  if(ok) STATE.pedidosProducaoInf = novoStore;
+}
 async function concludeTimer(id){
   const p = STATE.pedidos.find(x=>x.id===id);
   if(!p) return;
@@ -3789,6 +3863,7 @@ async function concludeTimer(id){
   if(fromStage==="perfilar" || fromStage==="pintura" || fromStage==="colagem"){
     await registrarDataConclusaoEtapa(id, fromStage, todayStr());
   }
+  if(fromStage==="perfilar") await finalizarTimerInfNaConclusao(id);
   await adjustStock(oldSnapshot, p);
   renderScreen();
 }
@@ -3831,6 +3906,7 @@ async function voltarEtapaAnterior(id){
   if(etapaAnterior==="perfilar" || etapaAnterior==="pintura" || etapaAnterior==="colagem"){
     await limparDataConclusaoEtapa(id, etapaAnterior);
   }
+  if(etapaAnterior==="perfilar") await resetTimerInf(id);
   await adjustStock(oldSnapshot, p);
   renderScreen();
   showToast("info","Pedido retornado para "+(STAGE_DEFS[etapaAnterior]?STAGE_DEFS[etapaAnterior].label:etapaAnterior)+".");
@@ -3865,33 +3941,54 @@ async function voltarDeEntregue(id){
   renderScreen();
   showToast("info","Pedido retornado para a Programação de Entrega.");
 }
+/* Renderiza um "track" de cronômetro — o principal (Cor Sup., usa os campos do próprio pedido)
+   ou o secundário (Cor Inf., usa STATE.pedidosProducaoInf). Só o principal tem o botão de
+   concluir a etapa (checkmark): concluir é uma ação do pedido inteiro, não de uma máquina só. */
+function producaoTrackHtml(p, track){
+  const isSup = track==="sup";
+  const raw = isSup
+    ? {status:p.producaoStatus||"idle", startedAt:p.producaoStartedAt, elapsedMs:p.producaoElapsedMs||0}
+    : producaoInfDoPedido(p.id);
+  const status = raw.status||"idle";
+  const running = status==="rodando" && raw.startedAt;
+  const elapsed = (raw.elapsedMs||0) + (running ? (Date.now()-raw.startedAt) : 0);
+  const timeColor = status==="concluido" ? COLORS.green : (running ? COLORS.brand : COLORS.textMuted);
+  const spanId = isSup ? ("timer-"+p.id) : ("timer-inf-"+p.id);
+  const timeHtml = '<span id="'+spanId+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;font-weight:600;color:'+timeColor+'">'+fmtElapsed(elapsed)+'</span>';
+  const label = isSup ? '' : '<span style="font-size:9px;color:'+COLORS.textMuted+';font-weight:700;text-transform:uppercase">Inf</span>';
+  if(status==="concluido"){
+    return '<div style="display:flex;align-items:center;gap:5px">'+label+icon("checkCircle",13,COLORS.green)+timeHtml+'</div>';
+  }
+  const startFn = isSup ? "startTimer" : "startTimerInf";
+  const pauseFn = isSup ? "pauseTimer" : "pauseTimerInf";
+  const stageDef = STAGE_DEFS[p.etapaAtual] || STAGE_DEFS.perfilar;
+  const concludeBtn = isSup ? '<button type="button" class="icon-btn" title="'+stageDef.concludeLabel+'" onclick="concludeTimer(\''+p.id+'\')">'+icon("check",12)+'</button>' : '';
+  let mainBtn;
+  if(status==="rodando"){
+    mainBtn = '<button type="button" class="icon-btn" title="Pausar" onclick="'+pauseFn+'(\''+p.id+'\')">'+icon("pause",12)+'</button>';
+  } else if(status==="pausado"){
+    mainBtn = '<button type="button" class="icon-btn" title="Retomar" onclick="'+startFn+'(\''+p.id+'\')">'+icon("play",12)+'</button>';
+  } else {
+    mainBtn = '<button type="button" class="icon-btn" title="Iniciar produção" onclick="'+startFn+'(\''+p.id+'\')">'+icon("play",12)+'</button>';
+  }
+  return '<div style="display:flex;align-items:center;gap:5px">'+label+timeHtml+mainBtn+concludeBtn+'</div>';
+}
 function producaoCellHtml(p){
   const order = stageOrderFor(p);
   const idxAtual = order.indexOf(p.etapaAtual);
   const podeRetornar = idxAtual>0;
   const voltarBtn = podeRetornar ? '<button type="button" class="icon-btn" title="Retornar para '+(STAGE_DEFS[order[idxAtual-1]]?STAGE_DEFS[order[idxAtual-1]].short:"etapa anterior")+'" onclick="confirmVoltarEtapa(\''+p.id+'\')">'+icon("chevronLeft",12)+'</button>' : '';
-  const status = p.producaoStatus || "idle";
-  const running = status==="rodando" && p.producaoStartedAt;
-  const elapsed = (p.producaoElapsedMs||0) + (running ? (Date.now()-p.producaoStartedAt) : 0);
-  const timeColor = status==="concluido" ? COLORS.green : (running ? COLORS.brand : COLORS.textMuted);
-  const timeHtml = '<span id="timer-'+p.id+'" style="font-family:\'IBM Plex Mono\',monospace;font-size:11.5px;font-weight:600;color:'+timeColor+'">'+fmtElapsed(elapsed)+'</span>';
-  if(status==="concluido"){
-    return '<div style="display:flex;align-items:center;gap:6px">'+icon("checkCircle",14,COLORS.green)+timeHtml+voltarBtn+'</div>';
+  /* Item do pedido do usuário: quando o pedido tem Cor Sup. e Cor Inf. perfilando em máquinas
+     diferentes, mostra dois cronômetros/plays em vez de um — só faz sentido em "perfilar",
+     que é a única etapa onde Cor Sup./Cor Inf. rodam em equipamentos separados. */
+  const temSegundaMaquina = p.etapaAtual==="perfilar" && !!equipamentoInfDoPedido(p);
+  if(!temSegundaMaquina){
+    return '<div style="display:flex;align-items:center;gap:6px">'+producaoTrackHtml(p,"sup")+voltarBtn+'</div>';
   }
-  const stageDef = STAGE_DEFS[p.etapaAtual] || STAGE_DEFS.perfilar;
-  const concludeTitle = stageDef.concludeLabel;
-  let buttons = "";
-  if(status==="rodando"){
-    buttons = '<button type="button" class="icon-btn" title="Pausar" onclick="pauseTimer(\''+p.id+'\')">'+icon("pause",12)+'</button>'+
-      '<button type="button" class="icon-btn" title="'+concludeTitle+'" onclick="concludeTimer(\''+p.id+'\')">'+icon("check",12)+'</button>';
-  } else if(status==="pausado"){
-    buttons = '<button type="button" class="icon-btn" title="Retomar" onclick="startTimer(\''+p.id+'\')">'+icon("play",12)+'</button>'+
-      '<button type="button" class="icon-btn" title="'+concludeTitle+'" onclick="concludeTimer(\''+p.id+'\')">'+icon("check",12)+'</button>';
-  } else {
-    buttons = '<button type="button" class="icon-btn" title="Iniciar produção" onclick="startTimer(\''+p.id+'\')">'+icon("play",12)+'</button>'+
-      '<button type="button" class="icon-btn" title="'+concludeTitle+'" onclick="concludeTimer(\''+p.id+'\')">'+icon("check",12)+'</button>';
-  }
-  return '<div style="display:flex;align-items:center;gap:5px">'+timeHtml+buttons+voltarBtn+'</div>';
+  return '<div style="display:flex;align-items:center;gap:6px">'+
+    '<div style="display:flex;flex-direction:column;gap:3px">'+producaoTrackHtml(p,"sup")+producaoTrackHtml(p,"inf")+'</div>'+
+    voltarBtn+
+  '</div>';
 }
 setInterval(function(){
   if(!STATE || !STATE.pedidos) return;
@@ -3899,6 +3996,11 @@ setInterval(function(){
     if(p.producaoStatus==="rodando" && p.producaoStartedAt){
       const el = document.getElementById("timer-"+p.id);
       if(el){ el.textContent = fmtElapsed((p.producaoElapsedMs||0) + (Date.now()-p.producaoStartedAt)); }
+    }
+    const inf = STATE.pedidosProducaoInf ? STATE.pedidosProducaoInf[p.id] : null;
+    if(inf && inf.status==="rodando" && inf.startedAt){
+      const elInf = document.getElementById("timer-inf-"+p.id);
+      if(elInf){ elInf.textContent = fmtElapsed((inf.elapsedMs||0) + (Date.now()-inf.startedAt)); }
     }
   });
 }, 1000);
@@ -3931,6 +4033,8 @@ async function submitQuickAdd(type){
     const { data:row, error } = await sb.from("equipamentos").insert({nome:val, tipo:""}).select().single();
     if(error){ sbErrorToast("cadastrar equipamento", error); return; }
     newObj = mapEquipamentoFromRow(row); STATE.equipamentos.push(newObj); selectId="f-equipamentoId";
+    const selectInf = document.getElementById("f-equipamentoInfId");
+    if(selectInf){ const optInf = document.createElement("option"); optInf.value = newObj.id; optInf.textContent = val; selectInf.appendChild(optInf); }
   }
   else if(type==="situacao"){
     const cor = STATUS_PALETTE[STATE.statusOptions.length % STATUS_PALETTE.length];
@@ -4019,6 +4123,7 @@ function openPedidoModal(mode, id){
   const concPerfilarAtual = dataConclusaoEtapa(p, "perfilar");
   const concPinturaAtual = dataConclusaoEtapa(p, "pintura");
   const concColagemAtual = dataConclusaoEtapa(p, "colagem");
+  const equipamentoInfAtual = equipamentoInfDoPedido(p);
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
   const epsMats = STATE.materiais.filter(m=>m.tipo==="EPS");
   const clientNames = uniqueClientNames();
@@ -4073,9 +4178,12 @@ function openPedidoModal(mode, id){
             STATE.cidades.map(c=>'<option value="'+c.id+'" '+(f.cidadeId===c.id?"selected":"")+'>'+escapeHtml(c.nome)+'</option>').join("")+
             '</select><div id="qa-cidade">'+quickAddButtonHtml("cidade")+'</div></div>'+
 
-          '<div style="grid-column:1/-1"><label class="field-label">Equipamento</label><select class="field-select" id="f-equipamentoId" name="equipamentoId"><option value="">Selecione…</option>'+
+          '<div><label class="field-label">Equipamento (Cor Sup.)</label><select class="field-select" id="f-equipamentoId" name="equipamentoId"><option value="">Selecione…</option>'+
             STATE.equipamentos.map(e=>'<option value="'+e.id+'" '+(f.equipamentoId===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>').join("")+
             '</select><div id="qa-equipamento">'+quickAddButtonHtml("equipamento")+'</div></div>'+
+          '<div><label class="field-label">Equipamento (Cor Inf.)</label><select class="field-select" id="f-equipamentoInfId" name="equipamentoInf"><option value="">— nenhum (mesma máquina/sem 2ª máquina) —</option>'+
+            STATE.equipamentos.map(e=>'<option value="'+e.id+'" '+(equipamentoInfAtual===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>').join("")+
+            '</select><div style="margin-top:6px;font-size:10.5px;color:'+COLORS.textMuted+';line-height:1.4">Só preencha se a Cor Inf. for perfilada em outra máquina. Aí aparecem dois cronômetros na Prog. Perfiladeira.</div></div>'+
 
           '<div style="grid-column:1/-1;border-top:1px solid var(--steel-border);padding-top:14px">'+
             '<label class="field-label">Fluxo de Produção — etapas adicionais após Perfilar</label>'+
@@ -4119,6 +4227,7 @@ async function submitPedidoForm(event, mode, id){
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
   const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
   const dataVendaValor = (data.dataVenda||"").trim();
+  const equipamentoInfValor = (data.equipamentoInf||"").trim();
   const valoresConclusao = {};
   if("concPerfilar" in data) valoresConclusao.perfilar = (data.concPerfilar||"").trim();
   if("concPintura" in data) valoresConclusao.pintura = (data.concPintura||"").trim();
@@ -4137,6 +4246,7 @@ async function submitPedidoForm(event, mode, id){
   if(salvo && salvo.id){
     await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
     await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
+    await syncEquipamentoInfAposSalvar(salvo.id, equipamentoInfValor);
     if(Object.keys(valoresConclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, valoresConclusao);
   }
   closeModal();
@@ -4164,6 +4274,16 @@ async function syncDataVendaAposSalvar(id, novaData){
   if(novaData) novoStore[id] = novaData; else delete novoStore[id];
   const ok = await configSet("pedidos_data_venda", novoStore);
   if(ok) STATE.pedidosDataVenda = novoStore;
+}
+/* Máquina da Cor Inf. também mora em app_config, pelo mesmo motivo. */
+async function syncEquipamentoInfAposSalvar(id, novoValor){
+  const atualValor = STATE.pedidosEquipamentoInf[id] || "";
+  if(atualValor===novoValor) return;
+  const atualStore = (await configGet("pedidos_equipamento_inf")) || {};
+  const novoStore = Object.assign({}, atualStore);
+  if(novoValor) novoStore[id] = novoValor; else delete novoStore[id];
+  const ok = await configSet("pedidos_equipamento_inf", novoStore);
+  if(ok) STATE.pedidosEquipamentoInf = novoStore;
 }
 /* Grava a data real em que uma etapa (perfilar/pintura/colagem) foi concluída — chamada por
    concludeTimer() no momento em que o pedido sai dessa etapa pra próxima. Best-effort: se

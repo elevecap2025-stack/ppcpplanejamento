@@ -318,6 +318,8 @@ const DEFAULT_CONFIG_VALUES = {
      padrão de app_config já usado pros outros itens. */
   pedidos_equipamento_inf: {},
   pedidos_producao_inf: {},
+  /* Item: observações gerais do pedido — texto livre, guardado por id, mesmo padrão de sempre. */
+  pedidos_observacoes: {},
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -935,6 +937,7 @@ const ICON_PATHS = {
   clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   maximize:'<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
   minimize:'<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
+  fileText:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
 };
 function icon(name, size, color){
   size = size || 16; color = color || "currentColor";
@@ -1053,6 +1056,9 @@ function dataBaseProducao(p, stage, base){
    máquina da Cor Inf., guardada à parte (mesmo motivo de sempre: não depende de coluna nova
    na tabela pedidos). */
 function equipamentoInfDoPedido(p){ return (p && STATE.pedidosEquipamentoInf[p.id]) || ""; }
+/* Observações gerais do pedido — texto livre, mesmo padrão de sempre (não é coluna da tabela
+   pedidos, mora em app_config). */
+function observacaoDoPedido(p){ return (p && STATE.pedidosObservacoes[p.id]) || ""; }
 function leadTimeDias(p){
   if(!p || !p.dataEntregue) return null;
   const base = dataBaseLeadTime(p);
@@ -1383,6 +1389,8 @@ const STATE = {
      — cronômetro dela, independente do cronômetro principal (Cor Sup.) do próprio pedido. */
   pedidosEquipamentoInf:{},
   pedidosProducaoInf:{},
+  /* Item: {id: "texto livre"} — observações gerais do pedido. */
+  pedidosObservacoes:{},
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
@@ -1445,7 +1453,7 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf, pedidosObservacoes] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
@@ -1453,7 +1461,7 @@ async function loadAllData(){
     configGet("feriados_custom"), configGet("feriados_removidos"),
     configGet("permissoes_usuarios"),
     configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"), configGet("pedidos_data_venda"), configGet("pedidos_datas_conclusao"),
-    configGet("pedidos_equipamento_inf"), configGet("pedidos_producao_inf"),
+    configGet("pedidos_equipamento_inf"), configGet("pedidos_producao_inf"), configGet("pedidos_observacoes"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1476,6 +1484,7 @@ async function loadAllData(){
   STATE.pedidosDatasConclusao = (pedidosDatasConclusao && typeof pedidosDatasConclusao==="object") ? pedidosDatasConclusao : {};
   STATE.pedidosEquipamentoInf = (pedidosEquipamentoInf && typeof pedidosEquipamentoInf==="object") ? pedidosEquipamentoInf : {};
   STATE.pedidosProducaoInf = (pedidosProducaoInf && typeof pedidosProducaoInf==="object") ? pedidosProducaoInf : {};
+  STATE.pedidosObservacoes = (pedidosObservacoes && typeof pedidosObservacoes==="object") ? pedidosObservacoes : {};
   await carregarRecados();
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
@@ -3723,6 +3732,7 @@ async function deletePedido(id){
   }
   if(STATE.pedidosEquipamentoInf[id]) await syncEquipamentoInfAposSalvar(id, "");
   if(STATE.pedidosProducaoInf[id]) await resetTimerInf(id);
+  if(STATE.pedidosObservacoes[id]) await syncObservacaoAposSalvar(id, "");
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -4124,6 +4134,7 @@ function openPedidoModal(mode, id){
   const concPinturaAtual = dataConclusaoEtapa(p, "pintura");
   const concColagemAtual = dataConclusaoEtapa(p, "colagem");
   const equipamentoInfAtual = equipamentoInfDoPedido(p);
+  const observacoesAtual = observacaoDoPedido(p);
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
   const epsMats = STATE.materiais.filter(m=>m.tipo==="EPS");
   const clientNames = uniqueClientNames();
@@ -4162,6 +4173,8 @@ function openPedidoModal(mode, id){
             '<datalist id="cumeeira-list">'+STATE.cumeeiraOptions.map(t=>'<option value="'+escapeAttr(t)+'">').join("")+'</datalist></div>'+
 
           '<div style="grid-column:1/-1"><label class="field-label">Material</label><input class="field-input" name="material" value="'+escapeAttr(f.material)+'" placeholder="Descrição do material / produto"/></div>'+
+
+          '<div style="grid-column:1/-1"><label class="field-label">Observações</label><textarea class="field-input" name="observacoes" rows="2" style="resize:vertical;font-family:inherit" placeholder="Anotações gerais sobre o pedido (opcional)">'+escapeHtml(observacoesAtual||"")+'</textarea></div>'+
 
           '<div><label class="field-label">Cor Sup.</label><select class="field-select" id="f-corSupId" name="corSupId" onchange="updateStockPreview()"><option value="">— nenhuma —</option>'+
             bobinas.map(m=>'<option value="'+m.id+'" '+(f.corSupId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+' · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')</option>').join("")+
@@ -4228,6 +4241,7 @@ async function submitPedidoForm(event, mode, id){
   const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
   const dataVendaValor = (data.dataVenda||"").trim();
   const equipamentoInfValor = (data.equipamentoInf||"").trim();
+  const observacoesValor = (data.observacoes||"").trim();
   const valoresConclusao = {};
   if("concPerfilar" in data) valoresConclusao.perfilar = (data.concPerfilar||"").trim();
   if("concPintura" in data) valoresConclusao.pintura = (data.concPintura||"").trim();
@@ -4247,6 +4261,7 @@ async function submitPedidoForm(event, mode, id){
     await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
     await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
     await syncEquipamentoInfAposSalvar(salvo.id, equipamentoInfValor);
+    await syncObservacaoAposSalvar(salvo.id, observacoesValor);
     if(Object.keys(valoresConclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, valoresConclusao);
   }
   closeModal();
@@ -4284,6 +4299,16 @@ async function syncEquipamentoInfAposSalvar(id, novoValor){
   if(novoValor) novoStore[id] = novoValor; else delete novoStore[id];
   const ok = await configSet("pedidos_equipamento_inf", novoStore);
   if(ok) STATE.pedidosEquipamentoInf = novoStore;
+}
+/* Observações do pedido também moram em app_config, pelo mesmo motivo. */
+async function syncObservacaoAposSalvar(id, novoTexto){
+  const atualValor = STATE.pedidosObservacoes[id] || "";
+  if(atualValor===novoTexto) return;
+  const atualStore = (await configGet("pedidos_observacoes")) || {};
+  const novoStore = Object.assign({}, atualStore);
+  if(novoTexto) novoStore[id] = novoTexto; else delete novoStore[id];
+  const ok = await configSet("pedidos_observacoes", novoStore);
+  if(ok) STATE.pedidosObservacoes = novoStore;
 }
 /* Grava a data real em que uma etapa (perfilar/pintura/colagem) foi concluída — chamada por
    concludeTimer() no momento em que o pedido sai dessa etapa pra próxima. Best-effort: se
@@ -4376,7 +4401,7 @@ function pedidoCellHtml(key, p, opts){
       return '<td>'+inner+'</td>';
     }
     case "cliente": return '<td>'+(pedidoEhRetirada(p)?'<span class="retirada-badge" title="Cliente retira o pedido — não precisa de motorista">'+icon("package",10)+' RETIRA</span>':"")+escapeHtml(p.cliente||"—")+'</td>';
-    case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+'</td>';
+    case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+(observacaoDoPedido(p)?' <span title="'+escapeAttr(observacaoDoPedido(p))+'" style="cursor:help;display:inline-block;vertical-align:middle">'+icon("fileText",11,COLORS.textMuted)+'</span>':'')+'</td>';
     case "situacao": {
       const inner = opts.fixedStatusLabel
         ? fixedStatusPillHtml(opts.fixedStatusLabel)

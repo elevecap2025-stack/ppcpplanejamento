@@ -114,6 +114,156 @@ button,input,select{font-family:'Inter',sans-serif;}
 .drag-target{transition:box-shadow .15s,border-color .15s;}
 .drag-target.drag-over{border-color:var(--brand);box-shadow:0 0 0 2px var(--brand) inset;}
 
+/* ---- Cores por dia da programação (só na tela Lançamentos) ----
+   Cada linha recebe --dia-cor / --dia-bg / --dia-txt calculados em diaCorStyle().
+   Pedido marcado como "atenção" mantém o fundo amarelo; o dia continua visível pela faixa
+   à esquerda e pelo número do dia. */
+.row-dia td:first-child{box-shadow:inset 5px 0 0 var(--dia-cor);}
+.row-dia:not(.row-atencao) td{background:var(--dia-bg);-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.pcp-table tr.row-dia:not(.row-atencao):hover td{background:var(--dia-bg-hover);}
+.row-dia.row-dia-forte:not(.row-atencao) td{color:var(--dia-txt) !important;}
+.row-dia.row-dia-forte:not(.row-atencao) td :not(.status-pill):not(.dia-num){color:inherit !important;}
+.row-dia.row-dia-forte:not(.row-atencao) td .icon-btn{border-color:var(--dia-borda);}
+.row-dia.row-dia-forte:not(.row-atencao) td .status-pill{background:#FFFFFF !important;border-color:rgba(0,0,0,.12) !important;}
+.row-dia.row-dia-forte:not(.row-atencao) .dia-num{background:var(--dia-txt);color:var(--dia-cor);box-shadow:none;}
+.dia-num{display:inline-flex;align-items:center;justify-content:center;min-width:21px;height:21px;padding:0 5px;border-radius:5px;
+  font-size:12px;font-weight:700;font-family:'IBM Plex Mono',monospace;background:var(--dia-cor);color:var(--dia-num-txt);
+  box-shadow:0 0 0 1px rgba(0,0,0,.18) inset;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+.dia-legenda{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:14px;}
+.dia-legenda-titulo{font-size:12px;color:var(--text-muted);font-weight:600;margin-right:2px;}
+.dia-legenda-item{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;padding:3px 10px 3px 3px;border:1px solid var(--steel-border);border-radius:7px;background:var(--panel);}
+.dia-cor-linha{display:grid;grid-template-columns:34px 1fr 52px 96px;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--steel-border);}
+.dia-cor-linha input[type=color]{width:48px;height:32px;padding:2px;border:1px solid var(--steel);border-radius:6px;background:var(--bg);cursor:pointer;}
+
+/* ---- Tela Lançamentos compacta: indicadores menores, barra de filtros enxuta e ocultável ---- */
+.lanc-compacto .screen-header{margin-bottom:12px;}
+.lanc-compacto .stat-row{gap:10px;margin-bottom:10px;}
+.lanc-compacto .stat-card{padding:8px 14px;flex:1 1 140px;min-width:130px;border-radius:8px;}
+.lanc-compacto .stat-label{font-size:9.5px;}
+.lanc-compacto .stat-card svg{width:13px;height:13px;}
+.lanc-compacto .stat-value{font-size:19px;margin-top:1px;line-height:1.2;}
+.lanc-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+.lanc-toolbar-dir{margin-left:auto;}
+.lanc-toolbar .dia-legenda{margin:0;gap:6px;}
+.lanc-toolbar .dia-legenda-item{padding:2px 8px 2px 2px;font-size:12px;}
+.lanc-toolbar .dia-legenda .dia-num{min-width:18px;height:18px;font-size:11px;}
+.lanc-toolbar .dia-legenda .btn{padding:5px 8px !important;}
+.lanc-tb-btn{padding:6px 10px;font-size:12.5px;}
+.lanc-tb-btn.on{border-color:var(--brand);color:var(--brand);}
+.lanc-chev{display:inline-flex;transition:transform .15s;}
+.lanc-chev.aberto{transform:rotate(180deg);}
+.lanc-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;border-radius:9px;
+  background:#0080C6;color:#fff;font-size:10.5px;font-weight:700;font-family:'IBM Plex Mono',monospace;}
+.filtro-chip{display:inline-flex;align-items:center;gap:4px;font-size:12px;padding:3px 3px 3px 10px;border-radius:14px;white-space:nowrap;
+  background:rgba(0,128,198,.12);color:var(--brand);border:1px solid rgba(0,128,198,.35);}
+.filtro-chip button{border:none;background:transparent;color:inherit;cursor:pointer;padding:2px;border-radius:50%;display:inline-flex;}
+.filtro-chip button:hover{background:rgba(0,128,198,.2);}
+.filter-bar.filter-compacto{padding:10px 14px;gap:10px;margin-bottom:10px;}
+.filter-compacto .fc{flex:1 1 120px;min-width:100px;max-width:230px;}
+.filter-compacto .fc-op{flex:0 1 96px;min-width:84px;}
+.filter-compacto .fc-data{flex:0 1 134px;min-width:122px;}
+.filter-compacto .field-label{font-size:9.5px;margin-bottom:3px;}
+.filter-compacto .field-input,.filter-compacto .field-select{padding:5px 8px;font-size:12.5px;height:31px;}
+.filter-compacto .btn{padding:6px 10px;font-size:12.5px;}
+
+/* ---- Telas compactas (Prog. Perfiladeira, Pintura, Coladeira, Entregas e Pedidos Entregues):
+   caixas de indicadores, metas por dia, filtros e dias visíveis mais baixos, pra sobrar mais
+   tela pros pedidos. Os campos de filtro têm largura fixa inline; aqui eles passam a dividir a
+   linha (flex) e só quebram quando realmente não cabem. ---- */
+.tela-compacta .screen-header{margin-bottom:12px;}
+.tela-compacta .stat-row{gap:10px;margin-bottom:10px;}
+.tela-compacta .stat-card{padding:8px 14px;flex:1 1 140px;min-width:130px;border-radius:8px;}
+.tela-compacta .stat-label{font-size:9.5px;}
+.tela-compacta .stat-card svg{width:13px;height:13px;}
+.tela-compacta .stat-value{font-size:19px;margin-top:1px;line-height:1.2;}
+.tela-compacta .filter-bar{padding:10px 14px;gap:8px 10px;margin-bottom:10px;}
+.tela-compacta .filter-bar > div{flex:1 1 120px;min-width:100px !important;width:auto !important;max-width:220px;}
+.tela-compacta .filter-bar > div.fc-curto{flex:0 1 72px;min-width:62px !important;}
+.tela-compacta .filter-bar > div.fc-data{flex:0 1 134px;min-width:122px !important;}
+.tela-compacta .filter-bar > div.filtro-info{flex:0 0 auto;min-width:0 !important;max-width:none;align-self:center;}
+.tela-compacta .filter-bar .field-label{font-size:9.5px;margin-bottom:3px;}
+.tela-compacta .filter-bar .field-input,.tela-compacta .filter-bar .field-select{padding:5px 8px;font-size:12.5px;height:31px;}
+.tela-compacta .filter-bar .btn{padding:6px 10px;font-size:12.5px;}
+.tela-compacta .day-toggle{padding:4px 10px;font-size:12px;}
+.filtro-dias{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto;}
+@media screen{.tela-compacta .day-sections-wrap{gap:16px !important;}}
+/* Dia sem pedidos: aviso mais baixo, mas ainda com área boa pra soltar o pedido arrastado. */
+.tela-compacta .drag-target > div{padding:18px !important;}
+.metas-dia-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:10px;}
+.metas-dia-head .section-label{margin:0;font-size:12.5px;}
+.metas-dia-head .btn{padding:4px 8px;font-size:12px;}
+.dias-visiveis-card{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:14px;padding:7px 14px;}
+/* Caixa de meta do dia: nome e metragem na mesma linha, barra e meta embaixo. */
+.dia-meta-card{padding:8px 14px !important;}
+.dmc-top{display:flex;align-items:baseline;justify-content:space-between;gap:8px;}
+.dmc-valor{font-family:'Space Grotesk',sans-serif;font-size:16px;font-weight:700;white-space:nowrap;}
+.dmc-base{display:flex;align-items:center;gap:8px;margin-top:5px;}
+.dmc-bar{flex:1;height:4px;background:var(--panel-alt);border-radius:3px;overflow:hidden;}
+.dmc-bar > div{height:100%;}
+.dmc-meta{font-size:10.5px;color:var(--text-muted);white-space:nowrap;}
+
+/* ---- Filtros ocultáveis/escolhíveis em todas as telas (mesmo visual da tela Lançamentos) ---- */
+.fo-oculto{display:none !important;}
+.filtros-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;}
+.filtro-chip.fixo{padding-right:10px;}
+
+/* ---- Cabeçalho das colunas com menu (filtrar por valor, mover, ocultar) e arrastar pra reordenar ---- */
+.th-col{cursor:pointer;user-select:none;}
+.th-col:hover{color:var(--text);}
+.th-col-inner{display:inline-flex;align-items:center;gap:4px;}
+.th-col-icon{display:inline-flex;opacity:.4;transition:opacity .12s;}
+.th-col:hover .th-col-icon,.th-col.th-filtrado .th-col-icon{opacity:1;}
+.pcp-table th.th-col.th-filtrado{color:#0080C6;}
+.th-col.th-drop-antes{box-shadow:inset 3px 0 0 #0080C6;}
+.th-col.th-drop-depois{box-shadow:inset -3px 0 0 #0080C6;}
+.th-col.th-arrastando{opacity:.35;}
+#col-menu{position:fixed;z-index:70;width:280px;background:var(--panel);border:1px solid var(--steel);border-radius:10px;
+  box-shadow:0 14px 36px rgba(0,0,0,.35);padding:10px;font-size:13px;color:var(--text);}
+.col-menu-titulo{font-family:'Space Grotesk',sans-serif;font-weight:600;font-size:14px;margin:0 2px 8px;}
+.col-menu-acoes{display:grid;grid-template-columns:1fr 1fr;gap:4px;}
+.col-menu-item{display:flex;align-items:center;gap:7px;padding:6px 8px;border-radius:6px;cursor:pointer;border:1px solid transparent;
+  background:transparent;color:var(--text);font-size:12.5px;text-align:left;font-family:'Inter',sans-serif;}
+.col-menu-item:hover:not(:disabled){background:var(--row-hover);border-color:var(--steel-border);}
+.col-menu-item:disabled{opacity:.4;cursor:default;}
+.col-menu-sep{height:1px;background:var(--steel-border);margin:8px 0;}
+.col-menu-sub{font-size:11.5px;color:var(--text-muted);font-weight:600;margin:0 2px 5px;}
+#col-menu .field-input{padding:6px 8px;font-size:12.5px;}
+.col-menu-lista{max-height:220px;overflow:auto;border:1px solid var(--steel-border);border-radius:6px;padding:3px;margin-top:6px;}
+.col-menu-lista label{display:flex;align-items:center;gap:8px;padding:4px 6px;font-size:12.5px;cursor:pointer;border-radius:4px;}
+.col-menu-lista label:hover{background:var(--row-hover);}
+.col-menu-lista input{accent-color:#0080C6;margin:0;}
+.col-menu-lista .qtd{margin-left:auto;color:var(--text-muted);font-family:'IBM Plex Mono',monospace;font-size:11px;}
+.col-menu-lista .todos{border-bottom:1px solid var(--steel-border);border-radius:4px 4px 0 0;margin-bottom:2px;font-weight:600;}
+.col-menu-rodape{display:flex;justify-content:space-between;gap:6px;margin-top:8px;}
+.col-menu-rodape .btn{padding:6px 12px;font-size:12.5px;}
+.col-filtros-bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:12px;}
+.col-filtros-bar .rotulo{font-size:12px;color:var(--text-muted);font-weight:600;}
+.col-cfg-linha{display:grid;grid-template-columns:22px 1fr auto;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--steel-border);}
+.col-cfg-linha .icon-btn{padding:4px;}
+.col-cfg-linha .icon-btn:disabled{opacity:.3;cursor:default;}
+
+/* ---- Seleção de vários pedidos nas telas de produção ---- */
+.sel-pedido,.sel-dia{width:15px;height:15px;cursor:pointer;accent-color:#0080C6;margin:0;flex-shrink:0;}
+.pcp-table tr.row-selecionada td{background:rgba(0,128,198,.17) !important;}
+.pcp-table tr.row-selecionada td:first-child{box-shadow:inset 4px 0 0 #0080C6;}
+.sel-dia-label{margin-left:auto;display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);cursor:pointer;user-select:none;}
+.sel-dia-label:hover{color:var(--text);}
+#selecao-bar{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);width:max-content;z-index:50;display:none;align-items:center;gap:10px;flex-wrap:wrap;
+  background:var(--panel);border:1px solid #0080C6;border-radius:10px;padding:10px 14px;box-shadow:0 12px 32px rgba(0,0,0,.38);max-width:calc(100vw - 40px);}
+#selecao-bar.on{display:flex;}
+#selecao-bar .sel-resumo{font-size:13px;font-weight:600;white-space:nowrap;}
+#selecao-bar .sel-resumo span{font-family:'IBM Plex Mono',monospace;color:#0080C6;}
+#selecao-bar .btn{padding:6px 10px;font-size:12px;}
+#selecao-bar .sel-sep{width:1px;align-self:stretch;background:var(--steel-border);}
+.drag-ghost{position:fixed;top:-1000px;left:-1000px;padding:8px 12px;border-radius:8px;background:#0080C6;color:#fff;font:600 13px 'Inter',sans-serif;white-space:nowrap;}
+
+/* ---- Totais do dia na Prog. Perfiladeira: Perfilar (azul) e Colagem (verde) ---- */
+.dia-total{display:inline-flex;align-items:baseline;gap:8px;padding:4px 12px;border-radius:8px;border:1px solid;white-space:nowrap;}
+.dia-total-label{font-size:12px;font-weight:700;}
+.dia-total-valor{font-family:'IBM Plex Mono',monospace;font-size:18px;font-weight:700;line-height:1.2;}
+.dia-total-perfilar{color:#0080C6;background:rgba(0,128,198,.12);border-color:rgba(0,128,198,.5);}
+.dia-total-colagem{color:var(--green);background:rgba(76,175,109,.13);border-color:rgba(76,175,109,.5);}
+
 .field-input,.field-select{width:100%;background:var(--bg);border:1px solid var(--steel);color:var(--text);border-radius:6px;padding:9px 10px;font-size:13.5px;}
 .field-input:focus,.field-select:focus{outline:none;border-color:var(--brand);}
 /* Realce visual pra campo de filtro que está ativo (diferente do padrão) — ajuda a ver
@@ -1486,6 +1636,7 @@ async function loadAllData(){
   STATE.pedidosProducaoInf = (pedidosProducaoInf && typeof pedidosProducaoInf==="object") ? pedidosProducaoInf : {};
   STATE.pedidosObservacoes = (pedidosObservacoes && typeof pedidosObservacoes==="object") ? pedidosObservacoes : {};
   await carregarRecados();
+  STATE.lancCores = normalizarLancCores(await configGet("lancamentos_cores_dia"));
 
   STATE.statusOptions.forEach(s=>{ if(!(s.id in STATE.calStatusVisiveis)) STATE.calStatusVisiveis[s.id] = s.nome.toLowerCase().indexOf("entregue")!==0; });
   /* Marca o consumo de cada pedido como "já aplicado": o estoque que veio do banco
@@ -2553,12 +2704,12 @@ function renderAvulsoSeparacaoScreen(){
       '<div style="min-width:180px"><label class="field-label">Status</label><select class="field-select" onchange="updateAvulsoStageFilter(\'status\', this.value)"><option value="">Todos</option>'+
         STATUS_AVULSO_DEFS.filter(function(st){ return st.id!=="concluido"; }).map(function(st){ return '<option value="'+st.id+'" '+(s.status===st.id?"selected":"")+'>'+st.label+'</option>'; }).join("")+
         '</select></div>'+
-      '<div style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-avulso" value="'+weekNum+'"/></div>'+
-      '<div style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-avulso" value="'+year+'"/></div>'+
+      '<div class="fc-curto" style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-avulso" value="'+weekNum+'"/></div>'+
+      '<div class="fc-curto" style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-avulso" value="'+year+'"/></div>'+
       '<button class="btn" onclick="jumpToAvulsoWeek(document.getElementById(\'input-semana-avulso\').value, document.getElementById(\'input-ano-avulso\').value)">Ir</button>'+
       '<button class="btn btn-ghost" onclick="clearAvulsoStageFiltro()">Limpar filtros</button>'+
     '</div>'+
-    '<div class="pcp-card no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:22px">'+
+    '<div class="pcp-card no-print dias-visiveis-card">'+
       '<label class="field-label" style="margin:0;margin-right:4px">Dias visíveis:</label>'+dayToggleHtml+
     '</div>'+
     '<div class="day-sections-wrap" style="display:flex;flex-direction:column;gap:22px">'+bucketsHtml+'</div>';
@@ -4392,11 +4543,23 @@ const PEDIDO_SORT_ACCESSORS = {
 function pedidoCellHtml(key, p, opts){
   switch(key){
     case "dataProg": {
+      if(opts.diaCor){
+        /* Tela Lançamentos com cores por dia: número do dia (2 = segunda ... 7 = sábado,
+           como na coluna 1 da planilha) + data + nome do dia na cor do texto da linha. */
+        const dc = opts.diaCor;
+        return '<td><div style="display:flex;align-items:center;gap:8px">'+
+          '<span class="dia-num" title="'+escapeAttr(weekdayFromDateStr(p.dataProg))+'">'+dc.num+'</span>'+
+          '<div><div style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(p.dataProg)+'</div>'+
+          '<div style="font-size:10.5px;margin-top:2px;opacity:.85">'+weekdayFromDateStr(p.dataProg)+'</div></div></div></td>';
+      }
       const progInner = opts.hideWeekday
         ? '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(p.dataProg)+'</div>'
         : '<div style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(p.dataProg)+'</div><div style="font-size:10.5px;color:'+COLORS.brand+';margin-top:2px">'+weekdayFromDateStr(p.dataProg)+'</div>';
+      const selBox = (opts.draggable && opts.selStage)
+        ? '<input type="checkbox" class="sel-pedido no-print" data-id="'+p.id+'" title="Selecionar para mover junto (Shift = intervalo)" onclick="clickSelecaoPedido(event,\''+opts.selStage+'\',\''+p.id+'\')" ondragstart="event.preventDefault()"/>'
+        : '';
       const inner = opts.draggable
-        ? '<div style="display:flex;align-items:center;gap:7px"><span class="no-print">'+icon("gripVertical",13,COLORS.textMuted)+'</span><div>'+progInner+'</div></div>'
+        ? '<div style="display:flex;align-items:center;gap:7px">'+selBox+'<span class="no-print">'+icon("gripVertical",13,COLORS.textMuted)+'</span><div>'+progInner+'</div></div>'
         : progInner;
       return '<td>'+inner+'</td>';
     }
@@ -4434,19 +4597,23 @@ function pedidoCellHtml(key, p, opts){
   }
   return "";
 }
-function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir){
+function pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir, rowOpts){
+  rowOpts = rowOpts || {};
   const cols = visibleCols || PEDIDO_COLUMNS.map(c=>c.key);
   const dragAttrs = draggable ? ' draggable="true" ondragstart="handleDragStart(event,\''+p.id+'\')" ondragend="handleDragEnd(event)"' : '';
-  const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista, fixedStatusLabel})).join("");
+  const diaCor = rowOpts.coresDia ? diaCorInfo(p.dataProg) : null;
+  const cellsHtml = cols.map(key=>pedidoCellHtml(key, p, {draggable, editableSituacao, hideWeekday, editableMotorista, fixedStatusLabel, diaCor, selStage:rowOpts.selStage})).join("");
   const timerCell = showTimer ? '<td class="no-print">'+producaoCellHtml(p)+'</td>' : '';
   const rowClasses = [];
   if(draggable) rowClasses.push("pedido-row-draggable");
   if(pedidoTemAtencao(p)) rowClasses.push("row-atencao");
+  if(diaCor){ rowClasses.push("row-dia"); if(diaCor.forte) rowClasses.push("row-dia-forte"); }
   const classAttr = rowClasses.length ? ' class="'+rowClasses.join(" ")+'"' : '';
+  const styleAttr = diaCor ? ' style="'+diaCor.style+'"' : '';
   const extraAction = extraActionHtml ? extraActionHtml(p) : '';
   const excluirBtn = permitirExcluir===false ? '' : '<button class="icon-btn" title="Excluir" onclick="confirmDeletePedido(\''+p.id+'\')">'+icon("trash",13)+'</button>';
   const retiradaBtn = '<button class="icon-btn'+(pedidoEhRetirada(p)?' retirada-on':'')+'" title="'+(pedidoEhRetirada(p)?'Desmarcar retirada pelo cliente':'Marcar como retirada pelo cliente (sem motorista)')+'" onclick="toggleRetiradaPedido(\''+p.id+'\')">'+icon("package",13)+'</button>';
-  return '<tr'+classAttr+dragAttrs+'>'+
+  return '<tr'+classAttr+styleAttr+' data-pedido-id="'+p.id+'"'+dragAttrs+'>'+
     cellsHtml+timerCell+
     '<td class="no-print"><div style="display:flex;gap:6px">'+extraAction+retiradaBtn+'<button class="icon-btn" title="Editar" onclick="openPedidoModal(\'edit\',\''+p.id+'\')">'+icon("edit",13)+'</button>'+excluirBtn+'</div></td>'+
   '</tr>';
@@ -4486,11 +4653,12 @@ function sortPedidos(list){
     return 0;
   });
 }
-function headerRowHtml(visibleCols, showTimer, sortableHeaders){
+function headerRowHtml(visibleCols, showTimer, sortableHeaders, colCtx){
   const cols = visibleCols || PEDIDO_COLUMNS.map(c=>c.key);
   const ths = cols.map(key=>{
     const colDef = PEDIDO_COLUMNS.find(c=>c.key===key);
     const label = colDef ? colDef.label : key;
+    if(colCtx) return colThHtml(colCtx, key, label);
     if(sortableHeaders){
       const active = STATE.pedidosSort.campo===key;
       const arrow = active ? (STATE.pedidosSort.direcao==="asc"?" \u25B2":" \u25BC") : "";
@@ -4500,10 +4668,10 @@ function headerRowHtml(visibleCols, showTimer, sortableHeaders){
   }).join("");
   return '<tr>'+ths+(showTimer?'<th class="no-print" style="width:150px">Produção</th>':'')+'<th class="no-print" style="width:84px">Ações</th></tr>';
 }
-function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir){
+function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortableHeaders, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir, rowOpts){
   if(pedidos.length===0) return emptyStateHtml(draggable ? "Nenhum pedido programado. Arraste um pedido para cá." : undefined);
-  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir)).join("");
-  const headRow = headerRowHtml(visibleCols, showTimer, sortableHeaders);
+  const rows = pedidos.map(p=>pedidoRowHtml(p, draggable, editableSituacao, showTimer, visibleCols, hideWeekday, editableMotorista, extraActionHtml, fixedStatusLabel, permitirExcluir, rowOpts)).join("");
+  const headRow = headerRowHtml(visibleCols, showTimer, sortableHeaders, rowOpts && rowOpts.colCtx);
   return '<table class="pcp-table"><thead>'+headRow+'</thead><tbody>'+rows+'</tbody></table>';
 }
 
@@ -4525,6 +4693,907 @@ function filterPedidosList(list){
   });
 }
 
+/* ============================== CORES POR DIA — TELA LANÇAMENTOS ==============================
+   Mesma lógica da coluna 1 da planilha: 2 = segunda, 3 = terça ... 7 = sábado (1 = domingo).
+   Cada número tem uma cor; a linha inteira do pedido é pintada conforme o dia da programação.
+   Guardado em app_config → "lancamentos_cores_dia" (sem precisar de coluna nova no Supabase).
+   Só a tela Lançamentos usa isso — as telas de produção continuam como estavam. */
+const LANC_DIAS_NUM = [
+  {num:2, nome:"Segunda-feira", curto:"Segunda"},
+  {num:3, nome:"Terça-feira", curto:"Terça"},
+  {num:4, nome:"Quarta-feira", curto:"Quarta"},
+  {num:5, nome:"Quinta-feira", curto:"Quinta"},
+  {num:6, nome:"Sexta-feira", curto:"Sexta"},
+  {num:7, nome:"Sábado", curto:"Sábado"},
+  {num:1, nome:"Domingo", curto:"Domingo"},
+];
+const LANC_CORES_PADRAO = {
+  ativo:true, intensidade:"forte",
+  cores:{"1":"#8C97A6","2":"#4472C4","3":"#00B050","4":"#FFC000","5":"#F49AE6","6":"#33CCCC","7":"#9B7BD4"},
+};
+function normalizarLancCores(v){
+  const base = JSON.parse(JSON.stringify(LANC_CORES_PADRAO));
+  if(!v || typeof v!=="object") return base;
+  if(typeof v.ativo==="boolean") base.ativo = v.ativo;
+  if(v.intensidade==="suave" || v.intensidade==="forte") base.intensidade = v.intensidade;
+  if(v.cores && typeof v.cores==="object"){
+    Object.keys(base.cores).forEach(function(k){ if(/^#[0-9a-fA-F]{6}$/.test(v.cores[k]||"")) base.cores[k] = v.cores[k]; });
+  }
+  return base;
+}
+function lancCoresCfg(){ if(!STATE.lancCores) STATE.lancCores = normalizarLancCores(null); return STATE.lancCores; }
+/* 2 = segunda ... 7 = sábado, 1 = domingo (padrão brasileiro, igual à planilha). */
+function numeroDiaBR(dateStr){
+  if(!dateStr) return null;
+  const parts = dateStr.split("-").map(Number);
+  if(parts.length<3 || !parts[0]) return null;
+  return new Date(parts[0], parts[1]-1, parts[2]).getDay() + 1;
+}
+function hexParaRgb(hex){
+  const h = (hex||"#000000").replace("#","");
+  return {r:parseInt(h.slice(0,2),16), g:parseInt(h.slice(2,4),16), b:parseInt(h.slice(4,6),16)};
+}
+function rgbaDe(hex, a){ const c = hexParaRgb(hex); return "rgba("+c.r+","+c.g+","+c.b+","+a+")"; }
+/* Escolhe texto branco ou escuro pelo maior contraste (WCAG) — mantém a leitura em qualquer cor editada. */
+function corTextoSobre(hex){
+  const c = hexParaRgb(hex);
+  const lin = function(v){ v = v/255; return v<=0.03928 ? v/12.92 : Math.pow((v+0.055)/1.055, 2.4); };
+  const L = 0.2126*lin(c.r) + 0.7152*lin(c.g) + 0.0722*lin(c.b);
+  return (1.05/(L+0.05)) >= ((L+0.05)/0.05) ? "#FFFFFF" : "#14191F";
+}
+function diaNumStyle(hex){ return "--dia-cor:"+hex+";--dia-num-txt:"+corTextoSobre(hex); }
+function diaCorInfo(dateStr){
+  const num = numeroDiaBR(dateStr);
+  if(!num) return null;
+  const cfg = lancCoresCfg();
+  const cor = cfg.cores[String(num)];
+  if(!cor) return null;
+  const forte = cfg.intensidade==="forte";
+  const txt = corTextoSobre(cor);
+  const style = forte
+    ? diaNumStyle(cor)+";--dia-bg:"+cor+";--dia-bg-hover:"+cor+";--dia-txt:"+txt+";--dia-borda:"+rgbaDe(txt==="#FFFFFF"?"#FFFFFF":"#14191F",0.45)+";filter:none"
+    : diaNumStyle(cor)+";--dia-bg:"+rgbaDe(cor,0.22)+";--dia-bg-hover:"+rgbaDe(cor,0.34);
+  return {num:num, cor:cor, forte:forte, style:style};
+}
+function lancLegendaHtml(){
+  const cfg = lancCoresCfg();
+  const itens = LANC_DIAS_NUM.filter(function(d){ return d.num!==1; }).map(function(d){
+    return '<span class="dia-legenda-item"><span class="dia-num" style="'+diaNumStyle(cfg.cores[String(d.num)])+'">'+d.num+'</span>'+d.curto+'</span>';
+  }).join("");
+  return '<div class="dia-legenda no-print">'+
+    '<span class="dia-legenda-titulo">'+(cfg.ativo ? 'Cor por dia:' : 'Cores por dia desligadas:')+'</span>'+
+    itens+
+    '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openLancCoresModal()">'+icon("edit",13)+' Editar cores</button>'+
+  '</div>';
+}
+function openLancCoresModal(){
+  const cfg = lancCoresCfg();
+  const linhas = LANC_DIAS_NUM.map(function(d){
+    const cor = cfg.cores[String(d.num)];
+    return '<div class="dia-cor-linha">'+
+      '<span class="dia-num" id="lanc-cor-prev-'+d.num+'" style="'+diaNumStyle(cor)+'">'+d.num+'</span>'+
+      '<span style="font-size:13.5px">'+d.nome+'</span>'+
+      '<input type="color" id="lanc-cor-'+d.num+'" value="'+cor+'" oninput="lancCorPreview('+d.num+', this.value, true)"/>'+
+      '<input class="field-input" id="lanc-cor-hex-'+d.num+'" value="'+cor.toUpperCase()+'" maxlength="7" style="font-family:\'IBM Plex Mono\',monospace;padding:7px 8px;font-size:12.5px" oninput="lancCorPreview('+d.num+', this.value, false)"/>'+
+    '</div>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:460px">'+
+        '<div class="modal-header"><h3>Cores dos dias — Lançamentos</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:0 0 8px;line-height:1.5">A linha do pedido fica com a cor do dia da programação, como na coluna 1 da planilha (2 = segunda, 3 = terça…). Vale só para esta tela.</p>'+
+        '<label style="display:flex;align-items:center;gap:8px;font-size:13.5px;cursor:pointer;padding:8px 0"><input type="checkbox" id="lanc-cores-ativo" '+(cfg.ativo?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> Colorir as linhas dos lançamentos</label>'+
+        '<div style="display:flex;gap:18px;padding:4px 0 10px;flex-wrap:wrap">'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer"><input type="radio" name="lanc-cores-int" value="forte" '+(cfg.intensidade==="forte"?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> Cor forte (igual à planilha)</label>'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:13px;cursor:pointer"><input type="radio" name="lanc-cores-int" value="suave" '+(cfg.intensidade==="suave"?"checked":"")+' style="accent-color:'+COLORS.brand+'"/> Cor suave</label>'+
+        '</div>'+
+        '<div>'+linhas+'</div>'+
+        '<div class="modal-actions" style="justify-content:space-between">'+
+          '<button type="button" class="btn btn-ghost" onclick="restaurarLancCoresPadrao()">Restaurar padrão</button>'+
+          '<div style="display:flex;gap:10px"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn btn-primary" onclick="salvarLancCores()">Salvar cores</button></div>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function lancCorPreview(num, valor, veioDoSeletor){
+  let v = (valor||"").trim();
+  if(v && v[0]!=="#") v = "#"+v;
+  if(!/^#[0-9a-fA-F]{6}$/.test(v)) return;
+  const prev = document.getElementById("lanc-cor-prev-"+num);
+  if(prev) prev.setAttribute("style", diaNumStyle(v));
+  if(veioDoSeletor){ const hx = document.getElementById("lanc-cor-hex-"+num); if(hx) hx.value = v.toUpperCase(); }
+  else { const cp = document.getElementById("lanc-cor-"+num); if(cp) cp.value = v.toLowerCase(); }
+}
+function restaurarLancCoresPadrao(){
+  LANC_DIAS_NUM.forEach(function(d){
+    const cor = LANC_CORES_PADRAO.cores[String(d.num)];
+    const cp = document.getElementById("lanc-cor-"+d.num); if(cp) cp.value = cor.toLowerCase();
+    lancCorPreview(d.num, cor, true);
+  });
+  const forte = document.querySelector('input[name="lanc-cores-int"][value="forte"]'); if(forte) forte.checked = true;
+  const at = document.getElementById("lanc-cores-ativo"); if(at) at.checked = true;
+}
+async function salvarLancCores(){
+  const novo = {ativo:true, intensidade:"forte", cores:{}};
+  const at = document.getElementById("lanc-cores-ativo");
+  novo.ativo = at ? at.checked : true;
+  const intSel = document.querySelector('input[name="lanc-cores-int"]:checked');
+  novo.intensidade = intSel ? intSel.value : "forte";
+  let invalido = null;
+  LANC_DIAS_NUM.forEach(function(d){
+    const cp = document.getElementById("lanc-cor-"+d.num);
+    const v = cp ? cp.value : "";
+    if(/^#[0-9a-fA-F]{6}$/.test(v)) novo.cores[String(d.num)] = v.toUpperCase(); else invalido = d.nome;
+  });
+  if(invalido){ showToast("error","Cor inválida em "+invalido+". Use o formato #RRGGBB."); return; }
+  const ok = await configSet("lancamentos_cores_dia", novo);
+  if(!ok) return;
+  STATE.lancCores = normalizarLancCores(novo);
+  closeModal();
+  renderScreen();
+  showToast("success","Cores dos dias salvas.");
+}
+
+/* ============================== FILTROS DA TELA LANÇAMENTOS ==============================
+   Barra de filtros compacta, que pode ser ocultada (botão "Filtros") e cujos campos podem
+   ser escolhidos ("Escolher filtros"). As caixas de indicadores também ficam menores e podem
+   ser ocultadas. Preferência de cada navegador, guardada em localStorage — mesmo padrão do
+   menu recolhível. Esconder um campo limpa o valor dele, pra nunca ter filtro invisível
+   restringindo a lista; com a barra fechada, os filtros ativos aparecem como etiquetas. */
+const LANC_FILTROS_DEF = [
+  {key:"cliente",  label:"Cliente",  campos:["cliente"]},
+  {key:"op",       label:"OP",       campos:["op"]},
+  {key:"situacao", label:"Situação", campos:["situacaoId"]},
+  {key:"material", label:"Material", campos:["material"]},
+  {key:"corSup",   label:"Cor Sup.", campos:["corSupId"]},
+  {key:"corInf",   label:"Cor Inf.", campos:["corInfId"]},
+  {key:"cidade",   label:"Cidade",   campos:["cidadeId"]},
+  {key:"periodo",  label:"Período da programação (início / fim)", campos:["dIni","dFim"]},
+];
+const LANC_FILTROS_STORAGE = "eleve_lanc_filtros";
+function lancFiltrosPrefs(){
+  if(STATE.lancFiltrosPrefs) return STATE.lancFiltrosPrefs;
+  const prefs = {aberto:true, indicadores:true, visiveis:{}};
+  LANC_FILTROS_DEF.forEach(function(d){ prefs.visiveis[d.key] = true; });
+  try{
+    const salvo = JSON.parse(window.localStorage.getItem(LANC_FILTROS_STORAGE) || "null");
+    if(salvo && typeof salvo==="object"){
+      if(typeof salvo.aberto==="boolean") prefs.aberto = salvo.aberto;
+      if(typeof salvo.indicadores==="boolean") prefs.indicadores = salvo.indicadores;
+      if(salvo.visiveis) LANC_FILTROS_DEF.forEach(function(d){ if(typeof salvo.visiveis[d.key]==="boolean") prefs.visiveis[d.key] = salvo.visiveis[d.key]; });
+    }
+  }catch(err){}
+  STATE.lancFiltrosPrefs = prefs;
+  return prefs;
+}
+function salvarLancFiltrosPrefs(){
+  try{ window.localStorage.setItem(LANC_FILTROS_STORAGE, JSON.stringify(lancFiltrosPrefs())); }catch(err){}
+}
+function toggleLancFiltrosAberto(){
+  const p = lancFiltrosPrefs(); p.aberto = !p.aberto; salvarLancFiltrosPrefs(); renderScreen();
+}
+function toggleLancFiltroVisivel(key, visivel){
+  const p = lancFiltrosPrefs();
+  p.visiveis[key] = visivel;
+  if(!visivel){
+    const def = LANC_FILTROS_DEF.find(function(d){ return d.key===key; });
+    if(def) def.campos.forEach(function(c){ STATE.pedidosFiltro[c] = ""; });
+  }
+  salvarLancFiltrosPrefs(); renderScreen();
+}
+function toggleLancIndicadores(mostrar){
+  lancFiltrosPrefs().indicadores = mostrar; salvarLancFiltrosPrefs(); renderScreen();
+}
+function mostrarTodosLancFiltros(){
+  const p = lancFiltrosPrefs();
+  LANC_FILTROS_DEF.forEach(function(d){ p.visiveis[d.key] = true; });
+  p.indicadores = true;
+  salvarLancFiltrosPrefs(); renderScreen(); openLancFiltrosModal();
+}
+function removerFiltroLanc(key){
+  const def = LANC_FILTROS_DEF.find(function(d){ return d.key===key; });
+  if(def) def.campos.forEach(function(c){ STATE.pedidosFiltro[c] = ""; });
+  renderScreen();
+}
+/* Lista de filtros com valor, já com o texto que aparece na etiqueta. */
+function lancFiltrosAtivos(){
+  const f = STATE.pedidosFiltro;
+  const nomeMat = function(id){ const m = STATE.materiais.find(function(x){ return x.id===id; }); return m ? m.nome : "?"; };
+  const out = [];
+  if(f.cliente) out.push({key:"cliente", texto:"Cliente: "+f.cliente});
+  if(f.op) out.push({key:"op", texto:"OP: "+f.op});
+  if(f.situacaoId){ const st = STATE.statusOptions.find(function(x){ return x.id===f.situacaoId; }); out.push({key:"situacao", texto:"Situação: "+(st?st.nome:"?")}); }
+  if(f.material) out.push({key:"material", texto:"Material: "+f.material});
+  if(f.corSupId) out.push({key:"corSup", texto:"Cor Sup.: "+nomeMat(f.corSupId)});
+  if(f.corInfId) out.push({key:"corInf", texto:"Cor Inf.: "+nomeMat(f.corInfId)});
+  if(f.cidadeId){ const c = STATE.cidades.find(function(x){ return x.id===f.cidadeId; }); out.push({key:"cidade", texto:"Cidade: "+(c?c.nome:"?")}); }
+  if(f.dIni || f.dFim){
+    const txt = f.dIni && f.dFim ? fmtDateBR(f.dIni)+" a "+fmtDateBR(f.dFim) : (f.dIni ? "a partir de "+fmtDateBR(f.dIni) : "até "+fmtDateBR(f.dFim));
+    out.push({key:"periodo", texto:"Prog.: "+txt});
+  }
+  return out;
+}
+function lancIndicadoresHtml(qtd, totalAtivos, metragemAtiva, aguardando, estoqueBaixo){
+  if(!lancFiltrosPrefs().indicadores) return "";
+  return '<div class="stat-row">'+
+    statCardHtml("Pedidos no Filtro", qtd, "dashboard")+
+    statCardHtml("Em Produção / Pré-Prod.", totalAtivos, "calendar", COLORS.brand)+
+    statCardHtml("Metragem Ativa", fmtNumCard(metragemAtiva)+" m", "package", COLORS.green)+
+    statCardHtml("Aguard. Matéria-Prima", aguardando, "alert", aguardando?COLORS.red:COLORS.textMuted)+
+    statCardHtml("Materiais c/ Estoque Baixo", estoqueBaixo, "alert", estoqueBaixo?COLORS.red:COLORS.textMuted)+
+  '</div>';
+}
+function lancToolbarHtml(){
+  const prefs = lancFiltrosPrefs();
+  const ativos = lancFiltrosAtivos();
+  const badge = ativos.length ? '<span class="lanc-badge">'+ativos.length+'</span>' : '';
+  const chips = (!prefs.aberto && ativos.length)
+    ? ativos.map(function(a){
+        return '<span class="filtro-chip">'+escapeHtml(a.texto)+'<button type="button" title="Remover este filtro" onclick="removerFiltroLanc(\''+a.key+'\')">'+icon("x",12)+'</button></span>';
+      }).join("") + '<button type="button" class="btn btn-ghost lanc-tb-btn" onclick="clearPedidosFiltro()">Limpar</button>'
+    : '';
+  return '<div class="lanc-toolbar no-print">'+
+    '<button type="button" class="btn lanc-tb-btn'+(prefs.aberto?' on':'')+'" onclick="toggleLancFiltrosAberto()" title="'+(prefs.aberto?'Ocultar filtros':'Mostrar filtros')+'">'+
+      icon("filter",13)+' Filtros'+badge+'<span class="lanc-chev'+(prefs.aberto?' aberto':'')+'">'+icon("chevronDown",13)+'</span></button>'+
+    '<button type="button" class="btn btn-ghost lanc-tb-btn" onclick="openLancFiltrosModal()">'+icon("sliders",13)+' Escolher filtros</button>'+
+    chips+
+    '<div class="lanc-toolbar-dir">'+lancLegendaHtml()+'</div>'+
+  '</div>';
+}
+function lancFiltroBarHtml(bobinas){
+  const prefs = lancFiltrosPrefs();
+  if(!prefs.aberto) return "";
+  const f = STATE.pedidosFiltro, v = prefs.visiveis;
+  const opt = function(lista, sel){ return lista.map(function(x){ return '<option value="'+x.id+'" '+(sel===x.id?"selected":"")+'>'+escapeHtml(x.nome)+'</option>'; }).join(""); };
+  const campo = function(cls, label, ativo, inner){
+    return '<div class="'+cls+'"><label class="field-label'+filterLabelActiveClass(ativo)+'">'+label+'</label>'+inner+'</div>';
+  };
+  let html = "";
+  if(v.cliente) html += campo("fc","Cliente",f.cliente,'<input class="field-input'+filterActiveClass(f.cliente)+'" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updatePedidosFiltro(\'cliente\', this.value)"/>');
+  if(v.op) html += campo("fc fc-op","OP",f.op,'<input class="field-input'+filterActiveClass(f.op)+'" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updatePedidosFiltro(\'op\', this.value)"/>');
+  if(v.situacao) html += campo("fc","Situação",f.situacaoId,'<select class="field-select'+filterActiveClass(f.situacaoId)+'" onchange="updatePedidosFiltro(\'situacaoId\', this.value)"><option value="">Todas</option>'+opt(STATE.statusOptions, f.situacaoId)+'</select>');
+  if(v.material) html += campo("fc","Material",f.material,'<input class="field-input'+filterActiveClass(f.material)+'" value="'+escapeAttr(f.material)+'" placeholder="Buscar material…" onchange="updatePedidosFiltro(\'material\', this.value)"/>');
+  if(v.corSup) html += campo("fc","Cor Sup.",f.corSupId,'<select class="field-select'+filterActiveClass(f.corSupId)+'" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corSupId)+'</select>');
+  if(v.corInf) html += campo("fc","Cor Inf.",f.corInfId,'<select class="field-select'+filterActiveClass(f.corInfId)+'" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corInfId)+'</select>');
+  if(v.cidade) html += campo("fc","Cidade",f.cidadeId,'<select class="field-select'+filterActiveClass(f.cidadeId)+'" onchange="updatePedidosFiltro(\'cidadeId\', this.value)"><option value="">Todas</option>'+opt(STATE.cidades, f.cidadeId)+'</select>');
+  if(v.periodo){
+    html += campo("fc fc-data","Prog. início",f.dIni,'<input class="field-input'+filterActiveClass(f.dIni)+'" type="date" value="'+f.dIni+'" onchange="updatePedidosFiltro(\'dIni\', this.value)"/>');
+    html += campo("fc fc-data","Prog. fim",f.dFim,'<input class="field-input'+filterActiveClass(f.dFim)+'" type="date" value="'+f.dFim+'" onchange="updatePedidosFiltro(\'dFim\', this.value)"/>');
+  }
+  if(!html){
+    return '<div class="pcp-card filter-bar filter-compacto no-print"><span style="font-size:12.5px;color:'+COLORS.textMuted+'">Nenhum filtro escolhido. Use "Escolher filtros" para exibir os campos.</span></div>';
+  }
+  return '<div class="pcp-card filter-bar filter-compacto no-print">'+html+
+    '<button class="btn btn-ghost" title="Limpar todos os filtros" onclick="clearPedidosFiltro()">'+icon("x",13)+' Limpar</button></div>';
+}
+function openLancFiltrosModal(){
+  const prefs = lancFiltrosPrefs();
+  const linha = function(checked, onchange, label){
+    return '<label style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--steel-border);cursor:pointer">'+
+      '<input type="checkbox" '+(checked?"checked":"")+' onchange="'+onchange+'" style="accent-color:'+COLORS.brand+'"/>'+
+      '<span style="font-size:13.5px">'+label+'</span></label>';
+  };
+  const checks = LANC_FILTROS_DEF.map(function(d){
+    return linha(prefs.visiveis[d.key], "toggleLancFiltroVisivel(\'"+d.key+"\', this.checked)", d.label);
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Escolher filtros — Lançamentos</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:0 0 6px;line-height:1.5">Marque os campos que aparecem na barra de filtros. Desmarcar um campo também limpa o valor dele. A escolha fica salva neste navegador.</p>'+
+        '<div>'+checks+'</div>'+
+        '<div style="margin-top:14px">'+linha(prefs.indicadores, "toggleLancIndicadores(this.checked)", "Mostrar as caixas de indicadores no topo")+'</div>'+
+        '<div class="modal-actions" style="justify-content:space-between">'+
+          '<button type="button" class="btn btn-ghost" onclick="mostrarTodosLancFiltros()">Mostrar todos</button>'+
+          '<button type="button" class="btn btn-primary" onclick="closeModal()">Concluído</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+
+/* ============================== FILTROS OCULTÁVEIS EM TODAS AS TELAS ==============================
+   Em vez de reescrever a barra de filtros de cada tela, isto trabalha em cima do HTML que cada
+   tela já gera: depois de desenhar, procura os cartões ".filter-bar" dentro de #content e, pra
+   cada um, coloca acima a linha com "Filtros" (mostra/oculta a barra, com a contagem de filtros
+   em uso) e "Escolher filtros" (marca quais campos aparecem). Cada campo é reconhecido pelo seu
+   rótulo (.field-label). A tela Lançamentos tem a versão própria dela (.filter-compacto) e fica
+   de fora daqui.
+
+   Regras:
+   - Preferência por tela (e por barra, quando a tela tem mais de uma), salva no localStorage
+     deste navegador — mesmo padrão do menu recolhível.
+   - Campo escondido NÃO perde o valor. Se ele estiver filtrando, aparece como etiqueta na linha
+     de cima (com × pra limpar), então nunca fica um filtro invisível restringindo a lista. Com a
+     barra fechada, todos os filtros em uso aparecem como etiqueta.
+   - "Em uso" = campo de texto/data preenchido, ou lista com opção vazia ("Todos") que está com
+     outro valor. Listas sem opção vazia (Base do cálculo, Visualização, Ordenar por…) são
+     configurações, não contam. Semana/Ano e as datas da semana nas telas de programação também
+     não contam (data-filtro-base), porque estão sempre preenchidos.
+   - Quando há caixas de indicadores antes da barra, "Escolher filtros" também permite escondê-las
+     (menos no Dashboard, onde as caixas são o conteúdo da tela). */
+const FILTROS_TELAS_STORAGE = "eleve_filtros_telas";
+let __filtrosTelasPrefs = null;
+function filtrosTelasPrefs(){
+  if(__filtrosTelasPrefs) return __filtrosTelasPrefs;
+  try{ __filtrosTelasPrefs = JSON.parse(window.localStorage.getItem(FILTROS_TELAS_STORAGE) || "{}") || {}; }
+  catch(err){ __filtrosTelasPrefs = {}; }
+  return __filtrosTelasPrefs;
+}
+function prefsDaBarra(i){
+  const todas = filtrosTelasPrefs();
+  const chave = STATE.screen+":"+i;
+  const p = todas[chave] || {};
+  if(typeof p.aberto!=="boolean") p.aberto = true;
+  if(typeof p.indicadores!=="boolean") p.indicadores = true;
+  if(!Array.isArray(p.ocultos)) p.ocultos = [];
+  todas[chave] = p;
+  return p;
+}
+function salvarFiltrosTelas(){
+  try{ window.localStorage.setItem(FILTROS_TELAS_STORAGE, JSON.stringify(filtrosTelasPrefs())); }catch(err){}
+}
+function normRotuloFiltro(t){ return (t||"").replace(/\s+/g," ").replace(/[:：]\s*$/,"").trim(); }
+function camposDaBarra(bar){
+  return Array.from(bar.children).filter(function(el){ return el.tagName==="DIV" && el.querySelector(".field-label"); })
+    .map(function(el){ return {el:el, label:normRotuloFiltro(el.querySelector(".field-label").textContent)}; })
+    .filter(function(c){ return c.label; });
+}
+function estadoCampoFiltro(campo){
+  const div = campo.el;
+  const ctrl = div.querySelector("select, input:not([type=checkbox]):not([type=radio]):not([type=hidden])");
+  if(!ctrl) return {ativo:false, limpavel:false, texto:""};
+  const base = div.hasAttribute("data-filtro-base") || div.classList.contains("fc-curto") || (ctrl.tagName==="INPUT" && ctrl.type==="number");
+  const marcado = ctrl.classList.contains("filter-active");
+  if(ctrl.tagName==="SELECT"){
+    const temVazio = Array.from(ctrl.options).some(function(o){ return o.value===""; });
+    const opt = ctrl.options[ctrl.selectedIndex];
+    return {ativo: marcado || (temVazio && ctrl.value!==""), limpavel: temVazio, texto: opt ? opt.text : "", ctrl:ctrl};
+  }
+  const val = (ctrl.value||"").trim();
+  return {
+    ativo: marcado || (!base && val!==""),
+    limpavel: !base,
+    texto: ctrl.type==="date" ? fmtDateBR(val) : val,
+    ctrl: ctrl,
+  };
+}
+function aprimorarFiltrosDaTela(forcar){
+  const content = document.getElementById("content");
+  if(!content) return;
+  if(!forcar && !content.querySelector(".filter-bar:not([data-fo-ok])")) return;
+  content.querySelectorAll(".filtros-toolbar").forEach(function(e){ e.remove(); });
+  content.querySelectorAll(".fo-oculto").forEach(function(e){ e.classList.remove("fo-oculto"); });
+  const todas = Array.from(content.querySelectorAll(".filter-bar"));
+  todas.forEach(function(b){ b.setAttribute("data-fo-ok","1"); });
+  if(!STATE.loggedIn) return;
+  const barras = todas.filter(function(b){ return !b.classList.contains("filter-compacto") && camposDaBarra(b).length>0; });
+  barras.forEach(function(bar, i){
+    bar.setAttribute("data-fo-bar", String(i));
+    const prefs = prefsDaBarra(i);
+    const campos = camposDaBarra(bar);
+    const ativos = [];
+    campos.forEach(function(c, j){
+      const oculto = prefs.ocultos.indexOf(c.label)>=0;
+      if(oculto) c.el.classList.add("fo-oculto");
+      const st = estadoCampoFiltro(c);
+      if(st.ativo) ativos.push({j:j, label:c.label, texto:st.texto, limpavel:st.limpavel, oculto:oculto});
+    });
+    /* Botão que só serve a campos escondidos (ex.: "Ir" da Semana/Ano) some junto. */
+    Array.from(bar.children).filter(function(el){ return el.tagName==="BUTTON"; }).forEach(function(btn){
+      const ids = [];
+      (btn.getAttribute("onclick")||"").replace(/getElementById\(['"]([^'"]+)['"]\)/g, function(_, id){ ids.push(id); return _; });
+      if(ids.length && ids.every(function(id){ const el = document.getElementById(id); return el && el.closest(".fo-oculto"); })) btn.classList.add("fo-oculto");
+    });
+    if(!prefs.aberto) bar.classList.add("fo-oculto");
+
+    let temIndicadores = false;
+    if(i===0 && STATE.screen!=="dashboard"){
+      const antes = Array.from(content.querySelectorAll(".stat-row, .metas-dia-head")).filter(function(el){
+        return !!(el.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING);
+      });
+      temIndicadores = antes.length>0;
+      if(temIndicadores && !prefs.indicadores) antes.forEach(function(el){ el.classList.add("fo-oculto"); });
+    }
+    bar.setAttribute("data-fo-ind", temIndicadores ? "1" : "0");
+
+    const badge = ativos.length ? '<span class="lanc-badge">'+ativos.length+'</span>' : '';
+    const chipsLista = ativos.filter(function(a){ return !prefs.aberto || a.oculto; });
+    const chips = chipsLista.map(function(a){
+      const txt = escapeHtml(a.label+": "+a.texto);
+      return a.limpavel
+        ? '<span class="filtro-chip">'+txt+'<button type="button" title="Remover este filtro" onclick="limparCampoFiltro('+i+','+a.j+')">'+icon("x",12)+'</button></span>'
+        : '<span class="filtro-chip fixo">'+txt+'</span>';
+    }).join("");
+    const tb = document.createElement("div");
+    tb.className = "filtros-toolbar no-print";
+    tb.innerHTML =
+      '<button type="button" class="btn lanc-tb-btn'+(prefs.aberto?' on':'')+'" onclick="toggleFiltrosBarra('+i+')" title="'+(prefs.aberto?'Ocultar filtros':'Mostrar filtros')+'">'+
+        icon("filter",13)+' Filtros'+badge+'<span class="lanc-chev'+(prefs.aberto?' aberto':'')+'">'+icon("chevronDown",13)+'</span></button>'+
+      '<button type="button" class="btn btn-ghost lanc-tb-btn" onclick="openEscolherFiltrosModal('+i+')">'+icon("sliders",13)+' Escolher filtros</button>'+
+      chips;
+    bar.parentNode.insertBefore(tb, bar);
+  });
+}
+function toggleFiltrosBarra(i){
+  const p = prefsDaBarra(i); p.aberto = !p.aberto; salvarFiltrosTelas(); aprimorarFiltrosDaTela(true);
+}
+function limparCampoFiltro(i, j){
+  const bar = document.querySelector('#content .filter-bar[data-fo-bar="'+i+'"]');
+  if(!bar) return;
+  const c = camposDaBarra(bar)[j];
+  if(!c) return;
+  const st = estadoCampoFiltro(c);
+  if(!st.ctrl || !st.limpavel) return;
+  st.ctrl.value = "";
+  st.ctrl.dispatchEvent(new Event("change", {bubbles:true}));
+  setTimeout(function(){ aprimorarFiltrosDaTela(true); }, 0);
+}
+function toggleCampoFiltro(i, j, visivel){
+  const bar = document.querySelector('#content .filter-bar[data-fo-bar="'+i+'"]');
+  if(!bar) return;
+  const c = camposDaBarra(bar)[j];
+  if(!c) return;
+  const p = prefsDaBarra(i);
+  p.ocultos = p.ocultos.filter(function(l){ return l!==c.label; });
+  if(!visivel) p.ocultos.push(c.label);
+  salvarFiltrosTelas(); aprimorarFiltrosDaTela(true);
+}
+function toggleIndicadoresTela(i, mostrar){
+  prefsDaBarra(i).indicadores = mostrar; salvarFiltrosTelas(); aprimorarFiltrosDaTela(true);
+}
+function mostrarTodosFiltrosTela(i){
+  const p = prefsDaBarra(i); p.ocultos = []; p.indicadores = true; p.aberto = true;
+  salvarFiltrosTelas(); aprimorarFiltrosDaTela(true); openEscolherFiltrosModal(i);
+}
+function openEscolherFiltrosModal(i){
+  const bar = document.querySelector('#content .filter-bar[data-fo-bar="'+i+'"]');
+  if(!bar) return;
+  const prefs = prefsDaBarra(i);
+  const linha = function(checked, onchange, label){
+    return '<label style="display:flex;align-items:center;gap:9px;padding:8px 0;border-bottom:1px solid var(--steel-border);cursor:pointer">'+
+      '<input type="checkbox" '+(checked?"checked":"")+' onchange="'+onchange+'" style="accent-color:'+COLORS.brand+'"/>'+
+      '<span style="font-size:13.5px">'+escapeHtml(label)+'</span></label>';
+  };
+  const checks = camposDaBarra(bar).map(function(c, j){
+    return linha(prefs.ocultos.indexOf(c.label)<0, "toggleCampoFiltro("+i+","+j+", this.checked)", c.label);
+  }).join("");
+  const indicadores = bar.getAttribute("data-fo-ind")==="1"
+    ? '<div style="margin-top:14px">'+linha(prefs.indicadores, "toggleIndicadoresTela("+i+", this.checked)", "Mostrar as caixas de indicadores no topo")+'</div>'
+    : '';
+  const tituloTela = (document.querySelector("#content .screen-title")||{}).textContent || "";
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Escolher filtros'+(tituloTela?' — '+escapeHtml(tituloTela):'')+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:0 0 6px;line-height:1.5">Marque os campos que aparecem na barra de filtros. Um campo escondido que estiver filtrando aparece como etiqueta acima da barra. A escolha fica salva neste navegador.</p>'+
+        '<div>'+checks+'</div>'+
+        indicadores+
+        '<div class="modal-actions" style="justify-content:space-between">'+
+          '<button type="button" class="btn btn-ghost" onclick="mostrarTodosFiltrosTela('+i+')">Mostrar todos</button>'+
+          '<button type="button" class="btn btn-primary" onclick="closeModal()">Concluído</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* Algumas telas redesenham só um pedaço (ou terminam de desenhar depois de carregar algo);
+   o observador reaplica as preferências sempre que surge uma barra de filtros nova. */
+let __foObserver = null, __foPendente = false;
+function iniciarObservadorFiltros(){
+  if(__foObserver || !window.MutationObserver) return;
+  const c = document.getElementById("content");
+  if(!c) return;
+  __foObserver = new MutationObserver(function(){
+    if(__foPendente) return;
+    __foPendente = true;
+    requestAnimationFrame(function(){ __foPendente = false; aprimorarFiltrosDaTela(false); });
+  });
+  __foObserver.observe(c, {childList:true, subtree:true});
+}
+
+/* ============================== COLUNAS: FILTRO POR VALOR, ORDEM E VISIBILIDADE ==============================
+   Vale para Prog. Perfiladeira, Pintura, Coladeira, Entregas e Pedidos Entregues.
+   - Clique no nome da coluna: abre um menu com a lista de valores daquela coluna (como o filtro
+     do Excel), pra marcar só os que interessam; também move a coluna (esquerda, direita, início,
+     fim) e oculta.
+   - Arrastar o cabeçalho de uma coluna e soltar sobre outro reposiciona.
+   - A ordem e as colunas visíveis ficam salvas neste navegador (por tela) e valem também no
+     PDF. Nas telas de programação é a mesma configuração do botão "Colunas / Relatório".
+   - O filtro por coluna vale enquanto a tela estiver aberta (como os outros filtros) e entra no
+     total do dia, nas caixas de indicadores e na contagem "Mostrando X pedido(s)".
+   - A lista de valores de uma coluna já respeita os filtros das outras colunas (igual ao Excel).
+   - Nas telas de programação a coluna Prog. não pode ser ocultada: é nela que ficam a caixinha
+     de seleção e a alça pra arrastar o pedido. */
+const COL_CFG_STORAGE = "eleve_colunas_telas";
+const COL_CTX_LABEL = {perfilar:"Prog. Perfiladeira", pintura:"Prog. Pintura", colagem:"Prog. Coladeira", entrega:"Prog. Entregas", entregues:"Pedidos Entregues"};
+let __colCfgSalvo = null;
+function colCfgSalvo(){
+  if(__colCfgSalvo) return __colCfgSalvo;
+  try{ __colCfgSalvo = JSON.parse(window.localStorage.getItem(COL_CFG_STORAGE) || "{}") || {}; }catch(err){ __colCfgSalvo = {}; }
+  return __colCfgSalvo;
+}
+function colEhStage(ctx){ return !!STAGE_DEFS[ctx]; }
+function colDisponiveis(ctx){
+  return PEDIDO_COLUMNS.map(function(c){ return c.key; }).filter(function(k){
+    if(k==="motorista") return ctx==="entrega" || ctx==="entregues";
+    return true;
+  });
+}
+function colVisiveisPadrao(ctx){
+  if(ctx==="entregues"){
+    const v = {};
+    ["dataProg","cliente","op","material","corSup","corInf","eps","metragem","cidade","motorista","leadTime"].forEach(function(k){ v[k] = true; });
+    return v;
+  }
+  return Object.assign({}, defaultStageFilterState().colunasVisiveis);
+}
+/* Nas telas de programação, "visiveis" é o próprio stageState[stage].colunasVisiveis (o mesmo
+   objeto que o PDF já usava), só que agora carregado/salvo no navegador. */
+function colCfg(ctx){
+  if(!STATE.colCfg) STATE.colCfg = {};
+  if(STATE.colCfg[ctx]) return STATE.colCfg[ctx];
+  const salvo = colCfgSalvo()[ctx] || {};
+  const disp = colDisponiveis(ctx);
+  let ordem = Array.isArray(salvo.ordem) ? salvo.ordem.filter(function(k){ return disp.indexOf(k)>=0; }) : [];
+  disp.forEach(function(k){ if(ordem.indexOf(k)<0) ordem.push(k); });
+  let visiveis;
+  if(colEhStage(ctx)){
+    visiveis = STATE.stageState[ctx].colunasVisiveis;
+  } else {
+    visiveis = colVisiveisPadrao(ctx);
+  }
+  if(salvo.visiveis && typeof salvo.visiveis==="object"){
+    Object.keys(salvo.visiveis).forEach(function(k){ visiveis[k] = !!salvo.visiveis[k]; });
+  }
+  if(colEhStage(ctx)) visiveis.dataProg = true;
+  STATE.colCfg[ctx] = {ordem:ordem, visiveis:visiveis};
+  return STATE.colCfg[ctx];
+}
+function salvarColCfg(ctx){
+  const cfg = colCfg(ctx);
+  const todos = colCfgSalvo();
+  todos[ctx] = {ordem:cfg.ordem.slice(), visiveis:Object.assign({}, cfg.visiveis)};
+  try{ window.localStorage.setItem(COL_CFG_STORAGE, JSON.stringify(todos)); }catch(err){}
+}
+function colunasVisiveisOrdenadas(ctx){
+  const cfg = colCfg(ctx);
+  return cfg.ordem.filter(function(k){ return !!cfg.visiveis[k]; });
+}
+function colLabel(key){ const d = PEDIDO_COLUMNS.find(function(c){ return c.key===key; }); return d ? d.label : key; }
+function colPodeOcultar(ctx, key){ return !(colEhStage(ctx) && key==="dataProg"); }
+
+/* ---- valores exibidos por coluna (o que aparece na lista do filtro) ---- */
+const COL_VAZIO = "(Vazio)";
+function colNomeMaterial(id){ const m = STATE.materiais.find(function(x){ return x.id===id; }); return m ? m.nome : ""; }
+function colValorTexto(key, p){
+  let v = "";
+  switch(key){
+    case "dataProg": v = p.dataProg ? fmtDateBR(p.dataProg) : ""; break;
+    case "cliente": v = p.cliente||""; break;
+    case "op": v = p.op||""; break;
+    case "situacao": { const st = STATE.statusOptions.find(function(x){ return x.id===p.situacaoId; }); v = st ? st.nome : ""; break; }
+    case "material": v = p.material||""; break;
+    case "corSup": v = colNomeMaterial(p.corSupId); break;
+    case "corInf": v = colNomeMaterial(p.corInfId); break;
+    case "eps": v = colNomeMaterial(p.epsId); break;
+    case "metragem": v = fmtNum(p.metragem)+" m"; break;
+    case "cidade": { const c = STATE.cidades.find(function(x){ return x.id===p.cidadeId; }); v = c ? c.nome : ""; break; }
+    case "motorista": { const m = STATE.motoristas.find(function(x){ return x.id===p.motoristaId; }); v = m ? m.nome : ""; break; }
+    case "leadTime": { const d = leadTimeDias(p); v = d===null ? "" : leadTimeLabel(d); break; }
+  }
+  v = String(v).trim();
+  return v || COL_VAZIO;
+}
+function colValorOrdem(key, p){
+  if(key==="dataProg") return p.dataProg || "";
+  if(key==="metragem") return Number(p.metragem||0);
+  if(key==="leadTime"){ const d = leadTimeDias(p); return d===null ? -1 : d; }
+  return colValorTexto(key, p).toLowerCase();
+}
+function colFiltros(ctx){
+  if(!STATE.colFiltros) STATE.colFiltros = {};
+  if(!STATE.colFiltros[ctx]) STATE.colFiltros[ctx] = {};
+  return STATE.colFiltros[ctx];
+}
+function aplicarFiltrosColuna(ctx, lista, exceptKey){
+  const filtros = colFiltros(ctx);
+  const chaves = Object.keys(filtros).filter(function(k){ return k!==exceptKey && Array.isArray(filtros[k]); });
+  if(!chaves.length) return lista;
+  return lista.filter(function(p){
+    return chaves.every(function(k){ return filtros[k].indexOf(colValorTexto(k, p))>=0; });
+  });
+}
+function colListaBase(ctx, exceptKey){
+  return colEhStage(ctx) ? computeStageAtivos(ctx, exceptKey) : filtrarEntregues(exceptKey);
+}
+function colValoresDistintos(ctx, key){
+  const mapa = {};
+  colListaBase(ctx, key).forEach(function(p){
+    const t = colValorTexto(key, p);
+    if(!mapa[t]) mapa[t] = {texto:t, qtd:0, ordem:colValorOrdem(key, p)};
+    mapa[t].qtd++;
+  });
+  /* Valores já marcados no filtro que sumiram da lista (por causa de outro filtro) continuam
+     aparecendo, com 0, pra dar pra desmarcar. */
+  (colFiltros(ctx)[key]||[]).forEach(function(t){ if(!mapa[t]) mapa[t] = {texto:t, qtd:0, ordem:t.toLowerCase()}; });
+  return Object.keys(mapa).map(function(k){ return mapa[k]; }).sort(function(a,b){
+    if(a.texto===COL_VAZIO) return 1;
+    if(b.texto===COL_VAZIO) return -1;
+    if(typeof a.ordem==="number" && typeof b.ordem==="number") return a.ordem-b.ordem;
+    return String(a.ordem).localeCompare(String(b.ordem), "pt-BR", {numeric:true});
+  });
+}
+
+/* ---- cabeçalho ---- */
+function colThHtml(ctx, key, label){
+  const filtrado = Array.isArray(colFiltros(ctx)[key]);
+  const a = "'"+ctx+"','"+key+"'";
+  return '<th class="th-col'+(filtrado?' th-filtrado':'')+'" data-col="'+key+'" draggable="true"'+
+    ' ondragstart="colDragStart(event,'+a+')" ondragover="colDragOver(event)" ondragleave="colDragLeave(event)"'+
+    ' ondrop="colDrop(event,'+a+')" ondragend="colDragEnd(event)" onclick="abrirMenuColuna(event,'+a+')"'+
+    ' title="Clique para filtrar, mover ou ocultar. Arraste para mudar a posição.">'+
+    '<span class="th-col-inner">'+label+'<span class="th-col-icon no-print">'+icon(filtrado?"filter":"chevronDown",11)+'</span></span></th>';
+}
+function colFiltrosAtivosHtml(ctx){
+  const filtros = colFiltros(ctx);
+  const chaves = Object.keys(filtros).filter(function(k){ return Array.isArray(filtros[k]); });
+  if(!chaves.length) return "";
+  const chips = chaves.map(function(k){
+    const vals = filtros[k];
+    const txt = vals.length===1 ? colLabel(k)+": "+vals[0] : colLabel(k)+": "+vals.length+" valores";
+    return '<span class="filtro-chip" title="'+escapeAttr(vals.join(", "))+'">'+escapeHtml(txt)+
+      '<button type="button" title="Remover filtro da coluna" onclick="limparFiltroColuna(\''+ctx+'\',\''+k+'\')">'+icon("x",12)+'</button></span>';
+  }).join("");
+  return '<div class="col-filtros-bar no-print"><span class="rotulo">Filtro nas colunas:</span>'+chips+
+    '<button type="button" class="btn btn-ghost lanc-tb-btn" onclick="limparFiltrosColunas(\''+ctx+'\')">Limpar</button></div>';
+}
+function limparFiltroColuna(ctx, key){ delete colFiltros(ctx)[key]; fecharMenuColuna(); renderScreen(); }
+function limparFiltrosColunas(ctx){ STATE.colFiltros[ctx] = {}; fecharMenuColuna(); renderScreen(); }
+
+/* ---- menu da coluna ---- */
+let __colMenu = null;
+function fecharMenuColuna(){
+  const el = document.getElementById("col-menu");
+  if(el) el.remove();
+  __colMenu = null;
+  document.removeEventListener("mousedown", __colMenuFora, true);
+  document.removeEventListener("keydown", __colMenuTecla, true);
+  window.removeEventListener("scroll", __colMenuRolagem, true);
+  window.removeEventListener("resize", fecharMenuColuna);
+}
+function __colMenuFora(e){
+  const el = document.getElementById("col-menu");
+  if(el && !el.contains(e.target) && !(e.target.closest && e.target.closest(".th-col"))) fecharMenuColuna();
+}
+function __colMenuTecla(e){ if(e.key==="Escape") fecharMenuColuna(); if(e.key==="Enter" && __colMenu) aplicarFiltroColunaMenu(); }
+function __colMenuRolagem(e){
+  const el = document.getElementById("col-menu");
+  if(el && e.target && e.target.nodeType===1 && el.contains(e.target)) return;
+  fecharMenuColuna();
+}
+function abrirMenuColuna(ev, ctx, key, thAlvo){
+  if(ev){ ev.stopPropagation(); ev.preventDefault(); }
+  const th = thAlvo || (ev && ev.currentTarget);
+  const mesmo = __colMenu && __colMenu.ctx===ctx && __colMenu.key===key && !thAlvo;
+  fecharMenuColuna();
+  if(mesmo || !th) return;
+  __colMenu = {ctx:ctx, key:key};
+  const vis = colunasVisiveisOrdenadas(ctx);
+  const idx = vis.indexOf(key);
+  const filtro = colFiltros(ctx)[key];
+  const valores = colValoresDistintos(ctx, key);
+  const a = "'"+ctx+"','"+key+"'";
+  const itens = valores.map(function(v, i){
+    const marcado = !Array.isArray(filtro) || filtro.indexOf(v.texto)>=0;
+    return '<label data-busca="'+escapeAttr(v.texto.toLowerCase())+'"><input type="checkbox" class="col-menu-val" data-i="'+i+'" '+(marcado?"checked":"")+' onchange="colMenuSincTodos()"/>'+
+      '<span>'+escapeHtml(v.texto)+'</span><span class="qtd">'+v.qtd+'</span></label>';
+  }).join("");
+  const btn = function(acao, ic, texto, desab, titulo){
+    return '<button type="button" class="col-menu-item" '+(desab?"disabled":"")+' title="'+(titulo||texto)+'" onclick="'+acao+'">'+icon(ic,13)+' '+texto+'</button>';
+  };
+  const el = document.createElement("div");
+  el.id = "col-menu";
+  el.className = "no-print";
+  el.innerHTML =
+    '<div class="col-menu-titulo">'+escapeHtml(colLabel(key))+'</div>'+
+    '<div class="col-menu-acoes">'+
+      btn("moverColuna("+a+",\'esq\')", "chevronLeft", "Esquerda", idx<=0)+
+      btn("moverColuna("+a+",\'dir\')", "chevronRight", "Direita", idx<0 || idx>=vis.length-1)+
+      btn("moverColuna("+a+",\'inicio\')", "arrowUpDown", "Para o início", idx<=0, "Trazer para a primeira posição")+
+      btn("moverColuna("+a+",\'fim\')", "arrowUpDown", "Para o fim", idx<0 || idx>=vis.length-1, "Levar para a última posição")+
+      btn("ocultarColuna("+a+")", "eye", "Ocultar coluna", !colPodeOcultar(ctx,key), colPodeOcultar(ctx,key)?"Ocultar coluna":"A coluna Prog. guarda a seleção e a alça de arrastar, por isso fica sempre visível")+
+      btn("fecharMenuColuna(); openColunasModal(\'"+ctx+"\')", "sliders", "Todas as colunas…")+
+    '</div>'+
+    '<div class="col-menu-sep"></div>'+
+    '<div class="col-menu-sub">Filtrar por valor</div>'+
+    '<input class="field-input" id="col-menu-busca" placeholder="Buscar…" oninput="colMenuBuscar(this.value)"/>'+
+    '<div class="col-menu-lista">'+
+      '<label class="todos"><input type="checkbox" id="col-menu-todos" onchange="colMenuMarcarTodos(this.checked)"/><span>Selecionar todos</span></label>'+
+      (itens || '<div style="padding:8px;color:var(--text-muted);font-size:12px">Nenhum valor no período.</div>')+
+    '</div>'+
+    '<div class="col-menu-rodape">'+
+      '<button type="button" class="btn btn-ghost" '+(Array.isArray(filtro)?"":"disabled")+' onclick="limparFiltroColuna('+a+')">Limpar filtro</button>'+
+      '<button type="button" class="btn btn-primary" onclick="aplicarFiltroColunaMenu()">Aplicar</button>'+
+    '</div>';
+  __colMenu.valores = valores;
+  document.body.appendChild(el);
+  colMenuSincTodos();
+  const r = th.getBoundingClientRect();
+  const w = el.offsetWidth, h = el.offsetHeight;
+  let left = Math.min(Math.max(8, r.left), window.innerWidth - w - 8);
+  let top = r.bottom + 4;
+  if(top + h > window.innerHeight - 8) top = Math.max(8, Math.min(r.top - h - 4, window.innerHeight - h - 8));
+  el.style.left = left+"px";
+  el.style.top = top+"px";
+  setTimeout(function(){
+    document.addEventListener("mousedown", __colMenuFora, true);
+    document.addEventListener("keydown", __colMenuTecla, true);
+    window.addEventListener("scroll", __colMenuRolagem, true);
+    window.addEventListener("resize", fecharMenuColuna);
+  }, 0);
+  const busca = document.getElementById("col-menu-busca");
+  if(busca && valores.length>8) busca.focus();
+}
+function colMenuItensVisiveis(){
+  return Array.from(document.querySelectorAll("#col-menu .col-menu-lista label:not(.todos)")).filter(function(l){ return l.style.display!=="none"; });
+}
+function colMenuBuscar(txt){
+  const t = (txt||"").trim().toLowerCase();
+  document.querySelectorAll("#col-menu .col-menu-lista label:not(.todos)").forEach(function(l){
+    l.style.display = (!t || (l.getAttribute("data-busca")||"").indexOf(t)>=0) ? "" : "none";
+  });
+  colMenuSincTodos();
+}
+function colMenuMarcarTodos(marcar){
+  colMenuItensVisiveis().forEach(function(l){ l.querySelector("input").checked = marcar; });
+}
+function colMenuSincTodos(){
+  const todos = document.getElementById("col-menu-todos");
+  if(!todos) return;
+  const cbs = colMenuItensVisiveis().map(function(l){ return l.querySelector("input"); });
+  const n = cbs.filter(function(c){ return c.checked; }).length;
+  todos.checked = cbs.length>0 && n===cbs.length;
+  todos.indeterminate = n>0 && n<cbs.length;
+}
+function aplicarFiltroColunaMenu(){
+  if(!__colMenu) return;
+  const ctx = __colMenu.ctx, key = __colMenu.key, valores = __colMenu.valores || [];
+  const marcados = Array.from(document.querySelectorAll("#col-menu .col-menu-val")).filter(function(c){ return c.checked; })
+    .map(function(c){ return valores[Number(c.getAttribute("data-i"))].texto; });
+  if(valores.length && !marcados.length){ showToast("info","Marque pelo menos um valor, ou use Limpar filtro."); return; }
+  if(marcados.length===valores.length) delete colFiltros(ctx)[key];
+  else colFiltros(ctx)[key] = marcados;
+  fecharMenuColuna();
+  renderScreen();
+}
+
+/* ---- mover / ocultar ---- */
+function colReposicionar(ctx, key, alvo, depois){
+  const cfg = colCfg(ctx);
+  if(key===alvo) return;
+  cfg.ordem = cfg.ordem.filter(function(k){ return k!==key; });
+  let pos = cfg.ordem.indexOf(alvo);
+  if(pos<0) pos = cfg.ordem.length; else if(depois) pos++;
+  cfg.ordem.splice(pos, 0, key);
+}
+function moverColuna(ctx, key, direcao){
+  const vis = colunasVisiveisOrdenadas(ctx);
+  const i = vis.indexOf(key);
+  if(i<0) return;
+  if(direcao==="esq" && i>0) colReposicionar(ctx, key, vis[i-1], false);
+  else if(direcao==="dir" && i<vis.length-1) colReposicionar(ctx, key, vis[i+1], true);
+  else if(direcao==="inicio" && i>0) colReposicionar(ctx, key, vis[0], false);
+  else if(direcao==="fim" && i<vis.length-1) colReposicionar(ctx, key, vis[vis.length-1], true);
+  else return;
+  salvarColCfg(ctx);
+  fecharMenuColuna();
+  renderScreen();
+  /* Reabre o menu na nova posição, pra dar pra continuar movendo sem procurar a coluna de novo. */
+  const th = document.querySelector('#content th.th-col[data-col="'+key+'"]');
+  if(th) abrirMenuColuna(null, ctx, key, th);
+}
+function ocultarColuna(ctx, key){
+  if(!colPodeOcultar(ctx, key)) return;
+  colCfg(ctx).visiveis[key] = false;
+  delete colFiltros(ctx)[key];   // filtro numa coluna escondida ficaria invisível
+  salvarColCfg(ctx);
+  fecharMenuColuna();
+  renderScreen();
+  showToast("info", "Coluna "+colLabel(key)+" oculta. Para mostrar de novo, clique em qualquer coluna → Todas as colunas.");
+}
+
+/* ---- arrastar o cabeçalho ---- */
+let __colDrag = null;
+function colDragStart(ev, ctx, key){
+  ev.stopPropagation();
+  __colDrag = {ctx:ctx, key:key};
+  fecharMenuColuna();
+  ev.dataTransfer.effectAllowed = "move";
+  try{ ev.dataTransfer.setData("text/plain", "col:"+key); }catch(err){}
+  ev.currentTarget.classList.add("th-arrastando");
+}
+function colDragOver(ev){
+  if(!__colDrag) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const th = ev.currentTarget;
+  const r = th.getBoundingClientRect();
+  const depois = ev.clientX > r.left + r.width/2;
+  th.classList.toggle("th-drop-antes", !depois);
+  th.classList.toggle("th-drop-depois", depois);
+}
+function colDragLeave(ev){ ev.currentTarget.classList.remove("th-drop-antes","th-drop-depois"); }
+function colDrop(ev, ctx, alvo){
+  if(!__colDrag) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const th = ev.currentTarget;
+  const depois = th.classList.contains("th-drop-depois");
+  const d = __colDrag; __colDrag = null;
+  if(d.ctx!==ctx || d.key===alvo){ renderScreen(); return; }
+  colReposicionar(ctx, d.key, alvo, depois);
+  salvarColCfg(ctx);
+  renderScreen();
+}
+function colDragEnd(ev){
+  __colDrag = null;
+  document.querySelectorAll("#content .th-col").forEach(function(t){ t.classList.remove("th-arrastando","th-drop-antes","th-drop-depois"); });
+  document.querySelectorAll("#content .drag-target.drag-over").forEach(function(t){ t.classList.remove("drag-over"); });
+}
+
+/* ---- janela com todas as colunas (mostrar/ocultar e ordenar) ---- */
+function openColunasModal(ctx){
+  const cfg = colCfg(ctx);
+  const ordem = cfg.ordem;
+  const linhas = ordem.map(function(k, i){
+    const fixo = !colPodeOcultar(ctx, k);
+    return '<div class="col-cfg-linha">'+
+      '<input type="checkbox" '+(cfg.visiveis[k]?"checked":"")+' '+(fixo?"disabled":"")+' onchange="colCfgToggle(\''+ctx+'\',\''+k+'\', this.checked)" style="accent-color:'+COLORS.brand+'"/>'+
+      '<span style="font-size:13.5px'+(cfg.visiveis[k]?'':';color:'+COLORS.textMuted)+'">'+escapeHtml(colLabel(k))+(fixo?' <span style="font-size:11px;color:'+COLORS.textMuted+'">(sempre visível)</span>':'')+'</span>'+
+      '<span style="display:flex;gap:4px">'+
+        '<button type="button" class="icon-btn" title="Subir (mais à esquerda)" '+(i===0?"disabled":"")+' onclick="colCfgMover(\''+ctx+'\','+i+',-1)">'+icon("chevronLeft",13)+'</button>'+
+        '<button type="button" class="icon-btn" title="Descer (mais à direita)" '+(i===ordem.length-1?"disabled":"")+' onclick="colCfgMover(\''+ctx+'\','+i+',1)">'+icon("chevronRight",13)+'</button>'+
+      '</span>'+
+    '</div>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:430px">'+
+        '<div class="modal-header"><h3>Colunas — '+escapeHtml(COL_CTX_LABEL[ctx]||"")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:0 0 6px;line-height:1.5">Marque as colunas que aparecem na tela e no PDF. As setas mudam a posição (a primeira da lista fica mais à esquerda). Também dá para arrastar o cabeçalho direto na tabela.</p>'+
+        '<div>'+linhas+'</div>'+
+        '<div class="modal-actions" style="justify-content:space-between">'+
+          '<button type="button" class="btn btn-ghost" onclick="colCfgRestaurar(\''+ctx+'\')">Restaurar padrão</button>'+
+          '<button type="button" class="btn btn-primary" onclick="closeModal()">Concluído</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function colCfgToggle(ctx, key, visivel){
+  if(!visivel && !colPodeOcultar(ctx, key)) return;
+  colCfg(ctx).visiveis[key] = visivel;
+  if(!visivel) delete colFiltros(ctx)[key];
+  salvarColCfg(ctx); renderScreen(); openColunasModal(ctx);
+}
+function colCfgMover(ctx, i, dir){
+  const ordem = colCfg(ctx).ordem;
+  const j = i + dir;
+  if(j<0 || j>=ordem.length) return;
+  const t = ordem[i]; ordem[i] = ordem[j]; ordem[j] = t;
+  salvarColCfg(ctx); renderScreen(); openColunasModal(ctx);
+}
+function colCfgRestaurar(ctx){
+  const cfg = colCfg(ctx);
+  cfg.ordem = colDisponiveis(ctx);
+  const padrao = colVisiveisPadrao(ctx);
+  Object.keys(cfg.visiveis).forEach(function(k){ delete cfg.visiveis[k]; });
+  Object.assign(cfg.visiveis, padrao);
+  if(colEhStage(ctx)) cfg.visiveis.dataProg = true;
+  salvarColCfg(ctx); renderScreen(); openColunasModal(ctx);
+}
+
 function renderPedidosScreen(){
   const f = STATE.pedidosFiltro;
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
@@ -4537,39 +5606,19 @@ function renderPedidosScreen(){
   const estoqueBaixo = STATE.materiais.filter(m=>m.estoque<m.estoqueMinimo).length;
 
   document.getElementById("content").innerHTML =
-    '<div class="screen-fixed"><div class="screen-fixed-head">'+
+    '<div class="screen-fixed lanc-compacto"><div class="screen-fixed-head">'+
     screenHeaderHtml("dashboard","Lançamentos","Cadastro de pedidos, baixa automática de matéria-prima — clique no cabeçalho ou use \"Classificar\" para ordenar",
       '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+pedidosSortControlHtml()+
       '<button class="btn btn-ghost" onclick="setScreen(\'pedidosCancelados\')">'+icon("xCircle",14)+' Pedidos Cancelados</button>'+
       '<button class="btn btn-primary" onclick="openPedidoModal(\'new\')">'+icon("plus",14)+' Novo Pedido</button></div>')+
-    '<div class="stat-row">'+
-      statCardHtml("Pedidos no Filtro", pedidos.length, "dashboard")+
-      statCardHtml("Em Produção / Pré-Prod.", totalAtivos, "calendar", COLORS.brand)+
-      statCardHtml("Metragem Ativa", fmtNumCard(metragemAtiva)+" m", "package", COLORS.green)+
-      statCardHtml("Aguard. Matéria-Prima", aguardando, "alert", aguardando?COLORS.red:COLORS.textMuted)+
-      statCardHtml("Materiais c/ Estoque Baixo", estoqueBaixo, "alert", estoqueBaixo?COLORS.red:COLORS.textMuted)+
-    '</div>'+
-    '<div class="pcp-card filter-bar">'+
-      '<div style="min-width:170px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updatePedidosFiltro(\'cliente\', this.value)"/></div>'+
-      '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updatePedidosFiltro(\'op\', this.value)"/></div>'+
-      '<div style="min-width:170px"><label class="field-label">Situação</label><select class="field-select" onchange="updatePedidosFiltro(\'situacaoId\', this.value)"><option value="">Todas</option>'+
-        STATE.statusOptions.map(s=>'<option value="'+s.id+'" '+(f.situacaoId===s.id?"selected":"")+'>'+escapeHtml(s.nome)+'</option>').join("")+'</select></div>'+
-      '<div style="min-width:170px"><label class="field-label">Material</label><input class="field-input" value="'+escapeAttr(f.material)+'" placeholder="Buscar material…" onchange="updatePedidosFiltro(\'material\', this.value)"/></div>'+
-      '<div style="min-width:160px"><label class="field-label">Cor Sup.</label><select class="field-select" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+
-        bobinas.map(m=>'<option value="'+m.id+'" '+(f.corSupId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+'</select></div>'+
-      '<div style="min-width:160px"><label class="field-label">Cor Inf.</label><select class="field-select" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+
-        bobinas.map(m=>'<option value="'+m.id+'" '+(f.corInfId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+'</select></div>'+
-      '<div style="min-width:170px"><label class="field-label">Cidade</label><select class="field-select" onchange="updatePedidosFiltro(\'cidadeId\', this.value)"><option value="">Todas</option>'+
-        STATE.cidades.map(c=>'<option value="'+c.id+'" '+(f.cidadeId===c.id?"selected":"")+'>'+escapeHtml(c.nome)+'</option>').join("")+'</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">Prog. início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updatePedidosFiltro(\'dIni\', this.value)"/></div>'+
-      '<div style="min-width:150px"><label class="field-label">Prog. fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updatePedidosFiltro(\'dFim\', this.value)"/></div>'+
-      '<button class="btn btn-ghost" onclick="clearPedidosFiltro()">Limpar filtros</button>'+
-    '</div>'+
+    lancIndicadoresHtml(pedidos.length, totalAtivos, metragemAtiva, aguardando, estoqueBaixo)+
+    lancToolbarHtml()+
+    lancFiltroBarHtml(bobinas)+
     '</div>'+
     '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+
       pedidoTableHtml(pedidos, false, false, false, true, null, false, false, function(p){
         return '<button class="icon-btn" title="Cancelar pedido" style="color:'+COLORS.red+'" onclick="openCancelarPedidoModal(\''+p.id+'\')">'+icon("xCircle",13)+'</button>';
-      })+
+      }, null, undefined, {coresDia: lancCoresCfg().ativo})+
     '</div></div>'+
     '</div>';
 }
@@ -5052,7 +6101,8 @@ function clearProgFiltro(stage){
 }
 function toggleDiaVisivel(stage, idx){ STATE.stageState[stage].diasVisiveis[idx] = !STATE.stageState[stage].diasVisiveis[idx]; renderScreen(); }
 function toggleProgColunaModal(stage, key, checked){ STATE.stageState[stage].colunasVisiveis[key] = checked; }
-function openRelatorioColunasModal(stage){
+function openRelatorioColunasModal(stage){ openColunasModal(stage); }
+function openRelatorioColunasModalAntigo(stage){
   const s = STATE.stageState[stage];
   const checks = PEDIDO_COLUMNS.map(c=>{
     const checked = s.colunasVisiveis[c.key];
@@ -5071,21 +6121,187 @@ function openRelatorioColunasModal(stage){
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
+/* ============================== SELEÇÃO MÚLTIPLA (telas de produção) ==============================
+   Marque vários pedidos (caixinha ao lado da data; Shift+clique marca um intervalo, e a
+   caixinha "Selecionar todos" no cabeçalho do dia marca o dia inteiro). Arrastar qualquer
+   pedido marcado leva todos juntos para o dia de destino. A barra flutuante também move
+   para um dia da semana ou para outra data — útil no celular, onde arrastar não funciona.
+   A seleção é por etapa e fica só na memória da sessão. */
+let __dragIds = null;
+let __dragGhost = null;
+let __ultimoSelecionado = {};
+function stageDaTelaAtual(){
+  const m = /^prog-(perfilar|pintura|colagem|entrega)$/.exec(STATE.screen||"");
+  return m ? m[1] : null;
+}
+function selecaoDoStage(stage){
+  if(!STATE.progSelecao) STATE.progSelecao = {};
+  if(!STATE.progSelecao[stage]) STATE.progSelecao[stage] = [];
+  return STATE.progSelecao[stage];
+}
+function marcarSelecao(stage, id, marcar){
+  const sel = selecaoDoStage(stage);
+  const i = sel.indexOf(id);
+  if(marcar && i<0) sel.push(id);
+  if(!marcar && i>=0) sel.splice(i,1);
+}
+function clickSelecaoPedido(event, stage, id){
+  event.stopPropagation();
+  const marcar = event.target.checked;
+  const ultimo = __ultimoSelecionado[stage];
+  if(event.shiftKey && ultimo && ultimo!==id){
+    const ordem = Array.from(document.querySelectorAll("#content tr[data-pedido-id]")).map(function(tr){ return tr.getAttribute("data-pedido-id"); });
+    const a = ordem.indexOf(ultimo), b = ordem.indexOf(id);
+    if(a>=0 && b>=0){
+      ordem.slice(Math.min(a,b), Math.max(a,b)+1).forEach(function(x){ marcarSelecao(stage, x, marcar); });
+    } else marcarSelecao(stage, id, marcar);
+  } else {
+    marcarSelecao(stage, id, marcar);
+  }
+  __ultimoSelecionado[stage] = id;
+  atualizarSelecaoUI(stage);
+}
+function toggleSelecaoDia(stage, date, marcar){
+  document.querySelectorAll('#content [data-dia="'+date+'"] tr[data-pedido-id]').forEach(function(tr){
+    marcarSelecao(stage, tr.getAttribute("data-pedido-id"), marcar);
+  });
+  atualizarSelecaoUI(stage);
+}
+function limparSelecao(stage){
+  STATE.progSelecao && (STATE.progSelecao[stage] = []);
+  __ultimoSelecionado[stage] = null;
+  atualizarSelecaoUI(stage);
+}
+function diasDaSemanaVisiveis(stage){
+  const s = STATE.stageState[stage];
+  const baseDate = s.dIni ? new Date(s.dIni+"T00:00:00") : mondayOfCurrentWeek();
+  return DIAS_UTEIS_CURTO.map(function(label, idx){
+    return {label:label, date:toISO(addDays(baseDate, idx)), visivel:s.diasVisiveis[idx]};
+  }).filter(function(d){ return d.visivel; });
+}
+/* Sincroniza caixinhas, destaque das linhas e a barra flutuante com a seleção atual,
+   sem redesenhar a tela (preserva a rolagem). Também descarta ids que não estão mais
+   na tela (mudou a semana, o filtro, ou o pedido saiu da etapa). */
+function atualizarSelecaoUI(stage){
+  if(!stage) return;
+  const presentes = {};
+  document.querySelectorAll("#content tr[data-pedido-id]").forEach(function(tr){ presentes[tr.getAttribute("data-pedido-id")] = tr; });
+  const sel = selecaoDoStage(stage);
+  for(let i=sel.length-1;i>=0;i--){ if(!presentes[sel[i]]) sel.splice(i,1); }
+  Object.keys(presentes).forEach(function(id){
+    const tr = presentes[id];
+    const on = sel.indexOf(id)>=0;
+    tr.classList.toggle("row-selecionada", on);
+    const cb = tr.querySelector(".sel-pedido");
+    if(cb) cb.checked = on;
+  });
+  document.querySelectorAll("#content .sel-dia").forEach(function(cb){
+    const ids = Array.from(document.querySelectorAll('#content [data-dia="'+cb.getAttribute("data-dia")+'"] tr[data-pedido-id]')).map(function(tr){ return tr.getAttribute("data-pedido-id"); });
+    const marcados = ids.filter(function(id){ return sel.indexOf(id)>=0; }).length;
+    cb.checked = ids.length>0 && marcados===ids.length;
+    cb.indeterminate = marcados>0 && marcados<ids.length;
+  });
+  const bar = document.getElementById("selecao-bar");
+  if(!bar) return;
+  if(sel.length===0){ bar.classList.remove("on"); bar.innerHTML = ""; return; }
+  const metros = sel.reduce(function(acc, id){ const p = STATE.pedidos.find(function(x){ return x.id===id; }); return acc + (p ? Number(p.metragem||0) : 0); }, 0);
+  const botoesDias = diasDaSemanaVisiveis(stage).map(function(d){
+    return '<button type="button" class="btn" title="Mover para '+escapeAttr(weekdayFromDateStr(d.date))+' ('+fmtDateBR(d.date)+')" onclick="moverSelecaoPara(\''+stage+'\',\''+d.date+'\')">'+d.label+' <span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.textMuted+'">'+fmtDateBR(d.date).slice(0,5)+'</span></button>';
+  }).join("");
+  bar.innerHTML =
+    '<div class="sel-resumo">'+sel.length+' pedido'+(sel.length>1?'s':'')+' selecionado'+(sel.length>1?'s':'')+' · <span>'+fmtNum(metros)+' m</span></div>'+
+    '<div class="sel-sep"></div>'+
+    '<span style="font-size:12px;color:'+COLORS.textMuted+'">Mover para</span>'+botoesDias+
+    '<input type="date" class="field-input" style="width:148px;padding:6px 8px;font-size:12.5px" title="Mover para outra data" onchange="if(this.value) moverSelecaoPara(\''+stage+'\', this.value)"/>'+
+    '<div class="sel-sep"></div>'+
+    '<button type="button" class="btn btn-ghost" onclick="limparSelecao(\''+stage+'\')">Limpar seleção</button>';
+  bar.classList.add("on");
+}
+function moverSelecaoPara(stage, date){
+  const ids = selecaoDoStage(stage).slice();
+  if(!ids.length || !date) return;
+  reschedulePedidos(ids, date, stage);
+}
+async function reschedulePedidos(ids, newDate, stage){
+  const alvos = ids.map(function(id){ return STATE.pedidos.find(function(x){ return x.id===id; }); })
+    .filter(function(p){ return p && p.dataProg!==newDate; });
+  if(stage){ STATE.progSelecao[stage] = []; __ultimoSelecionado[stage] = null; }
+  if(!alvos.length){ renderScreen(); showToast("info","Os pedidos selecionados já estão nesse dia."); return; }
+  const anteriores = alvos.map(function(p){ return {p:p, d:p.dataProg}; });
+  alvos.forEach(function(p){ p.dataProg = newDate; });
+  renderScreen();
+  const { error } = await sb.from("pedidos").update({data_prog:newDate}).in("id", alvos.map(function(p){ return p.id; }));
+  if(error){
+    sbErrorToast("reprogramar pedidos", error);
+    anteriores.forEach(function(a){ a.p.dataProg = a.d; });
+    renderScreen();
+    return;
+  }
+  showToast("success", alvos.length+" pedido"+(alvos.length>1?"s reprogramados":" reprogramado")+" para "+weekdayFromDateStr(newDate)+" ("+fmtDateBR(newDate)+").");
+}
 function handleDragStart(event, pedidoId){
+  const stage = stageDaTelaAtual();
+  const sel = stage ? selecaoDoStage(stage) : [];
+  __dragIds = (sel.length>1 && sel.indexOf(pedidoId)>=0) ? sel.slice() : [pedidoId];
   event.dataTransfer.setData("text/plain", pedidoId);
   event.dataTransfer.effectAllowed = "move";
-  const tr = event.target.closest("tr");
-  if(tr) tr.classList.add("dragging");
+  if(__dragIds.length>1){
+    __dragIds.forEach(function(id){
+      const tr = document.querySelector('#content tr[data-pedido-id="'+id+'"]');
+      if(tr) tr.classList.add("dragging");
+    });
+    const metros = __dragIds.reduce(function(acc, id){ const p = STATE.pedidos.find(function(x){ return x.id===id; }); return acc + (p ? Number(p.metragem||0) : 0); }, 0);
+    __dragGhost = document.createElement("div");
+    __dragGhost.className = "drag-ghost";
+    __dragGhost.textContent = "Movendo "+__dragIds.length+" pedidos · "+fmtNum(metros)+" m";
+    document.body.appendChild(__dragGhost);
+    try{ event.dataTransfer.setDragImage(__dragGhost, 14, 14); }catch(e){}
+  } else {
+    const tr = event.target.closest("tr");
+    if(tr) tr.classList.add("dragging");
+  }
+  iniciarAutoScrollDrag();
 }
 function handleDragEnd(event){
-  const tr = event.target.closest("tr");
-  if(tr) tr.classList.remove("dragging");
+  document.querySelectorAll("#content tr.dragging").forEach(function(tr){ tr.classList.remove("dragging"); });
+  if(__dragGhost){ const g = __dragGhost; __dragGhost = null; setTimeout(function(){ g.remove(); }, 0); }
+  __dragIds = null;
+  pararAutoScrollDrag();
 }
 function handleDrop(event, targetDate){
   event.preventDefault();
   event.currentTarget.classList.remove("drag-over");
-  const id = event.dataTransfer.getData("text/plain");
-  reschedulePedido(id, targetDate);
+  if(__colDrag){ colDragEnd(event); return; }
+  const ids = (__dragIds && __dragIds.length) ? __dragIds.slice() : [event.dataTransfer.getData("text/plain")];
+  __dragIds = null;
+  pararAutoScrollDrag();
+  if(ids.length>1) reschedulePedidos(ids, targetDate, stageDaTelaAtual());
+  else if(ids[0]) reschedulePedido(ids[0], targetDate);
+}
+/* Rolagem automática enquanto arrasta: encostou o pedido perto do topo ou do rodapé da
+   janela, a tela rola sozinha — dá pra levar da segunda até o sábado sem soltar o mouse. */
+let __autoScrollVel = 0, __autoScrollRaf = null;
+function __autoScrollDragOver(e){
+  if(!__dragIds) return;
+  const zona = 90, h = window.innerHeight;
+  if(e.clientY < zona) __autoScrollVel = -Math.min(22, Math.ceil((zona - e.clientY)/4));
+  else if(e.clientY > h - zona) __autoScrollVel = Math.min(22, Math.ceil((e.clientY - (h - zona))/4));
+  else __autoScrollVel = 0;
+}
+function iniciarAutoScrollDrag(){
+  __autoScrollVel = 0;
+  document.addEventListener("dragover", __autoScrollDragOver);
+  const passo = function(){
+    if(!__dragIds){ __autoScrollRaf = null; return; }
+    if(__autoScrollVel) window.scrollBy(0, __autoScrollVel);
+    __autoScrollRaf = requestAnimationFrame(passo);
+  };
+  if(!__autoScrollRaf) __autoScrollRaf = requestAnimationFrame(passo);
+}
+function pararAutoScrollDrag(){
+  __autoScrollVel = 0;
+  document.removeEventListener("dragover", __autoScrollDragOver);
+  if(__autoScrollRaf){ cancelAnimationFrame(__autoScrollRaf); __autoScrollRaf = null; }
 }
 function openMetasModal(stage){
   const s = STATE.stageState[stage];
@@ -5115,11 +6331,9 @@ function diaCardHtml(label, metros, meta){
   const pct = meta>0 ? Math.min(100, Math.round((metros/meta)*100)) : 0;
   const atingiu = meta>0 && metros>=meta;
   const color = atingiu ? COLORS.green : (pct>=60 ? COLORS.brand : COLORS.red);
-  return '<div class="pcp-card stat-card">'+
-    '<div class="stat-label">'+label+'</div>'+
-    '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;margin-top:6px;color:'+color+'">'+fmtNum(metros)+' m</div>'+
-    '<div style="font-size:10.5px;color:'+COLORS.textMuted+';margin-top:4px">Meta: '+fmtNum(meta)+' m</div>'+
-    '<div style="height:5px;background:var(--panel-alt);border-radius:3px;margin-top:8px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+color+'"></div></div>'+
+  return '<div class="pcp-card stat-card dia-meta-card" title="'+pct+'% da meta">'+
+    '<div class="dmc-top"><span class="stat-label">'+label+'</span><span class="dmc-valor" style="color:'+color+'">'+fmtNum(metros)+' m</span></div>'+
+    '<div class="dmc-base"><div class="dmc-bar"><div style="width:'+pct+'%;background:'+color+'"></div></div><span class="dmc-meta">Meta '+fmtNum(meta)+' m</span></div>'+
   '</div>';
 }
 function materialSummaryHtml(pedidosList, includeHeading){
@@ -5137,10 +6351,10 @@ function materialSummaryHtml(pedidosList, includeHeading){
       '<div class="pcp-card"><div class="preview-title">EPS por Tipo (metragem)</div>'+(epsItems.length?barListHtml(epsItems):emptyStateHtml("Sem consumo de EPS no período."))+'</div>'+
     '</div>';
 }
-function computeStageAtivos(stage){
+function computeStageAtivos(stage, exceptColKey){
   const s = STATE.stageState[stage];
   const dIni = s.dIni, dFim = s.dFim;
-  return STATE.pedidos.filter(p=>{
+  return aplicarFiltrosColuna(stage, STATE.pedidos.filter(p=>{
     if((p.etapaAtual||"perfilar")!==stage || !p.dataProg) return false;
     if(p.dataProg<dIni || p.dataProg>dFim) return false;
     if(s.maquinaId && p.equipamentoId!==s.maquinaId) return false;
@@ -5152,7 +6366,7 @@ function computeStageAtivos(stage){
     if(s.op && !(p.op||"").toLowerCase().includes(s.op.toLowerCase())) return false;
     if(stage==="entrega" && s.motoristaId && p.motoristaId!==s.motoristaId) return false;
     return true;
-  });
+  }), exceptColKey);
 }
 function printStageConsumptionReport(stage){
   const s = STATE.stageState[stage];
@@ -5193,10 +6407,7 @@ function renderStageScreen(stage){
      duas caixas visíveis mostrando essa quebra, sempre respeitando os filtros ativos. */
   const producaoQtdPeriodo = ativos.reduce((s2,p)=>s2+(isPedidoPreProducao(p)?0:Number(p.metragem||0)),0);
   const preProducaoQtdPeriodo = ativos.reduce((s2,p)=>s2+(isPedidoPreProducao(p)?Number(p.metragem||0):0),0);
-  const visibleCols = PEDIDO_COLUMNS.filter(c=>{
-    if(c.key==="motorista" && stage!=="entrega") return false;
-    return s.colunasVisiveis[c.key];
-  }).map(c=>c.key);
+  const visibleCols = colunasVisiveisOrdenadas(stage);
   const editableMotorista = stage==="entrega";
 
   const diaCardsHtml = DIAS_UTEIS.map((label,idx)=>{
@@ -5214,15 +6425,32 @@ function renderStageScreen(stage){
   const bucketsHtml = DIAS_UTEIS.map((label,idx)=>{
     if(!s.diasVisiveis[idx]) return "";
     const b = buckets[idx];
+    /* Prog. Perfiladeira: total a perfilar (azul) e quanto desses pedidos vai para a
+       coladeira (verde), em destaque ao lado do nome do dia. As outras telas seguem com o
+       total simples. */
+    let totaisDiaHtml;
+    if(stage==="perfilar"){
+      const itensColagem = b.items.filter(p=>p.temColagem);
+      const metrosColagem = itensColagem.reduce((s2,p)=>s2+Number(p.metragem||0),0);
+      totaisDiaHtml =
+        '<span class="dia-total dia-total-perfilar" title="Total a perfilar no dia"><span class="dia-total-label">Perfilar</span><span class="dia-total-valor">'+fmtNum(b.metros)+' m</span></span>'+
+        '<span class="dia-total dia-total-colagem" title="'+itensColagem.length+' pedido(s) do dia seguem para a Colagem"><span class="dia-total-label">Colagem</span><span class="dia-total-valor">'+fmtNum(metrosColagem)+' m</span></span>';
+    } else {
+      totaisDiaHtml = '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.brand+';padding:2px 8px;border-radius:10px;font-weight:700;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(b.metros)+' m</span>';
+    }
+    const selDiaHtml = b.items.length
+      ? '<label class="sel-dia-label no-print" title="Marcar todos os pedidos deste dia"><input type="checkbox" class="sel-dia" data-dia="'+b.date+'" onchange="toggleSelecaoDia(\''+stage+'\',\''+b.date+'\', this.checked)"/> Selecionar todos</label>'
+      : '';
     return '<div>'+
-      '<div class="day-section-header" style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;flex-wrap:wrap">'+
+      '<div class="day-section-header" style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">'+
         '<h3 style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0;color:'+COLORS.text+'">'+b.label+'</h3>'+
         '<span style="font-size:11.5px;color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace">'+fmtDateBR(b.date)+'</span>'+
         '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.textMuted+';padding:2px 8px;border-radius:10px;font-weight:700">'+b.items.length+'</span>'+
-        '<span style="font-size:10.5px;background:var(--panel-alt);color:'+COLORS.brand+';padding:2px 8px;border-radius:10px;font-weight:700;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(b.metros)+' m</span>'+
+        totaisDiaHtml+
+        selDiaHtml+
       '</div>'+
-      '<div class="pcp-card drag-target" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleDrop(event,\''+b.date+'\')">'+
-        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null, isCurrentUserAdmin())+
+      '<div class="pcp-card drag-target" data-dia="'+b.date+'" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleDrop(event,\''+b.date+'\')">'+
+        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null, isCurrentUserAdmin(), {selStage:stage, colCtx:stage})+
       '</div>'+
     '</div>';
   }).join('<div style="height:2px"></div>');
@@ -5244,9 +6472,10 @@ function renderStageScreen(stage){
 
   document.getElementById("content").innerHTML =
     printHeader +
-    screenHeaderHtml(def.icon, def.label, "Lista por dia — arraste um pedido para outro dia para reprogramar",
+    '<div class="tela-compacta">'+
+    screenHeaderHtml(def.icon, def.label, "Lista por dia — arraste para reprogramar. Marque vários pedidos para mover juntos (Shift+clique marca um intervalo)",
       '<div class="no-print" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">'+
-        '<button class="btn btn-ghost" onclick="openRelatorioColunasModal(\''+stage+'\')">'+icon("filter",14)+' Configurar Relatório</button>'+
+        '<button class="btn btn-ghost" onclick="openRelatorioColunasModal(\''+stage+'\')">'+icon("sliders",14)+' Colunas / Relatório</button>'+
         '<button class="btn btn-ghost" onclick="printStageConsumptionReport(\''+stage+'\')">'+icon("printer",14)+' Relatório de Consumo</button>'+
         '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button>'+
         '<button class="icon-btn" onclick="shiftWeek(\''+stage+'\',-1)">'+icon("chevronLeft",15)+'</button>'+
@@ -5261,15 +6490,15 @@ function renderStageScreen(stage){
         statCardHtml("Pré-produção", fmtNumCard(preProducaoQtdPeriodo)+" m", "activity", preProducaoQtdPeriodo?"#C98A00":COLORS.textMuted)+
         statCardHtml("Média por Dia Útil", fmtNumCard(mediaPorDia)+" m", "calendar", COLORS.green)+
       '</div>'+
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:10px">'+
-        '<h3 class="section-label" style="margin:0">METAS POR DIA</h3>'+
-        '<button class="btn btn-ghost" style="font-size:12px" onclick="openMetasModal(\''+stage+'\')">'+icon("target",13)+' Editar Metas</button>'+
+      '<div class="metas-dia-head">'+
+        '<h3 class="section-label">METAS POR DIA</h3>'+
+        '<button class="btn btn-ghost" onclick="openMetasModal(\''+stage+'\')">'+icon("target",13)+' Editar Metas</button>'+
       '</div>'+
       '<div class="stat-row">'+diaCardsHtml+'</div>'+
     '</div>'+
     '<div class="pcp-card filter-bar no-print">'+
-      '<div style="min-width:160px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+dIni+'" onchange="updateProgFilter(\''+stage+'\',\'dIni\', this.value)"/></div>'+
-      '<div style="min-width:160px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+dFim+'" onchange="updateProgFilter(\''+stage+'\',\'dFim\', this.value)"/></div>'+
+      '<div class="fc-data" data-filtro-base="1" style="min-width:160px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+dIni+'" onchange="updateProgFilter(\''+stage+'\',\'dIni\', this.value)"/></div>'+
+      '<div class="fc-data" data-filtro-base="1" style="min-width:160px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+dFim+'" onchange="updateProgFilter(\''+stage+'\',\'dFim\', this.value)"/></div>'+
       '<div style="min-width:190px"><label class="field-label'+filterLabelActiveClass(s.maquinaId)+'">Máquina</label><select class="field-select'+filterActiveClass(s.maquinaId)+'" onchange="updateProgFilter(\''+stage+'\',\'maquinaId\', this.value)"><option value="">Todas as máquinas</option>'+
         STATE.equipamentos.map(e=>'<option value="'+e.id+'" '+(s.maquinaId===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>').join("")+
         '</select></div>'+
@@ -5288,24 +6517,26 @@ function renderStageScreen(stage){
       motoristaFiltroHtml+
       '<div style="width:120px"><label class="field-label'+filterLabelActiveClass(s.op)+'">OP</label><input class="field-input'+filterActiveClass(s.op)+'" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateProgFilter(\''+stage+'\',\'op\', this.value)"/></div>'+
       '<div style="min-width:160px"><label class="field-label'+filterLabelActiveClass(s.material)+'">Material</label><input class="field-input'+filterActiveClass(s.material)+'" value="'+escapeAttr(s.material)+'" placeholder="Buscar material…" onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
-      '<div style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-'+stage+'" value="'+weekNum+'"/></div>'+
-      '<div style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-'+stage+'" value="'+year+'"/></div>'+
+      '<div class="fc-curto" style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-'+stage+'" value="'+weekNum+'"/></div>'+
+      '<div class="fc-curto" style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-'+stage+'" value="'+year+'"/></div>'+
       '<button class="btn" onclick="jumpToWeek(\''+stage+'\', document.getElementById(\'input-semana-'+stage+'\').value, document.getElementById(\'input-ano-'+stage+'\').value)">Ir</button>'+
       '<button class="btn btn-ghost" onclick="clearProgFiltro(\''+stage+'\')">Limpar filtros</button>'+
-      '<div style="font-size:12px;color:'+COLORS.textMuted+'">Mostrando '+ativos.length+' pedido(s) no período.</div>'+
+      '<div class="filtro-info" style="font-size:12px;color:'+COLORS.textMuted+'">Mostrando '+ativos.length+' pedido(s) no período.</div>'+
+      '<div class="filtro-info filtro-dias"><label class="field-label" style="margin:0 2px 0 0">Dias visíveis:</label>'+dayToggleHtml+'</div>'+
     '</div>'+
-    '<div class="pcp-card no-print" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:22px">'+
-      '<label class="field-label" style="margin:0;margin-right:4px">Dias visíveis:</label>'+dayToggleHtml+
+    colFiltrosAtivosHtml(stage)+
+    '<div class="day-sections-wrap" style="display:flex;flex-direction:column;gap:22px">'+bucketsHtml+'</div>'+
     '</div>'+
-    '<div class="day-sections-wrap" style="display:flex;flex-direction:column;gap:22px">'+bucketsHtml+'</div>';
+    '<div id="selecao-bar" class="no-print"></div>';
+  atualizarSelecaoUI(stage);
 }
 
 /* ============================== PEDIDOS ENTREGUES ============================== */
 function updateEntreguesFiltro(key, val){ STATE.entreguesFiltro[key]=val; renderScreen(); }
 function clearEntreguesFiltro(){ STATE.entreguesFiltro = {cliente:"",op:"",motoristaId:"",dIni:"",dFim:""}; renderScreen(); }
-function renderEntreguesScreen(){
+function filtrarEntregues(exceptColKey){
   const f = STATE.entreguesFiltro;
-  const entregues = STATE.pedidos.filter(p=>{
+  return aplicarFiltrosColuna("entregues", STATE.pedidos.filter(p=>{
     if(p.etapaAtual!=="entregue") return false;
     if(f.cliente && !(p.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
     if(f.op && !(p.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
@@ -5313,14 +6544,18 @@ function renderEntreguesScreen(){
     if(f.dIni && (!p.dataEntregue || p.dataEntregue<f.dIni)) return false;
     if(f.dFim && (!p.dataEntregue || p.dataEntregue>f.dFim)) return false;
     return true;
-  }).sort((a,b)=> (b.dataEntregue||"").localeCompare(a.dataEntregue||""));
+  }), exceptColKey);
+}
+function renderEntreguesScreen(){
+  const f = STATE.entreguesFiltro;
+  const entregues = filtrarEntregues().sort((a,b)=> (b.dataEntregue||"").localeCompare(a.dataEntregue||""));
   const metragemTotal = entregues.reduce((s,p)=>s+Number(p.metragem||0),0);
-  const visibleCols = ["dataProg","cliente","op","material","corSup","corInf","eps","metragem","cidade","motorista","leadTime"];
+  const visibleCols = colunasVisiveisOrdenadas("entregues");
   const leadTimes = entregues.map(p=>leadTimeDias(p)).filter(d=>d!==null);
   const leadTimeMedio = leadTimes.length ? Math.round((leadTimes.reduce((s,d)=>s+d,0)/leadTimes.length)*10)/10 : null;
 
   document.getElementById("content").innerHTML =
-    '<div class="screen-fixed"><div class="screen-fixed-head">'+
+    '<div class="screen-fixed tela-compacta"><div class="screen-fixed-head">'+
     screenHeaderHtml("checkCircle","Pedidos Entregues","Pedidos que concluíram todo o fluxo de produção e foram entregues")+
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
@@ -5332,12 +6567,13 @@ function renderEntreguesScreen(){
       '<div style="width:120px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updateEntreguesFiltro(\'op\', this.value)"/></div>'+
       '<div style="min-width:190px"><label class="field-label">Motorista</label><select class="field-select" onchange="updateEntreguesFiltro(\'motoristaId\', this.value)"><option value="">Todos</option>'+
         STATE.motoristas.map(m=>'<option value="'+m.id+'" '+(f.motoristaId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+'</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">Entregue de</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateEntreguesFiltro(\'dIni\', this.value)"/></div>'+
-      '<div style="min-width:150px"><label class="field-label">Entregue até</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateEntreguesFiltro(\'dFim\', this.value)"/></div>'+
+      '<div class="fc-data" style="min-width:150px"><label class="field-label">Entregue de</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateEntreguesFiltro(\'dIni\', this.value)"/></div>'+
+      '<div class="fc-data" style="min-width:150px"><label class="field-label">Entregue até</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateEntreguesFiltro(\'dFim\', this.value)"/></div>'+
       '<button class="btn btn-ghost" onclick="clearEntreguesFiltro()">Limpar filtros</button>'+
     '</div>'+
+    colFiltrosAtivosHtml("entregues")+
     '</div>'+
-    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false, function(p){ return '<button class="icon-btn" title="Retornar para Programação de Entrega" onclick="confirmVoltarDeEntregue(\''+p.id+'\')">'+icon("chevronLeft",13)+'</button>'; })+'</div></div>'+
+    '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+pedidoTableHtml(entregues, false, false, false, false, visibleCols, false, false, function(p){ return '<button class="icon-btn" title="Retornar para Programação de Entrega" onclick="confirmVoltarDeEntregue(\''+p.id+'\')">'+icon("chevronLeft",13)+'</button>'; }, null, undefined, {colCtx:"entregues"})+'</div></div>'+
     '</div>';
 }
 
@@ -8619,6 +9855,7 @@ function renderSidebar(){
     '<button class="pcp-sidebar-btn" onclick="handleLogout()">'+icon("logout",16)+' Sair</button>';
 }
 function renderScreen(){
+  if(typeof fecharMenuColuna==="function" && document.getElementById("col-menu")) fecharMenuColuna();
   invalidateMovTotais();
   invalidateDiasEstoque();
   _preTotalsEstoqueCache = null;
@@ -8653,6 +9890,8 @@ function renderScreen(){
   else if(STATE.screen==="recados") renderRecadosScreen();
   else if(STATE.screen==="gerenciarRecados") renderGerenciarRecadosScreen();
   else if(STATE.screen==="backup") renderBackupScreen();
+  iniciarObservadorFiltros();
+  aprimorarFiltrosDaTela(false);
 }
 function showLoginError(msg){
   const el = document.getElementById("login-error");

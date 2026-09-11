@@ -162,6 +162,13 @@ button,input,select{font-family:'Inter',sans-serif;}
 .filter-compacto .fc{flex:1 1 120px;min-width:100px;max-width:230px;}
 .filter-compacto .fc-op{flex:0 1 96px;min-width:84px;}
 .filter-compacto .fc-data{flex:0 1 134px;min-width:122px;}
+.filter-compacto .fc-semana{flex:0 1 150px;min-width:136px;}
+.filter-compacto .fc-ano{flex:0 1 78px;min-width:70px;}
+.semana-ctrl{display:flex;align-items:center;gap:4px;}
+.semana-ctrl .field-input{text-align:center;min-width:0;-moz-appearance:textfield;}
+.semana-ctrl .field-input::-webkit-outer-spin-button,.semana-ctrl .field-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+.semana-ctrl .icon-btn{height:31px;padding:0 6px;align-items:center;flex-shrink:0;}
+.filter-compacto .fc-semana .field-label{white-space:nowrap;}
 .filter-compacto .field-label{font-size:9.5px;margin-bottom:3px;}
 .filter-compacto .field-input,.filter-compacto .field-select{padding:5px 8px;font-size:12.5px;height:31px;}
 .filter-compacto .btn{padding:6px 10px;font-size:12.5px;}
@@ -1490,7 +1497,7 @@ const STATE = {
   loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
   sidebarCollapsedGroups:{},
   stageState:{},
-  pedidosFiltro:{cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:""},
+  pedidosFiltro:{cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""},
   pedidosSort:{campo:"dataProg", direcao:"asc"},
   entreguesFiltro:{cliente:"",op:"",motoristaId:"",dIni:"",dFim:""},
   baixasFiltro:{materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"},
@@ -4676,9 +4683,41 @@ function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortab
 }
 
 function updatePedidosFiltro(key, val){ STATE.pedidosFiltro[key]=val; renderScreen(); }
-function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:""}; renderScreen(); }
+function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""}; renderScreen(); }
+/* ---- Filtro de semana na tela Lançamentos ----
+   Semana ISO (segunda a domingo), a mesma numeração usada nas telas de programação.
+   Sem ano preenchido, vale o ano atual. As setas andam uma semana pra trás/frente; com o
+   campo vazio, qualquer seta já seleciona a semana atual. */
+function lancSemanaIntervalo(f){
+  const w = parseInt(f.semana, 10);
+  if(!w || w<1 || w>53) return null;
+  const y = parseInt(f.semanaAno, 10) || new Date().getFullYear();
+  const seg = mondayOfIsoWeek(w, y);
+  const dom = new Date(seg); dom.setUTCDate(seg.getUTCDate()+6);
+  return {semana:w, ano:y, ini:isoFromUTCParts(seg), fim:isoFromUTCParts(dom)};
+}
+function anoIsoDaData(iso){
+  const [y,m,d] = iso.split("-").map(Number);
+  const dt = new Date(Date.UTC(y,m-1,d));
+  dt.setUTCDate(dt.getUTCDate() + 3 - ((dt.getUTCDay()+6)%7));   // quinta-feira da mesma semana
+  return dt.getUTCFullYear();
+}
+function lancSemanaPasso(delta){
+  const f = STATE.pedidosFiltro;
+  const atual = lancSemanaIntervalo(f);
+  let base;
+  if(!atual){ base = todayStr(); delta = 0; }
+  else base = atual.ini;
+  const [y,m,d] = base.split("-").map(Number);
+  const dt = new Date(Date.UTC(y,m-1,d+7*delta));
+  const iso = isoFromUTCParts(dt);
+  f.semana = String(isoWeekNumber(iso));
+  f.semanaAno = String(anoIsoDaData(iso));
+  renderScreen();
+}
 function filterPedidosList(list){
   const f = STATE.pedidosFiltro;
+  const semanaFiltro = lancSemanaIntervalo(f);
   return list.filter(p=>{
     if(f.cliente && !(p.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
     if(f.op && !(p.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
@@ -4689,6 +4728,7 @@ function filterPedidosList(list){
     if(f.cidadeId && p.cidadeId!==f.cidadeId) return false;
     if(f.dIni && (!p.dataProg || p.dataProg<f.dIni)) return false;
     if(f.dFim && (!p.dataProg || p.dataProg>f.dFim)) return false;
+    if(semanaFiltro && (!p.dataProg || p.dataProg<semanaFiltro.ini || p.dataProg>semanaFiltro.fim)) return false;
     return true;
   });
 }
@@ -4850,6 +4890,7 @@ const LANC_FILTROS_DEF = [
   {key:"corSup",   label:"Cor Sup.", campos:["corSupId"]},
   {key:"corInf",   label:"Cor Inf.", campos:["corInfId"]},
   {key:"cidade",   label:"Cidade",   campos:["cidadeId"]},
+  {key:"semana",   label:"Semana (nº da semana / ano)", campos:["semana","semanaAno"]},
   {key:"periodo",  label:"Período da programação (início / fim)", campos:["dIni","dFim"]},
 ];
 const LANC_FILTROS_STORAGE = "eleve_lanc_filtros";
@@ -4909,6 +4950,8 @@ function lancFiltrosAtivos(){
   if(f.corSupId) out.push({key:"corSup", texto:"Cor Sup.: "+nomeMat(f.corSupId)});
   if(f.corInfId) out.push({key:"corInf", texto:"Cor Inf.: "+nomeMat(f.corInfId)});
   if(f.cidadeId){ const c = STATE.cidades.find(function(x){ return x.id===f.cidadeId; }); out.push({key:"cidade", texto:"Cidade: "+(c?c.nome:"?")}); }
+  const sem = lancSemanaIntervalo(f);
+  if(sem) out.push({key:"semana", texto:"Semana "+sem.semana+"/"+sem.ano+" ("+fmtDateBR(sem.ini).slice(0,5)+" a "+fmtDateBR(sem.fim).slice(0,5)+")"});
   if(f.dIni || f.dFim){
     const txt = f.dIni && f.dFim ? fmtDateBR(f.dIni)+" a "+fmtDateBR(f.dFim) : (f.dIni ? "a partir de "+fmtDateBR(f.dIni) : "até "+fmtDateBR(f.dFim));
     out.push({key:"periodo", texto:"Prog.: "+txt});
@@ -4958,6 +5001,17 @@ function lancFiltroBarHtml(bobinas){
   if(v.corSup) html += campo("fc","Cor Sup.",f.corSupId,'<select class="field-select'+filterActiveClass(f.corSupId)+'" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corSupId)+'</select>');
   if(v.corInf) html += campo("fc","Cor Inf.",f.corInfId,'<select class="field-select'+filterActiveClass(f.corInfId)+'" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corInfId)+'</select>');
   if(v.cidade) html += campo("fc","Cidade",f.cidadeId,'<select class="field-select'+filterActiveClass(f.cidadeId)+'" onchange="updatePedidosFiltro(\'cidadeId\', this.value)"><option value="">Todas</option>'+opt(STATE.cidades, f.cidadeId)+'</select>');
+  if(v.semana){
+    const sem = lancSemanaIntervalo(f);
+    const dica = sem ? fmtDateBR(sem.ini)+" a "+fmtDateBR(sem.fim) : "Semana atual: "+isoWeekNumber(todayStr());
+    html += campo("fc fc-semana", sem ? "Semana · "+fmtDateBR(sem.ini).slice(0,5)+" a "+fmtDateBR(sem.fim).slice(0,5) : "Semana", f.semana,
+      '<div class="semana-ctrl" title="'+escapeAttr(dica)+'">'+
+        '<button type="button" class="icon-btn" title="Semana anterior" onclick="lancSemanaPasso(-1)">'+icon("chevronLeft",13)+'</button>'+
+        '<input class="field-input'+filterActiveClass(f.semana)+'" type="number" min="1" max="53" value="'+escapeAttr(f.semana)+'" placeholder="'+isoWeekNumber(todayStr())+'" onchange="updatePedidosFiltro(\'semana\', this.value)"/>'+
+        '<button type="button" class="icon-btn" title="Próxima semana" onclick="lancSemanaPasso(1)">'+icon("chevronRight",13)+'</button>'+
+      '</div>');
+    html += campo("fc fc-ano","Ano",f.semana && f.semanaAno,'<input class="field-input'+filterActiveClass(f.semana && f.semanaAno)+'" type="number" min="2000" max="2100" value="'+escapeAttr(f.semanaAno)+'" placeholder="'+new Date().getFullYear()+'" onchange="updatePedidosFiltro(\'semanaAno\', this.value)"/>');
+  }
   if(v.periodo){
     html += campo("fc fc-data","Prog. início",f.dIni,'<input class="field-input'+filterActiveClass(f.dIni)+'" type="date" value="'+f.dIni+'" onchange="updatePedidosFiltro(\'dIni\', this.value)"/>');
     html += campo("fc fc-data","Prog. fim",f.dFim,'<input class="field-input'+filterActiveClass(f.dFim)+'" type="date" value="'+f.dFim+'" onchange="updatePedidosFiltro(\'dFim\', this.value)"/>');

@@ -406,6 +406,28 @@ button,input,select{font-family:'Inter',sans-serif;}
   #mapa-card.mapa-fullscreen .mapa-card-toolbar{display:flex;}
   body.mapa-fullscreen-active{overflow:hidden;}
 }
+/* ---- Campo de data com digitação livre (dd/mm/aaaa) ---- */
+.dt-wrap{position:relative;display:block;}
+.dt-wrap.dt-inline{display:inline-block;vertical-align:middle;}
+.dt-wrap > input.dt-nativo{position:absolute !important;left:0;top:0;width:100% !important;height:100% !important;opacity:0 !important;pointer-events:none !important;padding:0 !important;margin:0 !important;border:0 !important;}
+.dt-wrap > input.dt-texto{padding-right:30px !important;font-variant-numeric:tabular-nums;}
+.dt-wrap > input.dt-texto.dt-invalido{border-color:var(--red) !important;box-shadow:0 0 0 1px var(--red) inset;}
+.dt-wrap > .dt-cal{position:absolute;right:3px;top:50%;transform:translateY(-50%);width:24px;height:24px;display:flex;align-items:center;justify-content:center;border:0;border-radius:5px;background:transparent;color:var(--text-muted);cursor:pointer;padding:0;}
+.dt-wrap > .dt-cal:hover{background:var(--panel-alt);color:var(--text);}
+.dt-wrap > .dt-cal:focus-visible{outline:2px solid var(--brand);outline-offset:0;}
+/* ---- Expandir tela (igual ao Mapa): esconde menu, cabeçalho descritivo e caixas de
+   indicadores, e usa a janela inteira pra lista. ---- */
+.tela-expandir-btn{margin-left:6px;padding:4px 10px !important;font-size:12px !important;}
+@media screen{
+  body.tela-expandida .pcp-shell .pcp-sidebar{display:none !important;}
+  body.tela-expandida #sidebar-float-btn{display:none !important;}
+  body.tela-expandida .pcp-shell .pcp-content{padding:10px 14px !important;--pad-v:20px;}
+  body.tela-expandida #content .screen-subtitle,
+  body.tela-expandida #content .stat-row{display:none !important;}
+  body.tela-expandida #content .screen-header{margin-bottom:8px;}
+  body.tela-expandida #content .screen-title{font-size:17px;}
+}
+@media print{ .tela-expandir-btn,.dt-cal{display:none !important;} }
 </style>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
 </head>
@@ -4715,6 +4737,24 @@ function lancSemanaPasso(delta){
   f.semanaAno = String(anoIsoDaData(iso));
   renderScreen();
 }
+/* ---- Busca de material por qualquer palavra ----
+   O texto digitado é quebrado em palavras e o pedido aparece só se TODAS estiverem em algum
+   lugar do material, da Cor Sup., da Cor Inf. ou do EPS (ex.: "0,50mm", "tp40 0,43",
+   "importada 0,50"). Ignora maiúsculas/acentos, aceita ponto ou vírgula no número
+   ("0.50" = "0,50") e com ou sem espaço antes da unidade ("0,50 mm" = "0,50mm"). */
+function normBusca(t){
+  return String(t||"").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/(\d)\.(\d)/g,"$1,$2");
+}
+function textoCombinaBusca(texto, busca){
+  const termos = normBusca(busca).split(/\s+/).filter(Boolean);
+  if(!termos.length) return true;
+  const alvo = normBusca(texto);
+  const alvoJunto = alvo.replace(/\s+/g,"");
+  return termos.every(function(t){ return alvo.indexOf(t)>=0 || alvoJunto.indexOf(t)>=0; });
+}
+function textoBuscaMaterialPedido(p){
+  return [p.material, colNomeMaterial(p.corSupId), colNomeMaterial(p.corInfId), colNomeMaterial(p.epsId)].join(" ");
+}
 function filterPedidosList(list){
   const f = STATE.pedidosFiltro;
   const semanaFiltro = lancSemanaIntervalo(f);
@@ -4722,7 +4762,7 @@ function filterPedidosList(list){
     if(f.cliente && !(p.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
     if(f.op && !(p.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
     if(f.situacaoId && p.situacaoId!==f.situacaoId) return false;
-    if(f.material && !(p.material||"").toLowerCase().includes(f.material.toLowerCase())) return false;
+    if(f.material && !textoCombinaBusca(textoBuscaMaterialPedido(p), f.material)) return false;
     if(f.corSupId && p.corSupId!==f.corSupId) return false;
     if(f.corInfId && p.corInfId!==f.corInfId) return false;
     if(f.cidadeId && p.cidadeId!==f.cidadeId) return false;
@@ -4997,7 +5037,7 @@ function lancFiltroBarHtml(bobinas){
   if(v.cliente) html += campo("fc","Cliente",f.cliente,'<input class="field-input'+filterActiveClass(f.cliente)+'" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updatePedidosFiltro(\'cliente\', this.value)"/>');
   if(v.op) html += campo("fc fc-op","OP",f.op,'<input class="field-input'+filterActiveClass(f.op)+'" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updatePedidosFiltro(\'op\', this.value)"/>');
   if(v.situacao) html += campo("fc","Situação",f.situacaoId,'<select class="field-select'+filterActiveClass(f.situacaoId)+'" onchange="updatePedidosFiltro(\'situacaoId\', this.value)"><option value="">Todas</option>'+opt(STATE.statusOptions, f.situacaoId)+'</select>');
-  if(v.material) html += campo("fc","Material",f.material,'<input class="field-input'+filterActiveClass(f.material)+'" value="'+escapeAttr(f.material)+'" placeholder="Buscar material…" onchange="updatePedidosFiltro(\'material\', this.value)"/>');
+  if(v.material) html += campo("fc","Material",f.material,'<input class="field-input'+filterActiveClass(f.material)+'" value="'+escapeAttr(f.material)+'" placeholder="Ex.: tp40 0,50mm" title="Busca por qualquer palavra do material, da Cor Sup./Inf. ou do EPS. Várias palavras: traz só o que tiver todas. Enter para aplicar." onchange="updatePedidosFiltro(\'material\', this.value)"/>');
   if(v.corSup) html += campo("fc","Cor Sup.",f.corSupId,'<select class="field-select'+filterActiveClass(f.corSupId)+'" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corSupId)+'</select>');
   if(v.corInf) html += campo("fc","Cor Inf.",f.corInfId,'<select class="field-select'+filterActiveClass(f.corInfId)+'" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corInfId)+'</select>');
   if(v.cidade) html += campo("fc","Cidade",f.cidadeId,'<select class="field-select'+filterActiveClass(f.cidadeId)+'" onchange="updatePedidosFiltro(\'cidadeId\', this.value)"><option value="">Todas</option>'+opt(STATE.cidades, f.cidadeId)+'</select>');
@@ -6266,7 +6306,7 @@ function atualizarSelecaoUI(stage){
     '<div class="sel-resumo">'+sel.length+' pedido'+(sel.length>1?'s':'')+' selecionado'+(sel.length>1?'s':'')+' · <span>'+fmtNum(metros)+' m</span></div>'+
     '<div class="sel-sep"></div>'+
     '<span style="font-size:12px;color:'+COLORS.textMuted+'">Mover para</span>'+botoesDias+
-    '<input type="date" class="field-input" style="width:148px;padding:6px 8px;font-size:12.5px" title="Mover para outra data" onchange="if(this.value) moverSelecaoPara(\''+stage+'\', this.value)"/>'+
+    '<input type="date" data-dt-commit="enter" class="field-input" style="width:148px;padding:6px 8px;font-size:12.5px" title="Mover para outra data (digite e tecle Enter)" onchange="if(this.value) moverSelecaoPara(\''+stage+'\', this.value)"/>'+
     '<div class="sel-sep"></div>'+
     '<button type="button" class="btn btn-ghost" onclick="limparSelecao(\''+stage+'\')">Limpar seleção</button>';
   bar.classList.add("on");
@@ -6416,7 +6456,7 @@ function computeStageAtivos(stage, exceptColKey){
     if(s.corSupId && p.corSupId!==s.corSupId) return false;
     if(s.corInfId && p.corInfId!==s.corInfId) return false;
     if(s.epsId && p.epsId!==s.epsId) return false;
-    if(s.material && !(p.material||"").toLowerCase().includes(s.material.toLowerCase())) return false;
+    if(s.material && !textoCombinaBusca(textoBuscaMaterialPedido(p), s.material)) return false;
     if(s.op && !(p.op||"").toLowerCase().includes(s.op.toLowerCase())) return false;
     if(stage==="entrega" && s.motoristaId && p.motoristaId!==s.motoristaId) return false;
     return true;
@@ -6570,7 +6610,7 @@ function renderStageScreen(stage){
         '</select></div>'+
       motoristaFiltroHtml+
       '<div style="width:120px"><label class="field-label'+filterLabelActiveClass(s.op)+'">OP</label><input class="field-input'+filterActiveClass(s.op)+'" value="'+escapeAttr(s.op)+'" placeholder="Nº pedido" onchange="updateProgFilter(\''+stage+'\',\'op\', this.value)"/></div>'+
-      '<div style="min-width:160px"><label class="field-label'+filterLabelActiveClass(s.material)+'">Material</label><input class="field-input'+filterActiveClass(s.material)+'" value="'+escapeAttr(s.material)+'" placeholder="Buscar material…" onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
+      '<div style="min-width:160px"><label class="field-label'+filterLabelActiveClass(s.material)+'">Material</label><input class="field-input'+filterActiveClass(s.material)+'" value="'+escapeAttr(s.material)+'" placeholder="Ex.: tp40 0,50mm" title="Busca por qualquer palavra do material, da Cor Sup./Inf. ou do EPS. Várias palavras: traz só o que tiver todas. Enter para aplicar." onchange="updateProgFilter(\''+stage+'\',\'material\', this.value)"/></div>'+
       '<div class="fc-curto" style="width:90px"><label class="field-label">Semana</label><input class="field-input" type="number" min="1" max="53" id="input-semana-'+stage+'" value="'+weekNum+'"/></div>'+
       '<div class="fc-curto" style="width:100px"><label class="field-label">Ano</label><input class="field-input" type="number" id="input-ano-'+stage+'" value="'+year+'"/></div>'+
       '<button class="btn" onclick="jumpToWeek(\''+stage+'\', document.getElementById(\'input-semana-'+stage+'\').value, document.getElementById(\'input-ano-'+stage+'\').value)">Ir</button>'+
@@ -9946,6 +9986,7 @@ function renderScreen(){
   else if(STATE.screen==="backup") renderBackupScreen();
   iniciarObservadorFiltros();
   aprimorarFiltrosDaTela(false);
+  aplicarBotaoExpandirTela();
 }
 function showLoginError(msg){
   const el = document.getElementById("login-error");
@@ -10034,8 +10075,295 @@ async function restoreSession(){
 initLocalDefaults();
 document.documentElement.setAttribute("data-theme", STATE.theme);
 Object.assign(COLORS, THEMES[STATE.theme]);
+/* ============================== CAMPOS DE DATA COM DIGITAÇÃO LIVRE ==============================
+   Problema: os filtros de data (Prog. início / Prog. fim etc.) redesenham a tela no "change".
+   No <input type="date"> o navegador dispara "change" a cada parte digitada que já forma uma
+   data válida — ao digitar o ano "2026", no primeiro "2" ele já vira 01/01/0002, a tela é
+   redesenhada, o campo perde o foco e o resto da digitação se perde.
+
+   Solução (vale para TODOS os campos de data do sistema, sem mexer em cada tela):
+   - Cada <input type="date"> ganha na frente um campo de texto "dd/mm/aaaa". Basta digitar só
+     os números em sequência (16082026) — as barras entram sozinhas. Também aceita 16/8/26
+     (completa o ano) ou só 16/08 (usa o ano atual) ao sair do campo / Enter.
+   - O filtro só é aplicado quando a data fica completa e válida (ou ao sair do campo / Enter).
+     Depois do redesenho o cursor volta para o mesmo campo, então dá pra seguir com Tab.
+   - O <input type="date"> original continua existindo (invisível, com o mesmo name/id/onchange),
+     então formulários, FormData e getElementById seguem funcionando igual. O botão de
+     calendário ao lado abre o seletor do navegador.
+   - Campo apagado + sair = limpa o filtro (exceto nas datas base das telas de programação,
+     que sempre precisam de valor: ali volta a data anterior).
+   - data-dt-commit="enter" no input: só aplica com Enter ou ao sair (ex.: "Mover para outra
+     data", que altera pedidos). ---- */
+(function(){
+  const DESC_VALUE = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  let focoPendente = null;
+
+  function pad(n){ return (n<10?"0":"")+n; }
+  function isoParaBR(iso){
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso||"");
+    return m ? m[3]+"/"+m[2]+"/"+m[1] : "";
+  }
+  function dataValida(d, m, a){
+    if(a<1900 || a>2100 || m<1 || m>12 || d<1) return false;
+    const dt = new Date(a, m-1, d);
+    return dt.getFullYear()===a && dt.getMonth()===m-1 && dt.getDate()===d;
+  }
+  /* completo=true: aceita só dd/mm/aaaa inteiro. completo=false: aceita atalhos (dd/mm, dd/mm/aa). */
+  function brParaIso(txt, completo){
+    txt = (txt||"").trim();
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(txt);
+    if(!m && !completo){
+      const m2 = /^(\d{1,2})[\/\.\-](\d{1,2})(?:[\/\.\-](\d{2}))?$/.exec(txt);
+      if(m2){
+        const ano = m2[3] ? 2000+Number(m2[3]) : new Date().getFullYear();
+        m = [null, m2[1], m2[2], String(ano)];
+      } else {
+        const m3 = /^(\d{2})(\d{2})(\d{2})$/.exec(txt.replace(/\D/g,""));
+        if(m3 && txt.replace(/\D/g,"").length===6) m = [null, m3[1], m3[2], String(2000+Number(m3[3]))];
+      }
+    }
+    if(!m) return null;
+    const d = Number(m[1]), mes = Number(m[2]), a = Number(m[3]);
+    if(!dataValida(d, mes, a)) return null;
+    return a+"-"+pad(mes)+"-"+pad(d);
+  }
+  /* Formata o que foi digitado em dd/mm/aaaa. "1/" vira "01/"; as barras entram sozinhas. */
+  function mascarar(raw, apagando){
+    const iso = /^\s*(\d{4})-(\d{2})-(\d{2})\s*$/.exec(raw);
+    if(iso) return iso[3]+"/"+iso[2]+"/"+iso[1];
+    const partes = raw.split(/[\/\.\-]/);
+    if(partes.length>1){
+      for(let i=0;i<partes.length-1 && i<2;i++){
+        const dg = partes[i].replace(/\D/g,"");
+        if(dg.length===1) partes[i] = "0"+dg;
+      }
+    }
+    const dig = partes.join("").replace(/\D/g,"").slice(0,8);
+    let out = dig.slice(0,2);
+    if(dig.length>=2 && (dig.length>2 || (!apagando && (partes.length>1 || dig.length===2)))) out += "/";
+    if(dig.length>2){
+      out += dig.slice(2,4);
+      if(dig.length>=4 && (dig.length>4 || !apagando)) out += "/";
+    }
+    if(dig.length>4) out += dig.slice(4,8);
+    if(apagando && /\/$/.test(out) && !/\/$/.test(raw)) out = out.slice(0,-1);
+    return out;
+  }
+  function chaveDoCampo(nativo){
+    return (nativo.getAttribute("onchange")||"")+"|"+(nativo.id||"")+"|"+(nativo.name||"");
+  }
+
+  function aprimorar(nativo){
+    if(nativo.hasAttribute("data-dt-ok") || nativo.hasAttribute("data-dt-nativo-mantido")) return;
+    nativo.setAttribute("data-dt-ok","1");
+    const soEnter = nativo.getAttribute("data-dt-commit")==="enter";
+    const baseObrigatoria = !!nativo.closest("[data-filtro-base]");
+
+    const wrap = document.createElement("span");
+    wrap.className = "dt-wrap";
+    const texto = document.createElement("input");
+    texto.type = "text";
+    texto.className = (nativo.className||"") + " dt-texto";
+    texto.setAttribute("inputmode","numeric");
+    texto.setAttribute("autocomplete","off");
+    texto.setAttribute("maxlength","10");
+    texto.placeholder = "dd/mm/aaaa";
+    texto.title = nativo.title || "Digite só os números (ex.: 16082026) ou use o calendário";
+    const estilo = nativo.getAttribute("style");
+    if(estilo){
+      texto.setAttribute("style", estilo);
+      if(/width\s*:/.test(estilo)) wrap.classList.add("dt-inline");
+    }
+    if(nativo.required){ nativo.required = false; texto.required = true; }
+    if(nativo.disabled) texto.disabled = true;
+    texto.setAttribute("data-dt-chave", chaveDoCampo(nativo));
+
+    const cal = document.createElement("button");
+    cal.type = "button";
+    cal.className = "dt-cal";
+    cal.title = "Abrir calendário";
+    cal.tabIndex = -1;
+    cal.innerHTML = (typeof icon==="function") ? icon("calendar",14) : "📅";
+
+    nativo.parentNode.insertBefore(wrap, nativo);
+    wrap.appendChild(nativo);
+    wrap.appendChild(texto);
+    wrap.appendChild(cal);
+    nativo.classList.add("dt-nativo");
+    nativo.tabIndex = -1;
+    nativo.setAttribute("aria-hidden","true");
+    nativo.removeAttribute("style");
+
+    let ultimoIso = DESC_VALUE.get.call(nativo);
+    texto.value = isoParaBR(ultimoIso);
+
+    /* Se algum código mudar o valor do campo original por JS, o texto acompanha. */
+    try{
+      Object.defineProperty(nativo, "value", {
+        configurable:true,
+        get:function(){ return DESC_VALUE.get.call(this); },
+        set:function(v){ DESC_VALUE.set.call(this, v); ultimoIso = DESC_VALUE.get.call(this); texto.value = isoParaBR(ultimoIso); texto.classList.remove("dt-invalido"); }
+      });
+    }catch(err){}
+
+    /* Valor escolhido no calendário do navegador. */
+    const sincronizar = function(){ ultimoIso = DESC_VALUE.get.call(nativo); texto.value = isoParaBR(ultimoIso); texto.classList.remove("dt-invalido"); };
+    nativo.addEventListener("input", sincronizar);
+    nativo.addEventListener("change", sincronizar);
+
+    /* foco: null = não restaura; {chave, selecionar} = campo que deve receber o foco se a tela
+       for redesenhada por causa desta alteração. */
+    function aplicar(iso, foco){
+      texto.classList.remove("dt-invalido");
+      if(iso===ultimoIso){ texto.value = isoParaBR(iso); return; }
+      focoPendente = foco ? {chave: foco.chave, selecionar: !!foco.selecionar} : null;
+      DESC_VALUE.set.call(nativo, iso);
+      ultimoIso = iso;
+      nativo.dispatchEvent(new Event("input", {bubbles:true}));
+      nativo.dispatchEvent(new Event("change", {bubbles:true}));
+      /* O observador (microtarefa) já rodou antes disto: se não houve redesenho, esquece. */
+      setTimeout(function(){ focoPendente = null; }, 60);
+    }
+    function finalizar(foco){
+      const txt = texto.value.trim();
+      if(!txt){
+        if(baseObrigatoria){ texto.value = isoParaBR(ultimoIso); return; }
+        aplicar("", foco); return;
+      }
+      const iso = brParaIso(txt, false);
+      if(iso){ aplicar(iso, foco); texto.value = isoParaBR(iso); }
+      else {
+        /* Data incompleta/inválida: volta para a última data aceita. */
+        texto.value = isoParaBR(ultimoIso);
+        texto.classList.remove("dt-invalido");
+      }
+    }
+
+    texto.addEventListener("input", function(e){
+      const apagando = !!(e.inputType && e.inputType.indexOf("delete")===0);
+      const antes = texto.value;
+      const pos = texto.selectionStart==null ? antes.length : texto.selectionStart;
+      const digitosAntesDoCursor = antes.slice(0,pos).replace(/\D/g,"").length;
+      const noFim = pos>=antes.length;
+      const novo = mascarar(antes, apagando);
+      if(novo!==antes){
+        texto.value = novo;
+        let p = novo.length;
+        if(!noFim){
+          let cont = 0; p = 0;
+          while(p<novo.length && cont<digitosAntesDoCursor){ if(/\d/.test(novo[p])) cont++; p++; }
+        }
+        try{ texto.setSelectionRange(p,p); }catch(err){}
+      }
+      const dig = novo.replace(/\D/g,"").length;
+      if(dig===8){
+        const iso = brParaIso(novo, true);
+        texto.classList.toggle("dt-invalido", !iso);
+        if(iso && !soEnter) aplicar(iso, {chave: texto.getAttribute("data-dt-chave")});
+      } else {
+        texto.classList.remove("dt-invalido");
+      }
+    });
+    texto.addEventListener("keydown", function(e){
+      if(e.key==="Enter"){
+        const naoEmForm = !texto.form;
+        finalizar({chave: texto.getAttribute("data-dt-chave")});
+        if(naoEmForm) e.preventDefault();
+      } else if(e.key==="Escape"){
+        texto.value = isoParaBR(ultimoIso);
+        texto.classList.remove("dt-invalido");
+      }
+    });
+    texto.addEventListener("blur", function(e){
+      const destino = e.relatedTarget;
+      const chaveDestino = destino && destino.getAttribute ? destino.getAttribute("data-dt-chave") : null;
+      /* Tab para o próximo campo de data: se a tela for redesenhada, o foco vai pra ele. */
+      finalizar(chaveDestino ? {chave: chaveDestino, selecionar:true} : null);
+    });
+    cal.addEventListener("mousedown", function(e){ e.preventDefault(); });
+    cal.addEventListener("click", function(){
+      if(texto.disabled) return;
+      try{
+        if(typeof nativo.showPicker==="function"){ nativo.showPicker(); return; }
+      }catch(err){}
+      try{ nativo.focus(); nativo.click(); }catch(err){}
+    });
+    return texto;
+  }
+
+  function aprimorarTodos(){
+    const lista = document.querySelectorAll('input[type="date"]:not([data-dt-ok])');
+    for(let i=0;i<lista.length;i++) aprimorar(lista[i]);
+    if(focoPendente){
+      const alvo = Array.from(document.querySelectorAll("input.dt-texto")).find(function(el){ return el.getAttribute("data-dt-chave")===focoPendente.chave; });
+      if(alvo && document.activeElement!==alvo && document.body.contains(alvo)){
+        const sel = focoPendente.selecionar;
+        focoPendente = null;
+        try{
+          alvo.focus({preventScroll:true});
+          if(sel) alvo.select(); else alvo.setSelectionRange(alvo.value.length, alvo.value.length);
+        }catch(err){}
+      } else if(alvo && document.activeElement===alvo){
+        focoPendente = null;
+      }
+    }
+  }
+  window.aprimorarCamposData = aprimorarTodos;
+
+  function iniciar(){
+    aprimorarTodos();
+    if(!window.MutationObserver) return;
+    new MutationObserver(function(){ aprimorarTodos(); }).observe(document.body, {childList:true, subtree:true});
+  }
+  if(document.readyState==="loading") document.addEventListener("DOMContentLoaded", iniciar);
+  else iniciar();
+})();
+
+/* ============================== EXPANDIR TELA (igual ao Mapa) ==============================
+   Botão "Expandir tela" ao lado do título de cada tela (Lançamentos, Prog. Perfiladeira,
+   Pintura, Coladeira, Entregas, Pedidos Entregues e as demais). No modo expandido some o menu
+   lateral, o subtítulo e as caixas de indicadores, e a lista ocupa a janela inteira. Filtros,
+   colunas, arrastar e as demais ações continuam funcionando. Sai com "Recolher" ou Esc.
+   O Mapa continua com o botão próprio dele. O modo fica ligado ao trocar de tela (enquanto a
+   aba estiver aberta). */
+const TELAS_SEM_EXPANDIR = ["mapa"];
+function telaExpandidaAtiva(){ return !!STATE.telaExpandida && TELAS_SEM_EXPANDIR.indexOf(STATE.screen)<0; }
+function aplicarBotaoExpandirTela(){
+  const ativo = telaExpandidaAtiva();
+  document.body.classList.toggle("tela-expandida", ativo);
+  const content = document.getElementById("content");
+  if(!content || TELAS_SEM_EXPANDIR.indexOf(STATE.screen)>=0) return;
+  const h1 = content.querySelector(".screen-header .screen-title");
+  if(!h1 || !h1.parentNode) return;
+  const antigo = h1.parentNode.querySelector(".tela-expandir-btn");
+  if(antigo) antigo.remove();
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn tela-expandir-btn no-print" + (ativo ? " btn-primary" : "");
+  btn.title = ativo ? "Recolher (Esc)" : "Expandir a tela para ver mais linhas";
+  btn.innerHTML = ativo ? (icon("minimize",13)+" Recolher") : (icon("maximize",13)+" Expandir tela");
+  btn.onclick = toggleTelaExpandida;
+  h1.parentNode.appendChild(btn);
+}
+function toggleTelaExpandida(){
+  STATE.telaExpandida = !STATE.telaExpandida;
+  aplicarBotaoExpandirTela();
+  /* A altura das telas de lista fixa depende do espaço disponível; avisa quem ouve resize. */
+  try{ window.dispatchEvent(new Event("resize")); }catch(err){}
+}
+document.addEventListener("keydown", function(e){
+  if(e.key!=="Escape" || !telaExpandidaAtiva()) return;
+  const modal = document.getElementById("modal-root");
+  if(modal && modal.children.length) return;          /* Esc fecha o modal primeiro */
+  if(document.getElementById("col-menu")) return;      /* ... ou o menu da coluna */
+  const el = document.activeElement;
+  if(el && el.classList && el.classList.contains("dt-texto")) return;
+  toggleTelaExpandida();
+});
+
 document.getElementById("login-logo-img").src = logoDataUri();
 restoreSession();
+
 </script>
 </body>
 </html>

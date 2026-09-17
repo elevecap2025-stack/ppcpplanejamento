@@ -481,6 +481,9 @@ const DEFAULT_CONFIG_VALUES = {
      motorista). Guardado como lista de ids em app_config — igual ao padrão já usado para
      pedidos_cancelados — para não depender de coluna nova na tabela pedidos. */
   pedidos_retirada: [],
+  /* OPs já impressas na Prog. Perfiladeira — lista de ids em app_config, mesmo padrão de
+     pedidos_retirada (não depende de coluna nova na tabela pedidos). */
+  pedidos_op_impressa: [],
   /* Data da Venda por pedido — base exclusiva do cálculo de Lead Time quando preenchida
      (se vazia, o Lead Time cai de volta pra Data Prog.). Guardado como mapa {id: "aaaa-mm-dd"}
      em app_config, pelo mesmo motivo de pedidos_retirada: não depende de coluna nova na
@@ -1117,7 +1120,14 @@ const ICON_PATHS = {
   maximize:'<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
   minimize:'<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
   fileText:'<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><line x1="10" y1="9" x2="8" y2="9"/>',
+  flag:'<path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/>',
 };
+/* Bandeirinha da coluna "OP impressa": vermelha e preenchida quando impressa (chama atenção),
+   cinza e vazada quando ainda não foi. */
+function flagOpImpressaHtml(impressa){
+  const cor = impressa ? COLORS.red : COLORS.textMuted;
+  return '<svg width="16" height="16" viewBox="0 0 24 24" fill="'+(impressa?COLORS.red:"none")+'" stroke="'+cor+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">'+ICON_PATHS.flag+'</svg>';
+}
 function icon(name, size, color){
   size = size || 16; color = color || "currentColor";
   return '<svg width="'+size+'" height="'+size+'" viewBox="0 0 24 24" fill="none" stroke="'+color+'" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0">'+(ICON_PATHS[name]||'')+'</svg>';
@@ -1476,7 +1486,7 @@ const STAGE_DEFS = {
 function defaultStageFilterState(){
   return {
     weekStart:"", dIni:"", dFim:"", maquinaId:"", cidadeId:"", corSupId:"", corInfId:"", epsId:"", material:"", motoristaId:"", op:"",
-    colunasVisiveis:{dataProg:true,cliente:true,op:true,situacao:true,material:true,corSup:true,corInf:true,eps:true,metragem:true,cidade:true,motorista:true},
+    colunasVisiveis:{dataProg:true,cliente:true,op:true,opImpressa:true,situacao:true,material:true,corSup:true,corInf:true,eps:true,metragem:true,cidade:true,motorista:true},
     diasVisiveis:[true,true,true,true,true,true],
     metas:[800,800,800,800,800,400],
   };
@@ -1515,11 +1525,25 @@ async function toggleRetiradaPedido(id){
   renderScreen();
   showToast("success", jaTem ? "Marcação de retirada removida do pedido." : "Pedido marcado como retirada pelo cliente — sem necessidade de motorista.");
 }
+/* ---- OP impressa (Prog. Perfiladeira): flag por pedido para confirmar que a OP foi
+   impressa; quando marcada, a bandeirinha fica vermelha na tela. Guardado como lista de ids
+   em app_config, mesmo padrão de pedidoEhRetirada(). ---- */
+function pedidoOpImpressa(p){ return !!p && STATE.pedidosOpImpressaIds.indexOf(p.id)!==-1; }
+async function toggleOpImpressaPedido(id){
+  const atual = (await configGet("pedidos_op_impressa")) || [];
+  const jaTem = atual.indexOf(id)!==-1;
+  const nova = jaTem ? atual.filter(function(x){ return x!==id; }) : atual.concat([id]);
+  const ok = await configSet("pedidos_op_impressa", nova);
+  if(!ok) return;
+  STATE.pedidosOpImpressaIds = nova;
+  renderScreen();
+  showToast("success", jaTem ? "OP desmarcada como impressa." : "OP marcada como impressa.");
+}
 const STATE = {
   loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
   sidebarCollapsedGroups:{},
   stageState:{},
-  pedidosFiltro:{cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""},
+  pedidosFiltro:{cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""},
   pedidosSort:{campo:"dataProg", direcao:"asc"},
   entreguesFiltro:{cliente:"",op:"",motoristaId:"",dIni:"",dFim:""},
   baixasFiltro:{materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"},
@@ -1559,6 +1583,9 @@ const STATE = {
   /* Item 2: ids de pedidos marcados como "cliente retira" (sem entrega por motorista) —
      ver pedidoEhRetirada()/toggleRetiradaPedido(). */
   pedidosRetiradaIds:[],
+  /* Item: ids de OPs marcadas como impressas na Prog. Perfiladeira — ver pedidoOpImpressa()/
+     toggleOpImpressaPedido(). */
+  pedidosOpImpressaIds:[],
   /* Item: {id: "aaaa-mm-dd"} — data da venda por pedido, usada como base do Lead Time. */
   pedidosDataVenda:{},
   /* Item: {id: {perfilar:"aaaa-mm-dd", pintura:"...", colagem:"..."}} — datas reais de
@@ -1632,7 +1659,7 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf, pedidosObservacoes] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf, pedidosObservacoes, pedidosOpImpressa] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
@@ -1641,6 +1668,7 @@ async function loadAllData(){
     configGet("permissoes_usuarios"),
     configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"), configGet("pedidos_data_venda"), configGet("pedidos_datas_conclusao"),
     configGet("pedidos_equipamento_inf"), configGet("pedidos_producao_inf"), configGet("pedidos_observacoes"),
+    configGet("pedidos_op_impressa"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1659,6 +1687,7 @@ async function loadAllData(){
   STATE.motivosCancelamento = Array.isArray(motivosCancelamento) && motivosCancelamento.length ? motivosCancelamento : DEFAULT_CONFIG_VALUES.motivos_cancelamento;
   STATE.pedidosCancelados = Array.isArray(pedidosCancelados) ? pedidosCancelados : [];
   STATE.pedidosRetiradaIds = Array.isArray(pedidosRetirada) ? pedidosRetirada : [];
+  STATE.pedidosOpImpressaIds = Array.isArray(pedidosOpImpressa) ? pedidosOpImpressa : [];
   STATE.pedidosDataVenda = (pedidosDataVenda && typeof pedidosDataVenda==="object") ? pedidosDataVenda : {};
   STATE.pedidosDatasConclusao = (pedidosDatasConclusao && typeof pedidosDatasConclusao==="object") ? pedidosDatasConclusao : {};
   STATE.pedidosEquipamentoInf = (pedidosEquipamentoInf && typeof pedidosEquipamentoInf==="object") ? pedidosEquipamentoInf : {};
@@ -4551,10 +4580,15 @@ async function doDeletePedido(id){ await deletePedido(id); closeModal(); renderS
 
 const PEDIDO_COLUMNS = [
   {key:"dataProg", label:"Prog."}, {key:"cliente", label:"Cliente"}, {key:"op", label:"OP"},
+  {key:"opImpressa", label:"OP impressa"},
   {key:"situacao", label:"Situação"}, {key:"material", label:"Material"}, {key:"corSup", label:"Cor Sup."},
   {key:"corInf", label:"Cor Inf."}, {key:"eps", label:"EPS"}, {key:"metragem", label:"Metragem"}, {key:"cidade", label:"Cidade"},
   {key:"motorista", label:"Motorista"}, {key:"leadTime", label:"Lead Time"},
 ];
+/* Colunas exclusivas das telas de programação (não aparecem na tela/PDF/classificação de
+   Lançamentos). "OP impressa" só faz sentido na Prog. Perfiladeira. */
+const PEDIDO_COLUNAS_STAGE_ONLY = ["opImpressa"];
+function colunasLancamento(){ return PEDIDO_COLUMNS.filter(function(c){ return PEDIDO_COLUNAS_STAGE_ONLY.indexOf(c.key)<0; }); }
 const PEDIDO_SORT_ACCESSORS = {
   dataProg: p=>p.dataProg||"",
   cliente: p=>(p.cliente||"").toLowerCase(),
@@ -4594,6 +4628,10 @@ function pedidoCellHtml(key, p, opts){
     }
     case "cliente": return '<td>'+(pedidoEhRetirada(p)?'<span class="retirada-badge" title="Cliente retira o pedido — não precisa de motorista">'+icon("package",10)+' RETIRA</span>':"")+escapeHtml(p.cliente||"—")+'</td>';
     case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+(observacaoDoPedido(p)?' <span title="'+escapeAttr(observacaoDoPedido(p))+'" style="cursor:help;display:inline-block;vertical-align:middle">'+icon("fileText",11,COLORS.textMuted)+'</span>':'')+'</td>';
+    case "opImpressa": {
+      const imp = pedidoOpImpressa(p);
+      return '<td style="text-align:center"><button type="button" title="'+(imp?"OP impressa — clique para desmarcar":"Marcar OP como impressa")+'" onclick="toggleOpImpressaPedido(\''+p.id+'\')" style="background:transparent;border:none;cursor:pointer;padding:4px;display:inline-flex;align-items:center;justify-content:center">'+flagOpImpressaHtml(imp)+'</button></td>';
+    }
     case "situacao": {
       const inner = opts.fixedStatusLabel
         ? fixedStatusPillHtml(opts.fixedStatusLabel)
@@ -4662,7 +4700,7 @@ function togglePedidosSortDir(){
 }
 function pedidosSortControlHtml(){
   const sc = STATE.pedidosSort;
-  const opts = PEDIDO_COLUMNS.map(c=>'<option value="'+c.key+'" '+(sc.campo===c.key?"selected":"")+'>'+c.label+'</option>').join("");
+  const opts = colunasLancamento().map(c=>'<option value="'+c.key+'" '+(sc.campo===c.key?"selected":"")+'>'+c.label+'</option>').join("");
   const asc = sc.direcao==="asc";
   return '<div class="sort-control no-print">'+
     icon("arrowUpDown",14,COLORS.textMuted)+
@@ -4705,7 +4743,7 @@ function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortab
 }
 
 function updatePedidosFiltro(key, val){ STATE.pedidosFiltro[key]=val; renderScreen(); }
-function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""}; renderScreen(); }
+function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""}; renderScreen(); }
 /* ---- Filtro de semana na tela Lançamentos ----
    Semana ISO (segunda a domingo), a mesma numeração usada nas telas de programação.
    Sem ano preenchido, vale o ano atual. As setas andam uma semana pra trás/frente; com o
@@ -4755,6 +4793,17 @@ function textoCombinaBusca(texto, busca){
 function textoBuscaMaterialPedido(p){
   return [p.material, colNomeMaterial(p.corSupId), colNomeMaterial(p.corInfId), colNomeMaterial(p.epsId)].join(" ");
 }
+/* Filtro do Fluxo de Produção (tela Lançamentos): as etapas adicionais após Perfilar são
+   Pintura (temPintura) e Colagem (temColagem). Permite achar, por exemplo, quem tem Pintura. */
+function pedidoCombinaFluxo(p, fluxo){
+  switch(fluxo){
+    case "comPintura": return !!p.temPintura;
+    case "semPintura": return !p.temPintura;
+    case "comColagem": return !!p.temColagem;
+    case "semColagem": return !p.temColagem;
+  }
+  return true;
+}
 function filterPedidosList(list){
   const f = STATE.pedidosFiltro;
   const semanaFiltro = lancSemanaIntervalo(f);
@@ -4762,6 +4811,7 @@ function filterPedidosList(list){
     if(f.cliente && !(p.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
     if(f.op && !(p.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
     if(f.situacaoId && p.situacaoId!==f.situacaoId) return false;
+    if(f.fluxo && !pedidoCombinaFluxo(p, f.fluxo)) return false;
     if(f.material && !textoCombinaBusca(textoBuscaMaterialPedido(p), f.material)) return false;
     if(f.corSupId && p.corSupId!==f.corSupId) return false;
     if(f.corInfId && p.corInfId!==f.corInfId) return false;
@@ -4926,6 +4976,7 @@ const LANC_FILTROS_DEF = [
   {key:"cliente",  label:"Cliente",  campos:["cliente"]},
   {key:"op",       label:"OP",       campos:["op"]},
   {key:"situacao", label:"Situação", campos:["situacaoId"]},
+  {key:"fluxo",    label:"Fluxo de Produção", campos:["fluxo"]},
   {key:"material", label:"Material", campos:["material"]},
   {key:"corSup",   label:"Cor Sup.", campos:["corSupId"]},
   {key:"corInf",   label:"Cor Inf.", campos:["corInfId"]},
@@ -4986,6 +5037,7 @@ function lancFiltrosAtivos(){
   if(f.cliente) out.push({key:"cliente", texto:"Cliente: "+f.cliente});
   if(f.op) out.push({key:"op", texto:"OP: "+f.op});
   if(f.situacaoId){ const st = STATE.statusOptions.find(function(x){ return x.id===f.situacaoId; }); out.push({key:"situacao", texto:"Situação: "+(st?st.nome:"?")}); }
+  if(f.fluxo){ const rotFluxo = {comPintura:"Com Pintura",semPintura:"Sem Pintura",comColagem:"Com Colagem",semColagem:"Sem Colagem"}; out.push({key:"fluxo", texto:"Fluxo: "+(rotFluxo[f.fluxo]||f.fluxo)}); }
   if(f.material) out.push({key:"material", texto:"Material: "+f.material});
   if(f.corSupId) out.push({key:"corSup", texto:"Cor Sup.: "+nomeMat(f.corSupId)});
   if(f.corInfId) out.push({key:"corInf", texto:"Cor Inf.: "+nomeMat(f.corInfId)});
@@ -5037,6 +5089,11 @@ function lancFiltroBarHtml(bobinas){
   if(v.cliente) html += campo("fc","Cliente",f.cliente,'<input class="field-input'+filterActiveClass(f.cliente)+'" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updatePedidosFiltro(\'cliente\', this.value)"/>');
   if(v.op) html += campo("fc fc-op","OP",f.op,'<input class="field-input'+filterActiveClass(f.op)+'" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updatePedidosFiltro(\'op\', this.value)"/>');
   if(v.situacao) html += campo("fc","Situação",f.situacaoId,'<select class="field-select'+filterActiveClass(f.situacaoId)+'" onchange="updatePedidosFiltro(\'situacaoId\', this.value)"><option value="">Todas</option>'+opt(STATE.statusOptions, f.situacaoId)+'</select>');
+  if(v.fluxo){
+    const optFluxo = [["comPintura","Com Pintura"],["semPintura","Sem Pintura"],["comColagem","Com Colagem"],["semColagem","Sem Colagem"]]
+      .map(function(o){ return '<option value="'+o[0]+'" '+(f.fluxo===o[0]?"selected":"")+'>'+o[1]+'</option>'; }).join("");
+    html += campo("fc","Fluxo de Produção",f.fluxo,'<select class="field-select'+filterActiveClass(f.fluxo)+'" onchange="updatePedidosFiltro(\'fluxo\', this.value)"><option value="">Todos</option>'+optFluxo+'</select>');
+  }
   if(v.material) html += campo("fc","Material",f.material,'<input class="field-input'+filterActiveClass(f.material)+'" value="'+escapeAttr(f.material)+'" placeholder="Ex.: tp40 0,50mm" title="Busca por qualquer palavra do material, da Cor Sup./Inf. ou do EPS. Várias palavras: traz só o que tiver todas. Enter para aplicar." onchange="updatePedidosFiltro(\'material\', this.value)"/>');
   if(v.corSup) html += campo("fc","Cor Sup.",f.corSupId,'<select class="field-select'+filterActiveClass(f.corSupId)+'" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corSupId)+'</select>');
   if(v.corInf) html += campo("fc","Cor Inf.",f.corInfId,'<select class="field-select'+filterActiveClass(f.corInfId)+'" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corInfId)+'</select>');
@@ -5313,6 +5370,7 @@ function colEhStage(ctx){ return !!STAGE_DEFS[ctx]; }
 function colDisponiveis(ctx){
   return PEDIDO_COLUMNS.map(function(c){ return c.key; }).filter(function(k){
     if(k==="motorista") return ctx==="entrega" || ctx==="entregues";
+    if(k==="opImpressa") return ctx==="perfilar";
     return true;
   });
 }
@@ -5332,7 +5390,15 @@ function colCfg(ctx){
   const salvo = colCfgSalvo()[ctx] || {};
   const disp = colDisponiveis(ctx);
   let ordem = Array.isArray(salvo.ordem) ? salvo.ordem.filter(function(k){ return disp.indexOf(k)>=0; }) : [];
-  disp.forEach(function(k){ if(ordem.indexOf(k)<0) ordem.push(k); });
+  disp.forEach(function(k){
+    if(ordem.indexOf(k)>=0) return;
+    /* "OP impressa" é nova: para quem já tinha ordem salva, entra logo após "OP" em vez do fim. */
+    if(k==="opImpressa"){
+      const iOp = ordem.indexOf("op");
+      if(iOp>=0){ ordem.splice(iOp+1, 0, k); return; }
+    }
+    ordem.push(k);
+  });
   let visiveis;
   if(colEhStage(ctx)){
     visiveis = STATE.stageState[ctx].colunasVisiveis;
@@ -5368,6 +5434,7 @@ function colValorTexto(key, p){
     case "dataProg": v = p.dataProg ? fmtDateBR(p.dataProg) : ""; break;
     case "cliente": v = p.cliente||""; break;
     case "op": v = p.op||""; break;
+    case "opImpressa": v = pedidoOpImpressa(p) ? "Impressa" : "Não impressa"; break;
     case "situacao": { const st = STATE.statusOptions.find(function(x){ return x.id===p.situacaoId; }); v = st ? st.nome : ""; break; }
     case "material": v = p.material||""; break;
     case "corSup": v = colNomeMaterial(p.corSupId); break;
@@ -5711,7 +5778,7 @@ function renderPedidosScreen(){
     lancFiltroBarHtml(bobinas)+
     '</div>'+
     '<div class="screen-fixed-body"><div class="pcp-card" style="padding:0">'+
-      pedidoTableHtml(pedidos, false, false, false, true, null, false, false, function(p){
+      pedidoTableHtml(pedidos, false, false, false, true, colunasLancamento().map(c=>c.key), false, false, function(p){
         return '<button class="icon-btn" title="Cancelar pedido" style="color:'+COLORS.red+'" onclick="openCancelarPedidoModal(\''+p.id+'\')">'+icon("xCircle",13)+'</button>';
       }, null, undefined, {coresDia: lancCoresCfg().ativo})+
     '</div></div>'+
@@ -5806,7 +5873,7 @@ function abrirPreviewPdfLancamentos(url, nomeArquivo, qtd){
   document.getElementById("modal-root").innerHTML = html;
 }
 function montarPdfLancamentos(pedidos){
-  const cols = PEDIDO_COLUMNS.slice();
+  const cols = colunasLancamento();
   const coresCfg = lancCoresCfg();
   const hexOk = function(h){ return typeof h==="string" && /^#[0-9a-fA-F]{6}$/.test(h); };
   const rgb = function(hex){ if(!hexOk(hex)) return [140,151,166]; const c = hexParaRgb(hex); return [c.r, c.g, c.b]; };

@@ -87,6 +87,12 @@ button,input,select{font-family:'Inter',sans-serif;}
 
 .pcp-card{background:var(--panel);border:1px solid var(--steel-border);border-radius:10px;padding:18px;transition:background .2s,border-color .2s;}
 .telha-box{transition:background .15s,border-color .15s,transform .15s;}
+/* Os dois gráficos do bloco "Produto cortado na Perfiladeira" com o mesmo tamanho:
+   os cards esticam juntos na grade e a área de plotagem tem a mesma altura nos dois
+   (rosca e barras), na tela e na impressão. */
+.telha-grafico-card{display:flex;flex-direction:column;height:100%;}
+.telha-grafico-card .pizza-wrap{flex:1;min-height:210px;}
+.telha-grafico-card .chart-wrap{height:210px;}
 .mes-chip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:12px;cursor:pointer;
   border:1px solid var(--steel-border);background:transparent;color:var(--text-muted);transition:all .15s;}
 .mes-chip:hover{border-color:var(--brand);}
@@ -411,9 +417,10 @@ button,input,select{font-family:'Inter',sans-serif;}
   body.print-escopo-telhas .stat-label{font-size:7.5px !important;}
   body.print-escopo-telhas .chart-stat-value{font-size:12px !important;}
   body.print-escopo-telhas .chart-stats-row{gap:10px !important;margin-bottom:6px !important;}
-  body.print-escopo-telhas .chart-wrap{height:120px !important;}
+  body.print-escopo-telhas .chart-wrap{height:130px !important;}
+  body.print-escopo-telhas .pizza-wrap{min-height:130px !important;}
   body.print-escopo-telhas .chart-day{font-size:7px !important;}
-  body.print-escopo-telhas #telhas-print-area svg{max-height:150px !important;max-width:150px !important;}
+  body.print-escopo-telhas #telhas-print-area svg{max-height:130px !important;max-width:130px !important;}
 }
 
 @media (max-width:860px){
@@ -7871,14 +7878,6 @@ function classeTelhaDoPedido(p){
   for(let i=0;i<fontes.length;i++){ const e = espessuraDoTexto(fontes[i]); if(e) return e; }
   return "pintada";
 }
-/* Cross-cut: quanto do total saiu em bobina pré-pintada (Cor = Sim), independente da espessura.
-   Não entra na soma das caixas (senão contaria duas vezes) — aparece como observação. Usa a
-   mesma metragem com fator das caixas, pra poder ser comparado com elas. */
-function metragemPrePintada(pedidos){
-  return pedidos.reduce(function(s,p){
-    return s + ((materialEhPrePintado(p.corSupId) || materialEhPrePintado(p.corInfId)) ? metrosPerfilarComFator(p) : 0);
-  }, 0);
-}
 function labelClasseTelha(chave){
   if(chave==="pintada") return "Pré-pintada (cor)";
   return "Telha "+chave;
@@ -7955,7 +7954,7 @@ function pizzaChartHtml(itens, total){
       '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;min-width:80px;text-align:right">'+fmtNum(it.valor)+' m</span>'+
     '</div>';
   }).join("");
-  return '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'+
+  return '<div class="pizza-wrap" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'+
     '<svg viewBox="0 0 200 200" style="width:190px;height:190px;flex-shrink:0">'+fatias+
       '<text x="'+cx+'" y="'+(cy-6)+'" font-size="11" text-anchor="middle" fill="'+COLORS.textMuted+'">Total</text>'+
       '<text x="'+cx+'" y="'+(cy+11)+'" font-size="13" font-weight="700" text-anchor="middle" fill="'+COLORS.text+'">'+fmtNum(total)+' m</text>'+
@@ -8085,8 +8084,6 @@ function telhasDashboardHtml(){
   const pedidosBase = pedidosPerfilarVelocimetro();
   const res = resumoTelhas(pedidosBase);
   const totalBruto = pedidosBase.reduce(function(s,p){ return s+Number(p.metragem||0); }, 0);
-  const pintadaTotal = metragemPrePintada(pedidosBase);
-  const pintadaPct = res.total>0 ? (pintadaTotal/res.total)*100 : 0;
   let totalKg = 0;
   const caixas = res.itens.map(function(it){
     const fator = fatorKgDaClasse(it.chave);
@@ -8114,10 +8111,6 @@ function telhasDashboardHtml(){
         ? '<div style="font-size:9.5px;color:#C98A00;margin-top:5px">não inclui '+semFator.map(function(i){ return escapeHtml(i.label); }).join(", ")+' (sem fator)</div>'
         : '<div style="font-size:9.5px;color:'+COLORS.textMuted+';margin-top:5px">'+fmtNum(res.total)+' m convertidos</div>')+
     '</div>';
-  const notaPintada = '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+
-    'Somando tudo, <strong style="color:#8B5CF6">'+fmtNum(pintadaTotal)+' m ('+pintadaPct.toFixed(1).replace(".",",")+'%)</strong> saíram em bobina pré-pintada (Cor = Sim). '+
-    'Esse número atravessa as espessuras, por isso fica aqui e não numa caixa — somá-lo às faixas contaria a mesma produção duas vezes. '+
-    'A caixa "Pré-pintada (cor)" é a de sobra: fica com todo pedido cuja bobina não tem a medida escrita no nome.</div>';
   const per = dashMetaPeriodo();
   const baseLabel = STATE.dashMetaFiltro.base==="prog" ? "Programado (data de prog.)" : "Somente etapas concluídas";
   const cabecalhoPdf =
@@ -8133,8 +8126,7 @@ function telhasDashboardHtml(){
     cabecalhoPdf+
     '<div class="pcp-card" style="margin-bottom:16px">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:4px">'+
-      '<div><div class="preview-title" style="margin:0">Produto cortado na Perfiladeira</div>'+
-        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:2px">Abre o total do velocímetro do Perfilar por espessura, lida do nome da bobina. Mesmo período, mesma Base do Cálculo e mesmo Fator Produção Perfilar do velocímetro. Clique numa caixa para ver os lançamentos.</div></div>'+
+      '<div><div class="preview-title" style="margin:0">Produto cortado na Perfiladeira</div></div>'+
       '<div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">'+
       '<button class="btn btn-ghost no-print" onclick="openFatoresKgModal()" title="Editar o fator de conversão de metros para quilos de cada telha">'+icon("sliders",13)+' Fator kg</button>'+
       '<button class="btn no-print" onclick="printTelhasComo(\'landscape\')" title="Gera o PDF só deste bloco, em paisagem">'+icon("printer",13)+' PDF Paisagem</button>'+
@@ -8144,12 +8136,11 @@ function telhasDashboardHtml(){
       '</div></div>'+
     '</div>'+
     '<div class="telhas-caixas-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px,1fr));gap:10px;margin-top:12px">'+caixas+caixaTotalKg+'</div>'+
-    notaPintada+
   '</div>'+
   /* Pizza e barras lado a lado: em telas estreitas a grade quebra sozinha e um fica abaixo
      do outro, então não há corte de conteúdo no celular nem no PDF em retrato. */
-  '<div class="telhas-graficos-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(380px,1fr));gap:16px;align-items:start">'+
-    '<div class="pcp-card" style="margin:0">'+
+  '<div class="telhas-graficos-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(380px,1fr));gap:16px;align-items:stretch">'+
+    '<div class="pcp-card telha-grafico-card" style="margin:0">'+
       '<div class="preview-title">Participação de cada produto (%)</div>'+
       pizzaChartHtml(res.itens, res.total)+
     '</div>'+
@@ -8259,7 +8250,7 @@ function telhasBarrasKgHtml(){
       '<div class="chart-days" style="display:flex">'+rotulos+'</div>'
     : emptyStateHtml("Nenhum mês selecionado. Ligue pelo menos um mês abaixo.");
 
-  return '<div class="pcp-card" style="margin-bottom:16px">'+
+  return '<div class="pcp-card telha-grafico-card" style="margin:0">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:10px">'+
       '<div class="preview-title" style="margin:0">Total em kg por mês — '+escapeHtml(labelClasseTelha(cfg.classe))+'</div>'+
       '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap">'+

@@ -86,6 +86,12 @@ button,input,select{font-family:'Inter',sans-serif;}
 .icon-btn.active{color:var(--brand);border-color:var(--brand);}
 
 .pcp-card{background:var(--panel);border:1px solid var(--steel-border);border-radius:10px;padding:18px;transition:background .2s,border-color .2s;}
+.telha-box{transition:background .15s,border-color .15s,transform .15s;}
+.mes-chip{font-size:11px;font-weight:600;padding:3px 9px;border-radius:12px;cursor:pointer;
+  border:1px solid var(--steel-border);background:transparent;color:var(--text-muted);transition:all .15s;}
+.mes-chip:hover{border-color:var(--brand);}
+.mes-chip.on{background:var(--brand);border-color:var(--brand);color:#fff;}
+.telha-box:hover{background:var(--panel-alt);transform:translateY(-1px);}
 .pcp-table{width:100%;border-collapse:collapse;font-size:13px;}
 .pcp-table th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-muted);font-weight:600;padding:11px 12px;border-bottom:1px solid var(--steel-border);white-space:nowrap;}
 .pcp-table td{padding:11px 12px;border-bottom:1px solid var(--steel-border);color:var(--text);vertical-align:middle;}
@@ -315,6 +321,10 @@ button,input,select{font-family:'Inter',sans-serif;}
 ::-webkit-scrollbar-thumb{background:var(--steel);border-radius:4px;}
 
 .print-only{display:none;}
+/* Cabeçalho com a marca do bloco "Produto cortado na Perfiladeira": existe só para o PDF.
+   Fica oculto na tela o tempo todo e só é exibido dentro do @media print, quando o body
+   está com a classe print-escopo-telhas. */
+.telhas-print-header{display:none !important;}
 @media print{
   @page { size: landscape; margin: 8mm; }
   body *{visibility:hidden;}
@@ -367,6 +377,43 @@ button,input,select{font-family:'Inter',sans-serif;}
   .acomp-print-page .chart-obs-item{padding:3px 0 !important;gap:5px !important;}
   .acomp-print-page .chart-obs-text{font-size:8.5px !important;line-height:1.3 !important;}
   .acomp-print-page .chart-obs-empty{font-size:8px !important;margin:4px 0 0 !important;}
+  .acomp-print-page .acomp-anual-sep{margin:10px 0 6px !important;padding-top:8px !important;}
+  .acomp-print-page .acomp-anual-sep div{font-size:10px !important;}
+  .acomp-print-page .chart-card svg{height:120px !important;}
+
+  /* Produto cortado na Perfiladeira — PDF só desse bloco. A classe entra no body pelo
+     printTelhasComo() e sai no afterprint, então nenhuma outra tela é afetada. */
+  body.print-escopo-telhas #content > *{display:none !important;}
+  body.print-escopo-telhas #telhas-print-area{display:block !important;}
+  body.print-escopo-telhas .telhas-print-header{display:flex !important;align-items:center;gap:14px;
+    border-bottom:2px solid #333;padding-bottom:10px;margin-bottom:14px;}
+  body.print-escopo-telhas .telhas-print-header img{height:34px;width:auto;}
+  /* Tudo comprimido para caber em UMA folha, tanto em retrato quanto em paisagem. Sem isso o
+     rótulo dos meses do gráfico de barras escorrega para a segunda página. */
+  body.print-escopo-telhas #telhas-print-area{font-size:10px;}
+  body.print-escopo-telhas #telhas-print-area,
+  body.print-escopo-telhas .telhas-graficos-grid,
+  body.print-escopo-telhas .telha-box{page-break-inside:avoid;break-inside:avoid;}
+  body.print-escopo-telhas #telhas-print-area .pcp-card{padding:8px !important;margin-bottom:6px !important;
+    page-break-inside:avoid;break-inside:avoid;}
+  body.print-escopo-telhas .telhas-print-header{padding-bottom:6px !important;margin-bottom:8px !important;}
+  body.print-escopo-telhas .telhas-print-header img{height:26px !important;}
+  /* As seis caixas em uma linha só, e os dois gráficos lado a lado mesmo em retrato. */
+  body.print-escopo-telhas .telhas-caixas-grid{grid-template-columns:repeat(6,1fr) !important;gap:5px !important;margin-top:7px !important;}
+  body.print-escopo-telhas .telhas-graficos-grid{grid-template-columns:1fr 1fr !important;gap:8px !important;}
+  body.print-escopo-telhas .telha-box,
+  body.print-escopo-telhas .telha-box-total{padding:6px 7px !important;}
+  body.print-escopo-telhas .telha-box div,
+  body.print-escopo-telhas .telha-box-total div{font-size:9px !important;}
+  body.print-escopo-telhas .telha-box div:nth-child(2),
+  body.print-escopo-telhas .telha-box-total div:nth-child(2){font-size:12.5px !important;}
+  body.print-escopo-telhas .preview-title{font-size:10px !important;margin-bottom:4px !important;}
+  body.print-escopo-telhas .stat-label{font-size:7.5px !important;}
+  body.print-escopo-telhas .chart-stat-value{font-size:12px !important;}
+  body.print-escopo-telhas .chart-stats-row{gap:10px !important;margin-bottom:6px !important;}
+  body.print-escopo-telhas .chart-wrap{height:120px !important;}
+  body.print-escopo-telhas .chart-day{font-size:7px !important;}
+  body.print-escopo-telhas #telhas-print-area svg{max-height:150px !important;max-width:150px !important;}
 }
 
 @media (max-width:860px){
@@ -502,6 +549,14 @@ const DEFAULT_CONFIG_VALUES = {
   pedidos_producao_inf: {},
   /* Item: observações gerais do pedido — texto livre, guardado por id, mesmo padrão de sempre. */
   pedidos_observacoes: {},
+  /* Item: regional do pedido — "Alto Vale" ou "Litoral". Guardado como mapa {id: "Alto Vale"}
+     em app_config, mesmo padrão dos itens acima: não depende de coluna nova na tabela pedidos. */
+  pedidos_regional: {},
+  /* Item: fator de conversão de metros para quilos, por tipo de telha — o peso de um metro
+     linear de cada telha. O cálculo é uma MULTIPLICAÇÃO (metros × fator = kg):
+     19.872,60 m × 3,750 kg/m = 74.522,25 kg.
+     Editável na tela pelo botão "Fator kg" do bloco "Produto cortado na Perfiladeira". */
+  fatores_kg_telha: {"0,35":3.450, "0,43":3.750, "0,50":4.410, "0,65":5.9, "pintada":3.8},
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -1248,18 +1303,70 @@ function equipamentoInfDoPedido(p){ return (p && STATE.pedidosEquipamentoInf[p.i
 /* Observações gerais do pedido — texto livre, mesmo padrão de sempre (não é coluna da tabela
    pedidos, mora em app_config). */
 function observacaoDoPedido(p){ return (p && STATE.pedidosObservacoes[p.id]) || ""; }
+/* ---- Item: Regional do pedido (Alto Vale / Litoral) ----
+   Serve pra separar o atendimento das duas regiões em filtro, coluna e PDF. Guardada à parte
+   em app_config (pedidos_regional), pelo mesmo motivo de sempre: não depende de coluna nova na
+   tabela pedidos. Pedido sem regional definida continua válido — aparece como "—". */
+const REGIONAIS = ["Alto Vale", "Litoral"];
+function regionalDoPedido(p){ return (p && STATE.pedidosRegional[p.id]) || ""; }
+/* ---- Item: o Lead Time passa a contar DIAS ÚTEIS ----
+   Sábados, domingos e feriados não entram na conta. Os feriados vêm de feriadosEfetivosDoAno(),
+   a mesma lista já usada pelas metas por dia: nacionais fixos + móveis (Carnaval, Sexta-feira
+   Santa, Corpus Christi, calculados pela Páscoa) + os feriados próprios da empresa cadastrados
+   na tela "Metas por Dia" (municipais, pontes, recessos), menos os que você removeu de lá.
+   Cadastrou um feriado novo? O lead time de todo mundo já passa a desconsiderar aquele dia.
+
+   Contagem: a data-base é o dia zero e conta-se a partir dela até a entrega. Entregou no mesmo
+   dia = 0 dias; entregou no próximo dia útil = 1 dia. É a mesma leitura de antes, só que agora
+   sem fim de semana e feriado no meio. Entrega anterior à data-base devolve negativo, como já
+   acontecia — sinal de data digitada errada.
+
+   O conjunto de feriados por ano fica em cache porque leadTimeDias() é chamado para cada
+   pedido da lista, e cada chamada percorre dia a dia o intervalo; remontar a lista de feriados
+   a cada dia deixaria a tela lenta com muitos pedidos. O cache é zerado a cada renderScreen()
+   (ver invalidarCacheFeriados), então um feriado recém-cadastrado já vale no próximo desenho. */
+let __feriadosSetCache = {};
+function invalidarCacheFeriados(){ __feriadosSetCache = {}; }
+function feriadosSetDoAno(ano){
+  const chave = String(ano);
+  if(!__feriadosSetCache[chave]){
+    __feriadosSetCache[chave] = new Set(feriadosEfetivosDoAno(chave).map(function(f){ return f.data; }));
+  }
+  return __feriadosSetCache[chave];
+}
+function ehDiaUtil(d){
+  const wd = d.getDay();
+  if(wd===0 || wd===6) return false;                 /* domingo e sábado */
+  return !feriadosSetDoAno(d.getFullYear()).has(toISO(d));
+}
+function diasUteisEntre(iniStr, fimStr){
+  const ini = new Date(iniStr+"T00:00:00");
+  const fim = new Date(fimStr+"T00:00:00");
+  if(isNaN(ini.getTime()) || isNaN(fim.getTime())) return null;
+  const inverso = fim < ini;
+  const de = inverso ? fim : ini;
+  const ate = inverso ? ini : fim;
+  /* Trava de segurança: uma data digitada errada (ano 0202, por exemplo) não pode travar a
+     tela num laço de centenas de milhares de voltas. */
+  const totalCorridos = Math.round((ate-de)/86400000);
+  if(totalCorridos > 3660) return null;
+  let conta = 0;
+  const cursor = new Date(de.getTime());
+  for(let i=0; i<totalCorridos; i++){
+    cursor.setDate(cursor.getDate()+1);
+    if(ehDiaUtil(cursor)) conta++;
+  }
+  return inverso ? -conta : conta;
+}
 function leadTimeDias(p){
   if(!p || !p.dataEntregue) return null;
   const base = dataBaseLeadTime(p);
   if(!base) return null;
-  const ini = new Date(base+"T00:00:00");
-  const fim = new Date(p.dataEntregue+"T00:00:00");
-  if(isNaN(ini.getTime()) || isNaN(fim.getTime())) return null;
-  return Math.round((fim-ini)/86400000);
+  return diasUteisEntre(base, p.dataEntregue);
 }
 function leadTimeLabel(dias){
   if(dias===null || dias===undefined) return "—";
-  return dias+(dias===1?" dia":" dias");
+  return dias+(dias===1?" dia útil":" dias úteis");
 }
 /* ---- Item 3 do pedido do usuário: caixas compactas de Lead Time no Dashboard (Média, Mínimo,
    Máximo e específico de Retirada), clicáveis para abrir a lista de pedidos por trás do número,
@@ -1323,7 +1430,8 @@ function dashLeadTimeCardHtml(f){
     '</div>';
   };
   return '<div class="pcp-card lead-time-card">'+
-    '<div class="lead-time-card-header">'+icon("clock",15,"#C98A00")+'<span class="preview-title" style="margin:0">Lead Time — Data Prog. → Entrega</span></div>'+
+    '<div class="lead-time-card-header">'+icon("clock",15,"#C98A00")+'<span class="preview-title" style="margin:0">Lead Time — Base → Entrega (dias úteis)</span>'+
+      '<span style="font-size:10.5px;color:'+COLORS.textMuted+';margin-left:8px">não conta sábados, domingos e feriados</span></div>'+
     '<div class="lead-time-grid">'+
       item("media","Média", stats.media, stats.qtd+" pedido(s)")+
       item("minimo","Mínimo", stats.minimo, "")+
@@ -1543,7 +1651,7 @@ const STATE = {
   loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
   sidebarCollapsedGroups:{},
   stageState:{},
-  pedidosFiltro:{cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""},
+  pedidosFiltro:{cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",regional:"",dIni:"",dFim:"",semana:"",semanaAno:""},
   pedidosSort:{campo:"dataProg", direcao:"asc"},
   entreguesFiltro:{cliente:"",op:"",motoristaId:"",dIni:"",dFim:""},
   baixasFiltro:{materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"},
@@ -1564,14 +1672,17 @@ const STATE = {
   /* Dashboard: unidade escolhida em cada caixa de total (m = metragem, valor = R$). */
   dashUnidades:{bobinasCompradas:"m", epsComprado:"m", pedidosEntregues:"m", enviadoPintura:"m"},
   /* Período dos velocímetros de meta. Vazio = mês corrente. */
-  dashMetaFiltro:{ano:"",mes:"",dIni:"",dFim:"",base:"concl"},
+  /* Abre sempre no mês/ano corrente, para todo usuário — nunca em "Ano inteiro", que dava a
+     impressão de estar olhando o mês e na verdade somava o ano todo assim que alguém mexia
+     no ano. Mesmo padrão do dashFiltro e do acompFiltro. */
+  dashMetaFiltro:{ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dIni:"",dFim:"",base:"concl"},
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,preSemanaLimite:"",ordenarPor:""},
   materiaisPdfColunas:{},
   fatorConversaoFiltro:{tipo:"",produto:""},
   notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
   precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
   sidebarHidden:false,
-  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia"},
+  acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia", anoAcum:String(new Date().getFullYear())},
   obsProducao:{}, obsProducaoLoading:{},
   materialTipos:["Bobina","EPS","Outro"],
   motivosPerda:["Quebra/Avaria","Erro de Corte","Desperdício de Produção","Vencimento/Validade","Outro"],
@@ -1597,6 +1708,10 @@ const STATE = {
   pedidosProducaoInf:{},
   /* Item: {id: "texto livre"} — observações gerais do pedido. */
   pedidosObservacoes:{},
+  /* Item: {id: "Alto Vale"|"Litoral"} — regional de atendimento do pedido. */
+  pedidosRegional:{},
+  /* Item: {"0,43":3.75, ...} — metros × fator = kg, por tipo de telha. */
+  fatoresKgTelha:{},
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
@@ -1659,7 +1774,7 @@ async function loadAllData(){
   STATE.materiaisAvulsos = (avulsosR.data||[]).map(mapMaterialAvulsoFromRow);
   STATE.movimentacoes = (movimentacoesR.data||[]).map(mapMovimentoFromRow);
 
-  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf, pedidosObservacoes, pedidosOpImpressa] = await Promise.all([
+  const [materialTipos, motivosPerda, tipoOptions, cumeeiraOptions, metasPerfilar, metasPintura, metasColagem, metasEntrega, fatoresProducaoPerfilar, metasDiaColagem, metasDiaPerfilar, feriadosCustom, feriadosRemovidos, permissoesUsuarios, motivosCancelamento, pedidosCancelados, pedidosRetirada, pedidosDataVenda, pedidosDatasConclusao, pedidosEquipamentoInf, pedidosProducaoInf, pedidosObservacoes, pedidosOpImpressa, pedidosRegional, fatoresKgTelha] = await Promise.all([
     configGet("material_tipos"), configGet("motivos_perda"), configGet("tipo_options"), configGet("cumeeira_options"),
     configGet("metas_perfilar"), configGet("metas_pintura"), configGet("metas_colagem"), configGet("metas_entrega"),
     configGet("fatores_producao_perfilar"),
@@ -1668,7 +1783,7 @@ async function loadAllData(){
     configGet("permissoes_usuarios"),
     configGet("motivos_cancelamento"), configGet("pedidos_cancelados"), configGet("pedidos_retirada"), configGet("pedidos_data_venda"), configGet("pedidos_datas_conclusao"),
     configGet("pedidos_equipamento_inf"), configGet("pedidos_producao_inf"), configGet("pedidos_observacoes"),
-    configGet("pedidos_op_impressa"),
+    configGet("pedidos_op_impressa"), configGet("pedidos_regional"), configGet("fatores_kg_telha"),
   ]);
   STATE.materialTipos = materialTipos || DEFAULT_CONFIG_VALUES.material_tipos;
   STATE.motivosPerda = motivosPerda || DEFAULT_CONFIG_VALUES.motivos_perda;
@@ -1693,6 +1808,9 @@ async function loadAllData(){
   STATE.pedidosEquipamentoInf = (pedidosEquipamentoInf && typeof pedidosEquipamentoInf==="object") ? pedidosEquipamentoInf : {};
   STATE.pedidosProducaoInf = (pedidosProducaoInf && typeof pedidosProducaoInf==="object") ? pedidosProducaoInf : {};
   STATE.pedidosObservacoes = (pedidosObservacoes && typeof pedidosObservacoes==="object") ? pedidosObservacoes : {};
+  STATE.pedidosRegional = (pedidosRegional && typeof pedidosRegional==="object") ? pedidosRegional : {};
+  STATE.fatoresKgTelha = Object.assign({}, DEFAULT_CONFIG_VALUES.fatores_kg_telha,
+    (fatoresKgTelha && typeof fatoresKgTelha==="object") ? fatoresKgTelha : {});
   await carregarRecados();
   STATE.lancCores = normalizarLancCores(await configGet("lancamentos_cores_dia"));
 
@@ -3107,28 +3225,20 @@ const ENTITY_CONFIGS = {
       '</div>';
     },
     extraTop: (items)=>{
-      const valorTotal = items.reduce((s,m)=>s+(Number(m.estoque||0)*Number(m.valorUnitario||0)),0);
-      const metragemTotal = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(m.estoque||0),0);
-      const baixoCount = items.filter(m=>m.estoque<m.estoqueMinimo).length;
-      const preTotals = preProducaoTotalsEstoque();
-      const preProducaoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+Number(preTotals[m.id]||0),0);
-      const saldoFuturoMetragem = items.filter(m=>m.unidade==="m").reduce((s,m)=>s+saldoFuturoDoMaterial(m, preTotals),0);
-      const negativosFuturo = items.filter(m=>saldoFuturoDoMaterial(m, preTotals)<0).length;
       const divergentes = items.filter(m=>Math.abs(divergenciaDoMaterial(m))>=0.01).length;
-      /* Com limite de semana ativo, os rótulos dizem até quando o horizonte vai — sem
-         isso o número muda na tela e não fica claro o porquê. */
-      const limChave = STATE.materiaisFiltro.preSemanaLimite;
-      const limOpt = limChave ? preProducaoSemanasDisponiveis().find(w=>w.chave===limChave) : null;
-      const sufixo = limOpt ? " (até sem. "+limOpt.semana+")" : "";
-      return '<div class="stat-row">'+
-        statCardHtml("Valor Total em Estoque", fmtBRLCard(valorTotal), "trendingUp", COLORS.brand)+
-        statCardHtml("Metragem Total em Estoque", fmtNumCard(metragemTotal)+" m", "boxes", COLORS.green)+
-        statCardHtml("Materiais c/ Estoque Baixo", baixoCount, "alert", baixoCount?COLORS.red:COLORS.textMuted)+
-        statCardHtml("Saldo Inicial Divergente", divergentes, "alert", divergentes?COLORS.red:COLORS.textMuted, divergentes?"openDiagnosticoDivergenciasModal()":null)+
-        statCardHtml("Reservado em Pré-produção"+sufixo, fmtNumCard(preProducaoMetragem)+" m", "arrowDownCircle", preProducaoMetragem?"#C98A00":COLORS.textMuted)+
-        statCardHtml("Saldo Futuro"+sufixo, fmtNumCard(saldoFuturoMetragem)+" m", "activity", saldoFuturoMetragem<0?COLORS.red:COLORS.green)+
-        statCardHtml("Materiais c/ Saldo Futuro Negativo", negativosFuturo, "alert", negativosFuturo?COLORS.red:COLORS.textMuted)+
-      '</div>'+
+      /* Os sete indicadores do topo foram retirados a pedido do usuário: a tela é de consulta
+         da tabela de materiais, e a faixa só roubava altura. Todos os números continuam
+         disponíveis nas colunas da própria tabela.
+         Única coisa preservada: o acesso ao diagnóstico de divergências, que só existia no
+         clique daquela caixa. Vira um aviso discreto e só aparece quando há divergência —
+         com a conta fechada, nada é exibido. */
+      const avisoDivergencia = divergentes>0
+        ? '<div class="no-print" style="margin:-4px 0 12px"><button type="button" class="btn btn-ghost" '+
+            'style="padding:4px 10px;font-size:11.5px;color:'+COLORS.red+'" onclick="openDiagnosticoDivergenciasModal()" '+
+            'title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",12,COLORS.red)+
+            ' '+divergentes+' material(is) com saldo inicial divergente — ver diagnóstico</button></div>'
+        : '';
+      return avisoDivergencia+
       '<div class="no-print" style="display:flex;align-items:center;gap:18px;flex-wrap:wrap;font-size:11.5px;color:'+COLORS.textMuted+';margin:-6px 0 14px;padding:8px 2px">'+
         '<span style="font-weight:700;text-transform:uppercase;letter-spacing:.04em;font-size:10px">Dias em Estoque</span>'+
         '<span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:50%;background:#2FBF8F;display:inline-block"></span>0–30 dias · Excelente</span>'+
@@ -4344,6 +4454,7 @@ function openPedidoModal(mode, id){
   const concColagemAtual = dataConclusaoEtapa(p, "colagem");
   const equipamentoInfAtual = equipamentoInfDoPedido(p);
   const observacoesAtual = observacaoDoPedido(p);
+  const regionalAtual = regionalDoPedido(p);
   const bobinas = STATE.materiais.filter(m=>m.tipo==="Bobina");
   const epsMats = STATE.materiais.filter(m=>m.tipo==="EPS");
   const clientNames = uniqueClientNames();
@@ -4396,9 +4507,13 @@ function openPedidoModal(mode, id){
           '<div><label class="field-label">EPS (opcional)</label><select class="field-select" id="f-epsId" name="epsId" onchange="updateStockPreview()"><option value="">— nenhum —</option>'+
             epsMats.map(m=>'<option value="'+m.id+'" '+(f.epsId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (fator '+m.fator+'x · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')</option>').join("")+
             '</select></div>'+
-          '<div style="grid-column:span 2"><label class="field-label">Cidade</label><select class="field-select" id="f-cidadeId" name="cidadeId"><option value="">Selecione…</option>'+
+          '<div><label class="field-label">Cidade</label><select class="field-select" id="f-cidadeId" name="cidadeId"><option value="">Selecione…</option>'+
             STATE.cidades.map(c=>'<option value="'+c.id+'" '+(f.cidadeId===c.id?"selected":"")+'>'+escapeHtml(c.nome)+'</option>').join("")+
             '</select><div id="qa-cidade">'+quickAddButtonHtml("cidade")+'</div></div>'+
+
+          '<div><label class="field-label">Regional</label><select class="field-select" id="f-regional" name="regional"><option value="">— não definida —</option>'+
+            REGIONAIS.map(r=>'<option value="'+escapeAttr(r)+'" '+(regionalAtual===r?"selected":"")+'>'+escapeHtml(r)+'</option>').join("")+
+            '</select><div style="margin-top:6px;font-size:10.5px;color:'+COLORS.textMuted+';line-height:1.4">Região de atendimento — vira coluna e filtro na tela de Lançamentos.</div></div>'+
 
           '<div><label class="field-label">Equipamento (Cor Sup.)</label><select class="field-select" id="f-equipamentoId" name="equipamentoId"><option value="">Selecione…</option>'+
             STATE.equipamentos.map(e=>'<option value="'+e.id+'" '+(f.equipamentoId===e.id?"selected":"")+'>'+escapeHtml(e.nome)+'</option>').join("")+
@@ -4451,6 +4566,7 @@ async function submitPedidoForm(event, mode, id){
   const dataVendaValor = (data.dataVenda||"").trim();
   const equipamentoInfValor = (data.equipamentoInf||"").trim();
   const observacoesValor = (data.observacoes||"").trim();
+  const regionalValor = (data.regional||"").trim();
   const valoresConclusao = {};
   if("concPerfilar" in data) valoresConclusao.perfilar = (data.concPerfilar||"").trim();
   if("concPintura" in data) valoresConclusao.pintura = (data.concPintura||"").trim();
@@ -4471,6 +4587,7 @@ async function submitPedidoForm(event, mode, id){
     await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
     await syncEquipamentoInfAposSalvar(salvo.id, equipamentoInfValor);
     await syncObservacaoAposSalvar(salvo.id, observacoesValor);
+    await syncRegionalAposSalvar(salvo.id, regionalValor);
     if(Object.keys(valoresConclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, valoresConclusao);
   }
   closeModal();
@@ -4518,6 +4635,16 @@ async function syncObservacaoAposSalvar(id, novoTexto){
   if(novoTexto) novoStore[id] = novoTexto; else delete novoStore[id];
   const ok = await configSet("pedidos_observacoes", novoStore);
   if(ok) STATE.pedidosObservacoes = novoStore;
+}
+/* A Regional (Alto Vale / Litoral) também mora em app_config, pelo mesmo motivo. */
+async function syncRegionalAposSalvar(id, novoValor){
+  const atualValor = STATE.pedidosRegional[id] || "";
+  if(atualValor===novoValor) return;
+  const atualStore = (await configGet("pedidos_regional")) || {};
+  const novoStore = Object.assign({}, atualStore);
+  if(novoValor) novoStore[id] = novoValor; else delete novoStore[id];
+  const ok = await configSet("pedidos_regional", novoStore);
+  if(ok) STATE.pedidosRegional = novoStore;
 }
 /* Grava a data real em que uma etapa (perfilar/pintura/colagem) foi concluída — chamada por
    concludeTimer() no momento em que o pedido sai dessa etapa pra próxima. Best-effort: se
@@ -4583,6 +4710,7 @@ const PEDIDO_COLUMNS = [
   {key:"opImpressa", label:"OP impressa"},
   {key:"situacao", label:"Situação"}, {key:"material", label:"Material"}, {key:"corSup", label:"Cor Sup."},
   {key:"corInf", label:"Cor Inf."}, {key:"eps", label:"EPS"}, {key:"metragem", label:"Metragem"}, {key:"cidade", label:"Cidade"},
+  {key:"regional", label:"Regional"},
   {key:"motorista", label:"Motorista"}, {key:"leadTime", label:"Lead Time"},
 ];
 /* Colunas exclusivas das telas de programação (não aparecem na tela/PDF/classificação de
@@ -4600,6 +4728,7 @@ const PEDIDO_SORT_ACCESSORS = {
   eps: p=>{ const m=STATE.materiais.find(x=>x.id===p.epsId); return m?m.nome.toLowerCase():""; },
   metragem: p=>Number(p.metragem||0),
   cidade: p=>{ const c=STATE.cidades.find(x=>x.id===p.cidadeId); return c?c.nome.toLowerCase():""; },
+  regional: p=>regionalDoPedido(p).toLowerCase(),
   motorista: p=>{ const m=STATE.motoristas.find(x=>x.id===p.motoristaId); return m?m.nome.toLowerCase():""; },
   leadTime: p=>{ const d=leadTimeDias(p); return d===null ? -1 : d; },
 };
@@ -4649,6 +4778,13 @@ function pedidoCellHtml(key, p, opts){
     case "eps": { const m=STATE.materiais.find(x=>x.id===p.epsId); return '<td>'+(m?escapeHtml(m.nome):'<span style="color:'+COLORS.textMuted+'">—</span>')+'</td>'; }
     case "metragem": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(p.metragem)+' m</td>';
     case "cidade": { const c=STATE.cidades.find(x=>x.id===p.cidadeId); return '<td>'+(c?escapeHtml(c.nome):"—")+'</td>'; }
+    case "regional": {
+      const r = regionalDoPedido(p);
+      if(!r) return '<td><span style="color:'+COLORS.textMuted+'">—</span></td>';
+      /* Cores diferentes por regional só pra bater o olho e separar as duas na lista. */
+      const corR = r==="Litoral" ? "#2B8FC9" : "#7A9E3B";
+      return '<td><span style="font-size:10.5px;font-weight:700;color:'+corR+';background:'+corR+'1F;border:1px solid '+corR+'55;border-radius:10px;padding:2px 8px;white-space:nowrap">'+escapeHtml(r)+'</span></td>';
+    }
     case "motorista": {
       const m = STATE.motoristas.find(x=>x.id===p.motoristaId);
       const inner = opts.editableMotorista
@@ -4743,7 +4879,7 @@ function pedidoTableHtml(pedidos, draggable, editableSituacao, showTimer, sortab
 }
 
 function updatePedidosFiltro(key, val){ STATE.pedidosFiltro[key]=val; renderScreen(); }
-function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",dIni:"",dFim:"",semana:"",semanaAno:""}; renderScreen(); }
+function clearPedidosFiltro(){ STATE.pedidosFiltro = {cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",regional:"",dIni:"",dFim:"",semana:"",semanaAno:""}; renderScreen(); }
 /* ---- Filtro de semana na tela Lançamentos ----
    Semana ISO (segunda a domingo), a mesma numeração usada nas telas de programação.
    Sem ano preenchido, vale o ano atual. As setas andam uma semana pra trás/frente; com o
@@ -4816,6 +4952,10 @@ function filterPedidosList(list){
     if(f.corSupId && p.corSupId!==f.corSupId) return false;
     if(f.corInfId && p.corInfId!==f.corInfId) return false;
     if(f.cidadeId && p.cidadeId!==f.cidadeId) return false;
+    /* "__sem__" traz só os pedidos que ainda não têm regional definida — útil pra achar o que
+       falta preencher depois que o campo passou a existir. */
+    if(f.regional==="__sem__"){ if(regionalDoPedido(p)) return false; }
+    else if(f.regional && regionalDoPedido(p)!==f.regional) return false;
     if(f.dIni && (!p.dataProg || p.dataProg<f.dIni)) return false;
     if(f.dFim && (!p.dataProg || p.dataProg>f.dFim)) return false;
     if(semanaFiltro && (!p.dataProg || p.dataProg<semanaFiltro.ini || p.dataProg>semanaFiltro.fim)) return false;
@@ -4981,6 +5121,7 @@ const LANC_FILTROS_DEF = [
   {key:"corSup",   label:"Cor Sup.", campos:["corSupId"]},
   {key:"corInf",   label:"Cor Inf.", campos:["corInfId"]},
   {key:"cidade",   label:"Cidade",   campos:["cidadeId"]},
+  {key:"regional", label:"Regional (Alto Vale / Litoral)", campos:["regional"]},
   {key:"semana",   label:"Semana (nº da semana / ano)", campos:["semana","semanaAno"]},
   {key:"periodo",  label:"Período da programação (início / fim)", campos:["dIni","dFim"]},
 ];
@@ -5042,6 +5183,7 @@ function lancFiltrosAtivos(){
   if(f.corSupId) out.push({key:"corSup", texto:"Cor Sup.: "+nomeMat(f.corSupId)});
   if(f.corInfId) out.push({key:"corInf", texto:"Cor Inf.: "+nomeMat(f.corInfId)});
   if(f.cidadeId){ const c = STATE.cidades.find(function(x){ return x.id===f.cidadeId; }); out.push({key:"cidade", texto:"Cidade: "+(c?c.nome:"?")}); }
+  if(f.regional) out.push({key:"regional", texto:"Regional: "+(f.regional==="__sem__" ? "sem regional" : f.regional)});
   const sem = lancSemanaIntervalo(f);
   if(sem) out.push({key:"semana", texto:"Semana "+sem.semana+"/"+sem.ano+" ("+fmtDateBR(sem.ini).slice(0,5)+" a "+fmtDateBR(sem.fim).slice(0,5)+")"});
   if(f.dIni || f.dFim){
@@ -5098,6 +5240,11 @@ function lancFiltroBarHtml(bobinas){
   if(v.corSup) html += campo("fc","Cor Sup.",f.corSupId,'<select class="field-select'+filterActiveClass(f.corSupId)+'" onchange="updatePedidosFiltro(\'corSupId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corSupId)+'</select>');
   if(v.corInf) html += campo("fc","Cor Inf.",f.corInfId,'<select class="field-select'+filterActiveClass(f.corInfId)+'" onchange="updatePedidosFiltro(\'corInfId\', this.value)"><option value="">Todas</option>'+opt(bobinas, f.corInfId)+'</select>');
   if(v.cidade) html += campo("fc","Cidade",f.cidadeId,'<select class="field-select'+filterActiveClass(f.cidadeId)+'" onchange="updatePedidosFiltro(\'cidadeId\', this.value)"><option value="">Todas</option>'+opt(STATE.cidades, f.cidadeId)+'</select>');
+  if(v.regional){
+    const optReg = REGIONAIS.map(function(r){ return '<option value="'+escapeAttr(r)+'" '+(f.regional===r?"selected":"")+'>'+escapeHtml(r)+'</option>'; }).join("")+
+      '<option value="__sem__" '+(f.regional==="__sem__"?"selected":"")+'>— sem regional —</option>';
+    html += campo("fc","Regional",f.regional,'<select class="field-select'+filterActiveClass(f.regional)+'" onchange="updatePedidosFiltro(\'regional\', this.value)"><option value="">Todas</option>'+optReg+'</select>');
+  }
   if(v.semana){
     const sem = lancSemanaIntervalo(f);
     const dica = sem ? fmtDateBR(sem.ini)+" a "+fmtDateBR(sem.fim) : "Semana atual: "+isoWeekNumber(todayStr());
@@ -5442,6 +5589,7 @@ function colValorTexto(key, p){
     case "eps": v = colNomeMaterial(p.epsId); break;
     case "metragem": v = fmtNum(p.metragem)+" m"; break;
     case "cidade": { const c = STATE.cidades.find(function(x){ return x.id===p.cidadeId; }); v = c ? c.nome : ""; break; }
+    case "regional": v = regionalDoPedido(p); break;
     case "motorista": { const m = STATE.motoristas.find(function(x){ return x.id===p.motoristaId; }); v = m ? m.nome : ""; break; }
     case "leadTime": { const d = leadTimeDias(p); v = d===null ? "" : leadTimeLabel(d); break; }
   }
@@ -6900,7 +7048,7 @@ function renderEntreguesScreen(){
     '<div class="stat-row">'+
       statCardHtml("Pedidos Entregues", entregues.length, "checkCircle", COLORS.green)+
       statCardHtml("Metragem Total", fmtNumCard(metragemTotal)+" m", "package", COLORS.brand)+
-      statCardHtml("Lead Time Médio", leadTimeLabel(leadTimeMedio), "clock", "#C98A00")+
+      statCardHtml("Lead Time Médio (dias úteis)", leadTimeLabel(leadTimeMedio), "clock", "#C98A00")+
     '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="min-width:170px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updateEntreguesFiltro(\'cliente\', this.value)"/></div>'+
@@ -7047,7 +7195,7 @@ async function initMapaLeaflet(){
    logo depois (evento "afterprint"), pra não afetar a impressão de nenhuma outra tela. Os
    próprios tiles do mapa (imagens do OpenStreetMap) imprimem normalmente pelo navegador; isso é
    diferente de "exportar" o mapa via canvas, que esbarraria em bloqueio de CORS dos tiles. */
-function printMapaComo(orientacao){
+function printTelaComo(orientacao){
   const antigo = document.getElementById("print-orientation-override");
   if(antigo) antigo.remove();
   const style = document.createElement("style");
@@ -7062,6 +7210,23 @@ function printMapaComo(orientacao){
   };
   window.addEventListener("afterprint", limpar);
   window.print();
+}
+/* Nome antigo, de quando isso só existia na tela do Mapa — mantido para os botões da tela do
+   Mapa continuarem funcionando. Precisa ser "function" (e não const): os onclick inline do HTML
+   só enxergam nomes que viram propriedade de window, o que const de topo de script não faz.
+   Hoje a mesma função serve o Mapa e o Acompanhamento da Produção. */
+function printMapaComo(orientacao){ return printTelaComo(orientacao); }
+/* PDF só do bloco "Produto cortado na Perfiladeira" (caixas + pizza), com a marca no topo.
+   A classe no body faz o CSS de impressão esconder o resto da tela; ela é removida no
+   afterprint, junto com a regra de orientação, então o Dashboard volta ao normal sozinho. */
+function printTelhasComo(orientacao){
+  document.body.classList.add("print-escopo-telhas");
+  const limparEscopo = function(){
+    document.body.classList.remove("print-escopo-telhas");
+    window.removeEventListener("afterprint", limparEscopo);
+  };
+  window.addEventListener("afterprint", limparEscopo);
+  printTelaComo(orientacao);
 }
 function renderMapaScreen(){
   const f = STATE.mapaFiltro;
@@ -7453,7 +7618,8 @@ function updateDashFiltro(key, val){ STATE.dashFiltro[key]=val; renderScreen(); 
 function clearDashFiltro(){ STATE.dashFiltro = {ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dia:"",dIni:"",dFim:""}; renderScreen(); }
 function updateDashUnidade(key, val){ STATE.dashUnidades[key]=val; renderScreen(); }
 function updateDashMetaFiltro(key, val){ STATE.dashMetaFiltro[key]=val; renderScreen(); }
-function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:"",mes:"",dIni:"",dFim:"",base:"concl"}; renderScreen(); }
+/* "Limpar" volta ao padrão do sistema (mês/ano atual), não a um filtro vazio. */
+function clearDashMetaFiltro(){ STATE.dashMetaFiltro = {ano:String(new Date().getFullYear()),mes:pad2(new Date().getMonth()+1),dIni:"",dFim:"",base:"concl"}; renderScreen(); }
 /* Resolve o período dos velocímetros a partir do filtro.
    Prioridade: intervalo entre datas > mês+ano > ano inteiro > mês corrente. */
 function dashMetaPeriodo(){
@@ -7479,7 +7645,7 @@ function dashMetaPeriodo(){
 }
 /* Produção real de uma etapa dentro de um intervalo de datas. */
 function producaoNoPeriodo(stage, ini, fim, base){
-  let total = 0, pedidos = 0;
+  let total = 0, bruto = 0, pedidos = 0;
   STATE.pedidos.forEach(function(p){
     if(stage==="colagem" && !p.temColagem) return;
     if(base!=="prog" && !stageConcluido(p, stage)) return;
@@ -7487,9 +7653,13 @@ function producaoNoPeriodo(stage, ini, fim, base){
     if(!dataRef || dataRef < ini || dataRef > fim) return;
     const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
     total += Number(p.metragem||0)*fator;
+    bruto += Number(p.metragem||0);
     pedidos += 1;
   });
-  return {total: Math.round(total*100)/100, pedidos: pedidos};
+  /* "bruto" é a metragem crua, sem o Fator Produção Perfilar. É o número que bate com a
+     Metragem Total e com as caixas de produto do Dashboard — o velocímetro usa o "total"
+     (com fator), então os dois só coincidem quando não há fator cadastrado. */
+  return {total: Math.round(total*100)/100, bruto: Math.round(bruto*100)/100, pedidos: pedidos};
 }
 /* Meta acumulada do período. Dias no futuro não entram: comparar o realizado de
    meio de mês contra a meta do mês inteiro daria sempre a impressão de atraso.
@@ -7661,6 +7831,464 @@ function toggleStatCardHtml(key, label, dados, iconName, accent, rodape){
   '</div>';
 }
 
+/* ============================== CLASSIFICAÇÃO DAS TELHAS (ESPESSURA / PRÉ-PINTADA) ==============================
+   Item do usuário: abrir o total cortado na perfiladeira em telha 0,35 / 0,43 / 0,50 / 0,65 e
+   telha pré-pintada, para saber quanto cada produto representou em metros no período.
+
+   Como a espessura não é um campo próprio no cadastro, ela é lida do NOME da bobina (Cor Sup.,
+   depois Cor Inf., depois o texto do campo Material) — é onde ela já é escrita hoje, tipo
+   "TP40 0,50mm". A leitura ignora maiúsculas, acentos e aceita ponto ou vírgula ("0.50" = "0,50"),
+   reaproveitando o mesmo normBusca() da busca por material.
+
+   "Pré-pintada" é a bobina marcada com É Cor? = Sim no cadastro de Matéria-Prima.
+
+   As categorias são EXCLUSIVAS e a ESPESSURA tem prioridade: uma bobina "Simples Importada
+   0,43mm" marcada como Cor = Sim conta em Telha 0,43, não em Pré-pintada. "Pré-pintada" é a
+   sobra — fica só com os pedidos em bobina Cor = Sim cujo nome não traz medida nenhuma. O que
+   não tem medida nem é Cor = Sim vai pra "Sem classificação". Assim as caixas somam exatamente
+   a Metragem Total do período e a pizza fecha em 100%. Quanto saiu em bobina pintada no total
+   (independente da espessura) aparece à parte, como observação, via metragemPrePintada(). */
+const ESPESSURAS_TELHA = ["0,35","0,43","0,50","0,65"];
+const TELHA_CLASSE_CORES = {"0,35":"#6C8EBF","0,43":"#2B8FC9","0,50":"#7A9E3B","0,65":"#C98A00","pintada":"#8B5CF6","outros":"#8C97A6"};
+function espessuraDoTexto(txt){
+  const t = normBusca(txt);
+  for(let i=0;i<ESPESSURAS_TELHA.length;i++){ if(t.indexOf(ESPESSURAS_TELHA[i])>=0) return ESPESSURAS_TELHA[i]; }
+  return "";
+}
+function materialEhPrePintado(id){
+  if(!id) return false;
+  const m = STATE.materiais.find(function(x){ return x.id===id; });
+  return !!(m && m.cor==="S");
+}
+function classeTelhaDoPedido(p){
+  /* A espessura manda: qualquer 0,35 / 0,43 / 0,50 / 0,65 achado no nome da Cor Sup., da Cor
+     Inf. ou no campo Material define a categoria, mesmo que a bobina seja pintada — foi o que
+     zerava as faixas antes, porque quase toda bobina é Cor = Sim e levava tudo pra Pré-pintada.
+     Quando não dá pra ler a espessura em lugar nenhum, o pedido cai em Pré-pintada: é a
+     categoria de sobra, a pedido do usuário ("na dúvida lança em pré pintada"). Não existe mais
+     "Sem classificação" — nada fica de fora da conta. */
+  const fontes = [colNomeMaterial(p.corSupId), colNomeMaterial(p.corInfId), p.material||""];
+  for(let i=0;i<fontes.length;i++){ const e = espessuraDoTexto(fontes[i]); if(e) return e; }
+  return "pintada";
+}
+/* Cross-cut: quanto do total saiu em bobina pré-pintada (Cor = Sim), independente da espessura.
+   Não entra na soma das caixas (senão contaria duas vezes) — aparece como observação. Usa a
+   mesma metragem com fator das caixas, pra poder ser comparado com elas. */
+function metragemPrePintada(pedidos){
+  return pedidos.reduce(function(s,p){
+    return s + ((materialEhPrePintado(p.corSupId) || materialEhPrePintado(p.corInfId)) ? metrosPerfilarComFator(p) : 0);
+  }, 0);
+}
+function labelClasseTelha(chave){
+  if(chave==="pintada") return "Pré-pintada (cor)";
+  return "Telha "+chave;
+}
+/* ---- Mesma base do velocímetro do Perfilar ----
+   Pedido do usuário: as caixas de produto precisam fechar com o número do velocímetro. Então
+   elas usam exatamente o mesmo recorte dele — o período e a Base do Cálculo da barra de
+   filtros do card "Metas do Período" (dashMetaFiltro), e não a barra de filtros de baixo — e
+   contam a metragem JÁ MULTIPLICADA pelo Fator Produção Perfilar, igual ao velocímetro. */
+function metrosPerfilarComFator(p){
+  return Number(p.metragem||0) * fatorProducaoPerfilarPara(p.tipo);
+}
+function pedidosPerfilarVelocimetro(){
+  const per = dashMetaPeriodo();
+  const base = STATE.dashMetaFiltro.base;
+  return STATE.pedidos.filter(function(p){
+    if(base!=="prog" && !stageConcluido(p,"perfilar")) return false;
+    const dataRef = dataBaseProducao(p, "perfilar", base);
+    return !!dataRef && dataRef >= per.ini && dataRef <= per.fim;
+  });
+}
+/* Soma a metragem (com fator) por classe. Ordem fixa: espessuras + pré-pintada. */
+function resumoTelhas(pedidos){
+  const soma = {}, qtd = {};
+  const ordem = ESPESSURAS_TELHA.concat(["pintada"]);
+  ordem.forEach(function(k){ soma[k]=0; qtd[k]=0; });
+  pedidos.forEach(function(p){
+    const k = classeTelhaDoPedido(p);
+    soma[k] += metrosPerfilarComFator(p);
+    qtd[k] += 1;
+  });
+  const total = ordem.reduce(function(s,k){ return s+soma[k]; }, 0);
+  return {
+    total: Math.round(total*100)/100,
+    itens: ordem.map(function(k){
+      return {chave:k, label:labelClasseTelha(k), cor:TELHA_CLASSE_CORES[k],
+              valor:soma[k], qtd:qtd[k], pct: total>0 ? (soma[k]/total)*100 : 0};
+    }),
+  };
+}
+/* Pizza em SVG puro (donut), no mesmo estilo dos outros gráficos da tela — sem biblioteca
+   externa, que o app inteiro evita. Fatia de valor zero é pulada. */
+function pizzaChartHtml(itens, total){
+  const comValor = itens.filter(function(i){ return i.valor>0; });
+  if(!comValor.length) return emptyStateHtml("Nenhuma produção no período selecionado.");
+  const R = 80, r = 46, cx = 100, cy = 100;
+  let ang = -Math.PI/2;
+  const fatias = comValor.map(function(it){
+    const frac = it.valor/total;
+    const delta = frac*Math.PI*2;
+    const a0 = ang, a1 = ang+delta;
+    ang = a1;
+    const ponto = function(raio, a){ return [(cx+raio*Math.cos(a)).toFixed(2), (cy+raio*Math.sin(a)).toFixed(2)]; };
+    /* Uma fatia de 100% não pode ser desenhada com arco (início = fim): vira um anel inteiro. */
+    if(frac>=0.9999){
+      return '<circle cx="'+cx+'" cy="'+cy+'" r="'+((R+r)/2)+'" fill="none" stroke="'+it.cor+'" stroke-width="'+(R-r)+'"><title>'+escapeAttr(it.label+" — "+fmtNum(it.valor)+" m (100%)")+'</title></circle>';
+    }
+    const grande = delta>Math.PI ? 1 : 0;
+    const p1 = ponto(R,a0), p2 = ponto(R,a1), p3 = ponto(r,a1), p4 = ponto(r,a0);
+    const d = "M "+p1[0]+" "+p1[1]+" A "+R+" "+R+" 0 "+grande+" 1 "+p2[0]+" "+p2[1]+
+              " L "+p3[0]+" "+p3[1]+" A "+r+" "+r+" 0 "+grande+" 0 "+p4[0]+" "+p4[1]+" Z";
+    const meio = (a0+a1)/2;
+    const pRot = ponto((R+r)/2, meio);
+    const rotulo = frac>=0.06
+      ? '<text x="'+pRot[0]+'" y="'+pRot[1]+'" font-size="10" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff">'+it.pct.toFixed(1).replace(".",",")+'%</text>'
+      : '';
+    return '<path d="'+d+'" fill="'+it.cor+'"><title>'+escapeAttr(it.label+" — "+fmtNum(it.valor)+" m ("+it.pct.toFixed(1).replace(".",",")+"%)")+'</title></path>'+rotulo;
+  }).join("");
+  const legenda = comValor.map(function(it){
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:12px;padding:3px 0">'+
+      '<span style="width:11px;height:11px;border-radius:3px;background:'+it.cor+';flex-shrink:0"></span>'+
+      '<span style="flex:1">'+escapeHtml(it.label)+'</span>'+
+      '<strong style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+it.pct.toFixed(1).replace(".",",")+'%</strong>'+
+      '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;min-width:80px;text-align:right">'+fmtNum(it.valor)+' m</span>'+
+    '</div>';
+  }).join("");
+  return '<div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'+
+    '<svg viewBox="0 0 200 200" style="width:190px;height:190px;flex-shrink:0">'+fatias+
+      '<text x="'+cx+'" y="'+(cy-6)+'" font-size="11" text-anchor="middle" fill="'+COLORS.textMuted+'">Total</text>'+
+      '<text x="'+cx+'" y="'+(cy+11)+'" font-size="13" font-weight="700" text-anchor="middle" fill="'+COLORS.text+'">'+fmtNum(total)+' m</text>'+
+    '</svg>'+
+    '<div style="flex:1;min-width:210px">'+legenda+'</div>'+
+  '</div>';
+}
+/* Os mesmos pedidos que formam a Metragem Total do Dashboard: já passaram pelo Perfilar e
+   caem no período escolhido nos filtros da tela. Fica numa função própria porque a janela de
+   detalhe das caixas de produto precisa refazer exatamente a mesma conta. */
+function pedidosDashboardFiltrados(){
+  const f = STATE.dashFiltro;
+  return STATE.pedidos.filter(function(p){
+    if(!stageConcluido(p,"perfilar")) return false;
+    return matchesDateFilters(dataConclusaoEtapa(p,"perfilar") || p.dataProg, f);
+  });
+}
+/* Janela com os lançamentos por trás de uma caixa de produto. Além de conferir de onde vem o
+   número, é aqui que dá pra ver o nome das bobinas de "Sem classificação" e descobrir quais
+   ainda estão cadastradas sem a medida no nome. Cada linha abre o pedido para edição. */
+function openTelhasDetalheModal(chave){
+  const pedidos = pedidosPerfilarVelocimetro()
+    .filter(function(p){ return classeTelhaDoPedido(p)===chave; })
+    .sort(function(a,b){ return String(dataConclusaoEtapa(b,"perfilar")||b.dataProg||"").localeCompare(String(dataConclusaoEtapa(a,"perfilar")||a.dataProg||"")); });
+  const total = pedidos.reduce(function(s,p){ return s+metrosPerfilarComFator(p); }, 0);
+  const totalBruto = pedidos.reduce(function(s,p){ return s+Number(p.metragem||0); }, 0);
+  const cor = TELHA_CLASSE_CORES[chave] || COLORS.brand;
+  /* Resumo por bobina: mostra de quais materiais veio a metragem desta caixa. No "Sem
+     classificação" é o atalho pra listar os cadastros que precisam da medida no nome. */
+  const porBobina = {};
+  pedidos.forEach(function(p){
+    [p.corSupId, p.corInfId].forEach(function(id){
+      if(!id) return;
+      const nome = colNomeMaterial(id) || "(sem nome)";
+      if(!porBobina[nome]) porBobina[nome] = {m:0, pintada:materialEhPrePintado(id)};
+      porBobina[nome].m += metrosPerfilarComFator(p);
+    });
+  });
+  const bobinasHtml = Object.keys(porBobina).sort(function(a,b){ return porBobina[b].m-porBobina[a].m; }).map(function(nome){
+    return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;border:1px solid var(--steel-border);border-radius:10px;padding:2px 8px;margin:0 5px 5px 0">'+
+      escapeHtml(nome)+(porBobina[nome].pintada?'<span style="color:#8B5CF6;font-weight:700">cor</span>':'')+
+      '<strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(porBobina[nome].m)+' m</strong></span>';
+  }).join("");
+  const linhas = pedidos.map(function(p){
+    const dataRef = dataConclusaoEtapa(p,"perfilar") || p.dataProg;
+    return '<tr style="cursor:pointer" onclick="closeModal();openPedidoModal(\'edit\',\''+p.id+'\')" title="Abrir este pedido">'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtDateBR(dataRef)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+'</td>'+
+      '<td>'+escapeHtml(p.cliente||"—")+'</td>'+
+      '<td>'+escapeHtml(colNomeMaterial(p.corSupId)||"—")+'</td>'+
+      '<td>'+escapeHtml(colNomeMaterial(p.corInfId)||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;text-align:right;white-space:nowrap">'+fmtNum(p.metragem)+' m</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;text-align:right;white-space:nowrap'+(fatorProducaoPerfilarPara(p.tipo)!==1?';color:#C98A00;font-weight:700':'')+'">'+fmtNum(metrosPerfilarComFator(p))+' m</td>'+
+    '</tr>';
+  }).join("");
+  const corpo = pedidos.length
+    ? '<div style="margin-bottom:10px">'+bobinasHtml+'</div>'+
+      '<div style="overflow:auto;max-height:52vh"><table class="pcp-table" style="font-size:12px"><thead><tr>'+
+        '<th>Perfilado em</th><th>OP</th><th>Cliente</th><th>Cor Sup.</th><th>Cor Inf.</th><th style="text-align:right">Metragem</th><th style="text-align:right" title="Metragem multiplicada pelo Fator Produção Perfilar do tipo de produto">Com fator</th>'+
+      '</tr></thead><tbody>'+linhas+'</tbody></table></div>'
+    : emptyStateHtml("Nenhum pedido nesta categoria no período selecionado.");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:1000px;width:94vw">'+
+        '<div class="modal-header"><h3><span style="color:'+cor+'">'+escapeHtml(labelClasseTelha(chave))+'</span> — '+pedidos.length+' pedido(s) · '+fmtNum(total)+' m</h3>'+
+          '<button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Mesmo período e mesma Base do Cálculo do velocímetro do Perfilar (card "Metas do Período"). Total com fator: '+fmtNum(total)+' m · metragem real: '+fmtNum(totalBruto)+' m. Clique em uma linha para abrir o pedido.</p>'+
+        corpo+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+/* ---- Conversão de metros para quilos, por tipo de telha ----
+   O fator é o peso de um metro linear da telha, então o cálculo é uma MULTIPLICAÇÃO:
+   metros × fator = kg (Telha 0,43: 19.872,60 m × 3,750 kg/m = 74.522,25 kg). Os valores ficam
+   em app_config ("fatores_kg_telha") e são editados pelo botão "Fator kg" do bloco. */
+function fatorKgDaClasse(chave){
+  const v = Number((STATE.fatoresKgTelha||{})[chave]);
+  return v>0 ? v : 0;
+}
+function kgDaClasse(chave, metros){
+  return metros * fatorKgDaClasse(chave);
+}
+function fmtKg(v){ return Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:2, maximumFractionDigits:2}); }
+function openFatoresKgModal(){
+  const linhas = ESPESSURAS_TELHA.concat(["pintada"]).map(function(k){
+    const cor = TELHA_CLASSE_CORES[k];
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--steel-border)">'+
+      '<span style="width:9px;height:9px;border-radius:3px;background:'+cor+';flex-shrink:0"></span>'+
+      '<span style="flex:1;font-size:13px">'+escapeHtml(labelClasseTelha(k))+'</span>'+
+      '<input class="field-input fator-kg-input" data-classe="'+escapeAttr(k)+'" type="number" step="0.001" min="0" '+
+        'style="width:120px;text-align:right;font-family:\'IBM Plex Mono\',monospace" value="'+(fatorKgDaClasse(k)||"")+'"/>'+
+    '</div>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Fator kg por metro produzido</h3>'+
+          '<button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 6px;line-height:1.5">Informe quantos quilos pesa um metro produzido de cada telha. O peso sai da multiplicação: <strong style="color:'+COLORS.text+'">metros × fator = kg</strong>. Deixe em branco ou zero para não calcular o peso daquela telha.</p>'+
+        '<div>'+linhas+'</div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="salvarFatoresKg()">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function salvarFatoresKg(){
+  const novos = {};
+  Array.prototype.forEach.call(document.querySelectorAll(".fator-kg-input"), function(el){
+    const v = Number(el.value);
+    novos[el.getAttribute("data-classe")] = (v>0 ? v : 0);
+  });
+  const ok = await configSet("fatores_kg_telha", novos);
+  if(!ok) return;
+  STATE.fatoresKgTelha = novos;
+  closeModal();
+  renderScreen();
+  showToast("success","Fatores de kg salvos.");
+}
+/* Bloco do dashboard: caixas com a metragem de cada produto no período + a pizza com o peso
+   de cada um em %. Os dois usam exatamente os mesmos pedidos da Metragem Total da tela. */
+function telhasDashboardHtml(){
+  /* Não recebe mais a lista da barra de filtros de baixo: usa o mesmo recorte do velocímetro
+     do Perfilar, pra os dois números fecharem. */
+  const pedidosBase = pedidosPerfilarVelocimetro();
+  const res = resumoTelhas(pedidosBase);
+  const totalBruto = pedidosBase.reduce(function(s,p){ return s+Number(p.metragem||0); }, 0);
+  const pintadaTotal = metragemPrePintada(pedidosBase);
+  const pintadaPct = res.total>0 ? (pintadaTotal/res.total)*100 : 0;
+  let totalKg = 0;
+  const caixas = res.itens.map(function(it){
+    const fator = fatorKgDaClasse(it.chave);
+    const kg = kgDaClasse(it.chave, it.valor);
+    totalKg += kg;
+    const linhaKg = fator>0
+      ? '<div style="font-size:11.5px;font-weight:700;color:'+COLORS.text+';margin-top:5px;font-family:\'IBM Plex Mono\',monospace" title="'+escapeAttr(fmtNum(it.valor)+" m × "+fator+" kg/m = "+fmtKg(kg)+" kg")+'">'+fmtKg(kg)+' kg</div>'+
+        '<div style="font-size:9.5px;color:'+COLORS.textMuted+'">× '+String(fator).replace(".",",")+' kg por metro</div>'
+      : '<div style="font-size:10px;color:'+COLORS.textMuted+';margin-top:5px">sem fator kg cadastrado</div>';
+    return '<div class="pcp-card telha-box" onclick="openTelhasDetalheModal(\''+it.chave+'\')" title="Clique para ver os lançamentos desta categoria" style="padding:12px 14px;border-left:3px solid '+it.cor+';cursor:pointer">'+
+      '<div class="stat-label" style="font-size:10px">'+escapeHtml(it.label)+'</div>'+
+      '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+it.cor+';margin-top:3px">'+fmtNum(it.valor)+' m</div>'+
+      '<div style="font-size:10.5px;color:'+COLORS.textMuted+';margin-top:2px">'+it.pct.toFixed(1).replace(".",",")+'% · '+it.qtd+' pedido(s)</div>'+
+      linhaKg+
+    '</div>';
+  }).join("");
+  /* Caixa de fechamento: a soma dos quilos de todas as faixas. Só entra o que tem fator
+     cadastrado — por isso o aviso quando alguma faixa com metragem ficou de fora. */
+  const semFator = res.itens.filter(function(it){ return it.valor>0 && fatorKgDaClasse(it.chave)<=0; });
+  const caixaTotalKg = '<div class="pcp-card telha-box-total" style="padding:12px 14px;border-left:3px solid '+COLORS.brand+';background:var(--panel-alt)">'+
+      '<div class="stat-label" style="font-size:10px">Total em kg</div>'+
+      '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+COLORS.brand+';margin-top:3px">'+fmtKg(totalKg)+' kg</div>'+
+      '<div style="font-size:10.5px;color:'+COLORS.textMuted+';margin-top:2px">soma de todas as faixas</div>'+
+      (semFator.length
+        ? '<div style="font-size:9.5px;color:#C98A00;margin-top:5px">não inclui '+semFator.map(function(i){ return escapeHtml(i.label); }).join(", ")+' (sem fator)</div>'
+        : '<div style="font-size:9.5px;color:'+COLORS.textMuted+';margin-top:5px">'+fmtNum(res.total)+' m convertidos</div>')+
+    '</div>';
+  const notaPintada = '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+
+    'Somando tudo, <strong style="color:#8B5CF6">'+fmtNum(pintadaTotal)+' m ('+pintadaPct.toFixed(1).replace(".",",")+'%)</strong> saíram em bobina pré-pintada (Cor = Sim). '+
+    'Esse número atravessa as espessuras, por isso fica aqui e não numa caixa — somá-lo às faixas contaria a mesma produção duas vezes. '+
+    'A caixa "Pré-pintada (cor)" é a de sobra: fica com todo pedido cuja bobina não tem a medida escrita no nome.</div>';
+  const per = dashMetaPeriodo();
+  const baseLabel = STATE.dashMetaFiltro.base==="prog" ? "Programado (data de prog.)" : "Somente etapas concluídas";
+  const cabecalhoPdf =
+    '<div class="telhas-print-header">'+
+      '<img src="data:image/png;base64,'+LOGO_LIGHT_BG_B64+'" alt="ELEVE"/>'+
+      '<div style="flex:1">'+
+        '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:15px;font-weight:700">Produto cortado na Perfiladeira</div>'+
+        '<div style="font-size:10.5px">'+escapeHtml(per.label)+' · Base: '+escapeHtml(baseLabel)+'</div>'+
+      '</div>'+
+      '<div style="font-size:10px;text-align:right">Emitido em '+fmtDateBR(todayStr())+'</div>'+
+    '</div>';
+  return '<div id="telhas-print-area">'+
+    cabecalhoPdf+
+    '<div class="pcp-card" style="margin-bottom:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:4px">'+
+      '<div><div class="preview-title" style="margin:0">Produto cortado na Perfiladeira</div>'+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:2px">Abre o total do velocímetro do Perfilar por espessura, lida do nome da bobina. Mesmo período, mesma Base do Cálculo e mesmo Fator Produção Perfilar do velocímetro. Clique numa caixa para ver os lançamentos.</div></div>'+
+      '<div style="display:flex;align-items:flex-end;gap:12px;flex-wrap:wrap">'+
+      '<button class="btn btn-ghost no-print" onclick="openFatoresKgModal()" title="Editar o fator de conversão de metros para quilos de cada telha">'+icon("sliders",13)+' Fator kg</button>'+
+      '<button class="btn no-print" onclick="printTelhasComo(\'landscape\')" title="Gera o PDF só deste bloco, em paisagem">'+icon("printer",13)+' PDF Paisagem</button>'+
+      '<button class="btn no-print" onclick="printTelhasComo(\'portrait\')" title="Gera o PDF só deste bloco, em retrato">'+icon("printer",13)+' PDF Retrato</button>'+
+      '<div style="text-align:right"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:17px;font-weight:700">'+fmtNum(res.total)+' m</div>'+
+        (Math.abs(res.total-totalBruto)>0.01 ? '<div style="font-size:10.5px;color:'+COLORS.textMuted+'">metragem real: '+fmtNum(totalBruto)+' m</div>' : '')+
+      '</div></div>'+
+    '</div>'+
+    '<div class="telhas-caixas-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(160px,1fr));gap:10px;margin-top:12px">'+caixas+caixaTotalKg+'</div>'+
+    notaPintada+
+  '</div>'+
+  /* Pizza e barras lado a lado: em telas estreitas a grade quebra sozinha e um fica abaixo
+     do outro, então não há corte de conteúdo no celular nem no PDF em retrato. */
+  '<div class="telhas-graficos-grid" style="display:grid;grid-template-columns:repeat(auto-fit, minmax(380px,1fr));gap:16px;align-items:start">'+
+    '<div class="pcp-card" style="margin:0">'+
+      '<div class="preview-title">Participação de cada produto (%)</div>'+
+      pizzaChartHtml(res.itens, res.total)+
+    '</div>'+
+    telhasBarrasKgHtml()+
+  '</div>'+
+  '</div>';
+}
+
+/* ============================== GRÁFICO ANUAL DE KG POR TIPO DE TELHA ==============================
+   Barras de janeiro a dezembro com o total em kg de uma telha escolhida, mais uma linha de média.
+   É independente do resto do bloco: tem filtro de ano e de tipo próprios, e não segue o mês do
+   velocímetro — a ideia é justamente comparar os meses entre si dentro do ano.
+   Os meses podem ser ocultados um a um (ex.: ver só janeiro e fevereiro); a média é recalculada
+   com o que ficou visível, senão ela não serviria para o recorte escolhido. */
+function telhasGraficoCfg(){
+  if(!STATE.telhasGrafico){
+    STATE.telhasGrafico = {
+      ano: String(new Date().getFullYear()),
+      classe: "0,43",
+      meses: [true,true,true,true,true,true,true,true,true,true,true,true],
+    };
+  }
+  return STATE.telhasGrafico;
+}
+function updateTelhasGrafico(key, val){ telhasGraficoCfg()[key] = val; renderScreen(); }
+function toggleTelhaMes(i){
+  const cfg = telhasGraficoCfg();
+  cfg.meses[i] = !cfg.meses[i];
+  renderScreen();
+}
+function setTodosMesesTelha(ligado){
+  telhasGraficoCfg().meses = telhasGraficoCfg().meses.map(function(){ return !!ligado; });
+  renderScreen();
+}
+/* kg por mês de uma classe de telha, no ano escolhido. Usa a mesma Base do Cálculo do
+   velocímetro (Programado x Somente concluídas) e a mesma metragem com fator do Perfilar. */
+function kgMensalPorClasse(classe, ano){
+  const base = STATE.dashMetaFiltro.base;
+  const metros = new Array(12).fill(0);
+  const qtd = new Array(12).fill(0);
+  STATE.pedidos.forEach(function(p){
+    if(base!=="prog" && !stageConcluido(p,"perfilar")) return;
+    const dataRef = dataBaseProducao(p, "perfilar", base);
+    if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
+    if(classeTelhaDoPedido(p)!==classe) return;
+    const m = Number(dataRef.slice(5,7));
+    if(!(m>=1 && m<=12)) return;
+    metros[m-1] += metrosPerfilarComFator(p);
+    qtd[m-1] += 1;
+  });
+  const fator = fatorKgDaClasse(classe);
+  return {metros:metros, qtd:qtd, kg:metros.map(function(v){ return v*fator; }), fator:fator};
+}
+function telhasBarrasKgHtml(){
+  const cfg = telhasGraficoCfg();
+  const cor = TELHA_CLASSE_CORES[cfg.classe] || COLORS.brand;
+  const dados = kgMensalPorClasse(cfg.classe, cfg.ano);
+  const visiveis = [];
+  for(let i=0;i<12;i++){ if(cfg.meses[i]) visiveis.push(i); }
+  const kgVisiveis = visiveis.map(function(i){ return dados.kg[i]; });
+  const total = kgVisiveis.reduce(function(a,b){ return a+b; }, 0);
+  const comProd = kgVisiveis.filter(function(v){ return v>0; });
+  const media = comProd.length ? comProd.reduce(function(a,b){ return a+b; },0)/comProd.length : 0;
+  const maxValor = Math.max.apply(null, kgVisiveis.concat([1]));
+  const escala = maxValor*1.2;
+
+  const anoAtual = new Date().getFullYear();
+  const anosPedidos = STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean);
+  const anos = Array.from(new Set(anosPedidos.concat([String(anoAtual), cfg.ano]))).sort();
+
+  const selAno = '<select class="field-select" onchange="updateTelhasGrafico(\'ano\', this.value)">'+
+    anos.map(function(y){ return '<option value="'+y+'" '+(cfg.ano===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select>';
+  const selClasse = '<select class="field-select" onchange="updateTelhasGrafico(\'classe\', this.value)">'+
+    ESPESSURAS_TELHA.concat(["pintada"]).map(function(k){
+      return '<option value="'+escapeAttr(k)+'" '+(cfg.classe===k?"selected":"")+'>'+escapeHtml(labelClasseTelha(k))+'</option>';
+    }).join("")+'</select>';
+
+  const chips = MESES.map(function(nome,i){
+    const on = cfg.meses[i];
+    return '<button type="button" class="mes-chip'+(on?" on":"")+'" onclick="toggleTelhaMes('+i+')" '+
+      'title="'+escapeAttr((on?"Ocultar ":"Mostrar ")+nome)+'">'+nome.slice(0,3)+'</button>';
+  }).join("");
+
+  /* A linha de média é desenhada sobre as barras, na mesma escala. */
+  const linhaMedia = (media>0 && escala>0)
+    ? '<div style="position:absolute;left:0;right:0;bottom:'+Math.min(99,(media/escala)*100)+'%;border-top:2px dashed '+COLORS.red+';pointer-events:none">'+
+        '<span style="position:absolute;left:2px;bottom:2px;font-size:8.5px;font-weight:700;color:'+COLORS.red+';background:var(--panel);padding:0 3px">média '+fmtKg(media)+'</span>'+
+      '</div>'
+    : '';
+  const barras = visiveis.length
+    ? visiveis.map(function(i){
+        const v = dados.kg[i];
+        const alturaPct = escala>0 ? Math.min(100,(v/escala)*100) : 0;
+        const tip = MESES[i]+"/"+cfg.ano+" — "+fmtKg(v)+" kg · "+fmtNum(dados.metros[i])+" m"+(dados.qtd[i]?(" · "+dados.qtd[i]+" pedido(s)"):"");
+        return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
+          (v>0 ? '<div style="font-size:8.5px;font-weight:700;color:'+cor+';margin-bottom:2px;white-space:nowrap">'+Math.round(v).toLocaleString("pt-BR")+'</div>' : '')+
+          '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(v===0?"var(--steel-border)":cor)+'"></div>'+
+        '</div>';
+      }).join("")
+    : '';
+  const rotulos = visiveis.map(function(i){
+    return '<div class="chart-day" style="flex:1;text-align:center">'+MESES[i].slice(0,3)+'</div>';
+  }).join("");
+
+  const corpo = visiveis.length
+    ? '<div class="chart-wrap" style="position:relative">'+chartGridlinesHtml(escala)+barras+linhaMedia+'</div>'+
+      '<div class="chart-days" style="display:flex">'+rotulos+'</div>'
+    : emptyStateHtml("Nenhum mês selecionado. Ligue pelo menos um mês abaixo.");
+
+  return '<div class="pcp-card" style="margin-bottom:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<div class="preview-title" style="margin:0">Total em kg por mês — '+escapeHtml(labelClasseTelha(cfg.classe))+'</div>'+
+      '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<div style="min-width:150px"><label class="field-label">Tipo de telha</label>'+selClasse+'</div>'+
+        '<div style="width:100px"><label class="field-label">Ano</label>'+selAno+'</div>'+
+      '</div>'+
+    '</div>'+
+    '<div class="chart-stats-row" style="display:flex;gap:20px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div class="chart-stat"><div class="stat-label">Total no período</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700;color:'+cor+'">'+fmtKg(total)+' kg</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Média por mês produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700;color:'+COLORS.red+'">'+fmtKg(media)+' kg</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Meses no gráfico</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">'+visiveis.length+'</div></div>'+
+    '</div>'+
+    corpo+
+    '<div class="no-print" style="margin-top:12px;border-top:1px solid var(--steel-border);padding-top:10px">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">'+
+        '<span style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Meses exibidos</span>'+
+        '<span style="display:flex;gap:6px">'+
+          '<button type="button" class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="setTodosMesesTelha(true)">Todos</button>'+
+          '<button type="button" class="btn btn-ghost" style="padding:3px 8px;font-size:11px" onclick="setTodosMesesTelha(false)">Nenhum</button>'+
+        '</span>'+
+      '</div>'+
+      '<div style="display:flex;flex-wrap:wrap;gap:5px">'+chips+'</div>'+
+      (dados.fator>0
+        ? '<div style="font-size:10.5px;color:'+COLORS.textMuted+';margin-top:8px">Metros × '+String(dados.fator).replace(".",",")+' kg por metro. Média calculada só sobre os meses visíveis que tiveram produção.</div>'
+        : '<div style="font-size:10.5px;color:#C98A00;margin-top:8px">Esta telha está sem fator kg cadastrado — use o botão "Fator kg" acima.</div>')+
+    '</div>'+
+  '</div>';
+}
+
 function renderDashboardScreen(){
   const f = STATE.dashFiltro;
   const anoAtual = new Date().getFullYear();
@@ -7669,10 +8297,7 @@ function renderDashboardScreen(){
   /* Só entra no dashboard o que já passou pela etapa de Perfilar (produção real, não apenas
      programada) — contado pela data em que o Perfilar foi de fato concluído, com fallback pra
      Data Prog. em pedidos concluídos antes dessa funcionalidade existir. */
-  const pedidosFiltrados = STATE.pedidos.filter(function(p){
-    if(!stageConcluido(p,"perfilar")) return false;
-    return matchesDateFilters(dataConclusaoEtapa(p,"perfilar") || p.dataProg, f);
-  });
+  const pedidosFiltrados = pedidosDashboardFiltrados();
   const pedidosConcluidosIds = new Set(pedidosFiltrados.map(p=>p.id));
   const baixasFiltradas = getEfetivaBaixaRows().filter(r=>matchesDateFilters(r.data, f) && pedidosConcluidosIds.has(r.pedidoId));
 
@@ -7743,6 +8368,11 @@ function renderDashboardScreen(){
           '<div style="text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:'+COLORS.textMuted+';margin-bottom:6px">Perfilar</div>'+
           gaugeChartHtml(perfilarReal.total, perfilarMeta, "metros produzidos")+
           '<div style="text-align:center;font-size:11px;color:'+COLORS.textMuted+';margin-top:4px">'+perfilarReal.pedidos+' pedido(s) · '+perfilarMetaInfo.diasUteis+' dia(s) com meta</div>'+
+          (Math.abs(perfilarReal.total-perfilarReal.bruto) > 0.01
+            ? '<div style="text-align:center;font-size:11px;color:#C98A00;margin-top:4px;line-height:1.45" title="O velocímetro do Perfilar multiplica a metragem pelo Fator Produção Perfilar cadastrado por tipo de produto. A Metragem Total e as caixas de produto usam a metragem crua, por isso os dois números são diferentes.">'+
+                'Com fator por tipo de produto · metragem real: <strong>'+fmtNum(perfilarReal.bruto)+' m</strong>'+
+              '</div>'
+            : '')+
         '</div>'+
         '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:14px 10px">'+
           '<div style="text-align:center;font-size:12.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:'+COLORS.textMuted+';margin-bottom:6px">Colagem</div>'+
@@ -7769,6 +8399,7 @@ function renderDashboardScreen(){
       statCardHtml("Metragem Total", fmtNumCard(totalMetragem)+" m", "package", COLORS.brand)+
       statCardHtml("Cidades Atendidas", cidadeItems.length, "mapPin", COLORS.green)+
     '</div>'+
+    telhasDashboardHtml()+
     dashLeadTimeCardHtml(f)+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
@@ -8967,7 +9598,7 @@ function renderFatorProducaoPerfilarScreen(){
 /* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
 function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
 function clearAcompFiltro(){
-  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia"};
+  STATE.acompFiltro = {mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia", anoAcum:String(new Date().getFullYear())};
   renderScreen();
 }
 function stageConcluido(p, stage){
@@ -9307,12 +9938,99 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     '</div>'+
   '</div>';
 }
+/* ============================== PRODUÇÃO ACUMULADA NO ANO (JAN → DEZ) ==============================
+   Item do usuário: dois gráficos de produção acumulada por mês, em metros, de janeiro a dezembro,
+   com filtro de ano próprio (independente do filtro de Mês usado pelos gráficos diários acima).
+   Só realizado — sem linha de meta, conforme combinado.
+
+   Respeita a "Base do cálculo" e a "Máquina/Equipamento" escolhidas na barra de filtros da tela,
+   pelo mesmo critério dos gráficos diários: com base "Somente etapas concluídas", um pedido só
+   entra depois que aquela etapa foi de fato concluída, e na data real da conclusão. */
+function producaoMensalPorEtapa(stage, ano){
+  const f = STATE.acompFiltro;
+  const meses = new Array(12).fill(0);
+  const pedidosMes = new Array(12).fill(0);
+  STATE.pedidos.forEach(function(p){
+    if(stage==="colagem" && !p.temColagem) return;
+    if(stage==="pintura" && !p.temPintura) return;
+    if(f.base==="concl" && !stageConcluido(p, stage)) return;
+    const dataRef = dataBaseProducao(p, stage, f.base);
+    if(!dataRef) return;
+    if(dataRef.slice(0,4)!==String(ano)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    const m = Number(dataRef.slice(5,7));
+    if(!(m>=1 && m<=12)) return;
+    const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
+    meses[m-1] += Number(p.metragem||0)*fator;
+    pedidosMes[m-1] += 1;
+  });
+  return {meses:meses, pedidos:pedidosMes};
+}
+function updateAcompAnoAcum(val){ STATE.acompFiltro.anoAcum = val; renderScreen(); }
+/* Desenha uma ou mais séries acumuladas ao longo dos 12 meses no mesmo SVG. Cada série é
+   {nome, cor, meses:[12]}. O acumulado é reiniciado em janeiro — é o acumulado DO ANO. */
+function acumuladoAnualChartHtml(meses, pedidosMes, cor, ano){
+  const maxValor = Math.max.apply(null, meses.concat([1]));
+  const escala = maxValor * 1.18;
+  /* Mês corrente destacado quando o ano em tela é o de hoje: dali pra frente ainda não há mês
+     fechado, então a barra baixa de dezembro não significa queda de produção. */
+  const hoje = new Date();
+  const mesHoje = (Number(ano)===hoje.getFullYear()) ? (hoje.getMonth()+1) : 0;
+  const barras = meses.map(function(v,i){
+    const mes = i+1;
+    const futuro = mesHoje>0 && mes>mesHoje;
+    const alturaPct = escala>0 ? Math.min(100, (v/escala)*100) : 0;
+    const isAtual = mes===mesHoje;
+    const colStyle = isAtual ? "background:"+COLORS.brand+"1F;border-radius:5px 5px 0 0;box-shadow:inset 0 0 0 1px "+COLORS.brand+"55" : "";
+    const tip = MESES[i]+"/"+ano+(isAtual?" (mês atual, ainda em andamento)":"")+" — "+fmtNum(v)+" m"+((pedidosMes&&pedidosMes[i])?(" · "+pedidosMes[i]+" pedido(s)"):"");
+    return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
+      (v>0 ? '<div class="chart-bar-label" style="font-size:9.5px;font-weight:700;color:'+cor+';margin-bottom:3px;white-space:nowrap">'+fmtNum(Math.round(v))+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(v===0?"var(--steel-border)":cor)+';opacity:'+(futuro?0.35:1)+'"></div>'+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(nome,i){
+    const futuro = mesHoje>0 && (i+1)>mesHoje;
+    return '<div class="chart-day" style="flex:1;text-align:center;opacity:'+(futuro?0.4:1)+';'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+nome.slice(0,3)+'</div>';
+  }).join("");
+  return '<div>'+
+    '<div class="chart-wrap">'+chartGridlinesHtml(escala)+barras+'</div>'+
+    '<div class="chart-days" style="display:flex">'+rotulos+'</div>'+
+  '</div>';
+}
+/* Um card de barras mensais para uma etapa. Mantém o nome antigo (acumuladoAnualCardHtml) só
+   pra não espalhar renomeação pelo arquivo — o conteúdo agora é mês a mês, não acumulado. */
+function acumuladoAnualCardHtml(titulo, iconName, cor, stage, ano){
+  const dados = producaoMensalPorEtapa(stage, ano);
+  const total = dados.meses.reduce(function(a,b){ return a+b; }, 0);
+  const mesesComProd = dados.meses.filter(function(v){ return v>0; }).length;
+  const media = mesesComProd ? total/mesesComProd : 0;
+  const melhorValor = Math.max.apply(null, dados.meses.concat([0]));
+  const melhorMes = melhorValor>0 ? MESES[dados.meses.indexOf(melhorValor)] : "—";
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+ano+'</span></div>'+
+    '</div>'+
+    '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div class="chart-stat"><div class="stat-label">Total no ano</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+cor+'">'+fmtNum(total)+' m</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Média por mês produzido</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+fmtNum(media)+' m</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Melhor mês</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+escapeHtml(melhorMes)+'</div></div>'+
+      '<div class="chart-stat"><div class="stat-label">Meses com produção</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700">'+mesesComProd+'</div></div>'+
+    '</div>'+
+    acumuladoAnualChartHtml(dados.meses, dados.pedidos, cor, ano)+
+  '</div>';
+}
+
 function renderAcompanhamentoScreen(){
   const f = STATE.acompFiltro;
   const anosPedidos = STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean);
   const anos = Array.from(new Set(anosPedidos.concat([String(new Date().getFullYear())]))).sort();
+  const anoAcum = f.anoAcum || String(new Date().getFullYear());
+  const anosAcum = Array.from(new Set(anos.concat([anoAcum]))).sort();
   const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
-    '<button class="btn" onclick="window.print()">'+icon("printer",14)+' Gerar PDF</button>'+
+    '<button class="btn" onclick="printTelaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
+    '<button class="btn" onclick="printTelaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
   '</div>';
 
   document.getElementById("content").innerHTML =
@@ -9338,6 +10056,19 @@ function renderAcompanhamentoScreen(){
       '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Acompanhamento da Produção — '+MESES[Number(f.mes)-1]+'/'+f.ano+'</div></div>'+
       producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand)+
       producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00")+
+      '<div class="acomp-anual-sep" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:22px 0 12px;padding-top:16px;border-top:1px solid var(--steel-border)">'+
+        '<div>'+
+          '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">Produção mês a mês no ano — janeiro a dezembro (m)</div>'+
+          '<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:3px">Valor de cada mês isolado (não é acumulado). Independente do filtro de Mês acima; usa a mesma Base do cálculo e o mesmo filtro de Máquina.</div>'+
+        '</div>'+
+        '<div class="no-print" style="min-width:130px"><label class="field-label">Ano dos acumulados</label>'+
+          '<select class="field-select" onchange="updateAcompAnoAcum(this.value)">'+
+            anosAcum.map(function(y){ return '<option value="'+y+'" '+(anoAcum===y?"selected":"")+'>'+y+'</option>'; }).join("")+
+          '</select></div>'+
+      '</div>'+
+      acumuladoAnualCardHtml("Colagem — produção mês a mês (m)","layers",COLORS.brand,"colagem",anoAcum)+
+      acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum)+
+      acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum)+
     '</div>';
 }
 
@@ -10028,6 +10759,8 @@ function coletarDadosBackup(){
       feriadosCustom: STATE.feriadosCustom,
       feriadosRemovidos: STATE.feriadosRemovidos,
       permissoesUsuarios: STATE.permissoesUsuarios,
+      pedidosRegional: STATE.pedidosRegional,
+      fatoresKgTelha: STATE.fatoresKgTelha,
       recados: STATE.recados,
     },
   };
@@ -10197,6 +10930,7 @@ function renderSidebar(){
 function renderScreen(){
   if(typeof fecharMenuColuna==="function" && document.getElementById("col-menu")) fecharMenuColuna();
   invalidateMovTotais();
+  invalidarCacheFeriados();
   invalidateDiasEstoque();
   _preTotalsEstoqueCache = null;
   if(STATE.screen==="dashboard") renderDashboardScreen();

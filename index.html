@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="pt-BR" data-theme="dark">
+<html lang="pt-BR" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -1689,7 +1689,7 @@ async function toggleOpImpressaPedido(id){
   showToast("success", jaTem ? "OP desmarcada como impressa." : "OP marcada como impressa.");
 }
 const STATE = {
-  loggedIn:false, userName:"", screen:"pedidos", theme:"dark", dataLoaded:false,
+  loggedIn:false, userName:"", screen:"pedidos", theme:"light", dataLoaded:false,
   sidebarCollapsedGroups:{},
   stageState:{},
   pedidosFiltro:{cliente:"",op:"",situacaoId:"",fluxo:"",material:"",corSupId:"",corInfId:"",cidadeId:"",regional:"",dIni:"",dFim:"",semana:"",semanaAno:""},
@@ -1780,9 +1780,8 @@ function initLocalDefaults(){
     s.weekStart = ws; s.dIni = ws; s.dFim = we;
     STATE.stageState[stage] = s;
   });
-  if(window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches){
-    STATE.theme = "light";
-  }
+  /* Sempre inicia no modo claro; o botão "Modo Escuro" do menu continua disponível. */
+  STATE.theme = "light";
   STATE.sidebarCollapsedGroups = loadSidebarCollapsedGroups();
   STATE.materiaisPdfColunas = defaultMateriaisPdfColunas();
   try{ STATE.sidebarHidden = window.localStorage.getItem("eleve_sidebar_hidden")==="1"; } catch(err){}

@@ -116,6 +116,24 @@ button,input,select{font-family:'Inter',sans-serif;}
 .row-atencao:hover td{background:rgba(255,193,7,0.34) !important;}
 .icon-btn.atencao-on{color:#C98A00;border-color:#C98A00;}
 .icon-btn.retirada-on{color:var(--brand);border-color:var(--brand);}
+/* Barra de rolagem horizontal flutuante (ver atualizarBarraHorizontal) */
+#hscroll-float{position:fixed;bottom:0;z-index:900;height:16px;overflow-x:scroll;overflow-y:hidden;background:var(--panel);border-top:1px solid var(--steel-border);box-shadow:0 -2px 8px rgba(0,0,0,.12);display:none;}
+#hscroll-float > div{height:1px;}
+#hscroll-float::-webkit-scrollbar{height:14px;}
+#hscroll-float::-webkit-scrollbar-thumb{background:var(--brand);border-radius:7px;border:3px solid var(--panel);}
+@media print{ #hscroll-float{display:none !important;} }
+.pcp-table tr.pend-destaque td{background:rgba(0,128,198,.18) !important;transition:background .4s;}
+.inativo-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.04em;background:rgba(140,151,166,.18);color:#8C97A6;border:1px solid rgba(140,151,166,.55);white-space:nowrap;margin-left:6px;vertical-align:middle;}
+.row-inativo td{opacity:.55;}
+.row-inativo td.no-print{opacity:1;}
+.icon-btn.ativar-btn{color:#2F9E5B;border-color:#2F9E5B88;}
+/* Combo com busca por digitação nos filtros de produto (ver aprimorarSelectsProduto) */
+.sp-wrap{position:relative;}
+.sp-lista{position:fixed;z-index:10050;max-height:260px;overflow-y:auto;background:var(--panel);border:1px solid var(--steel);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,.35);}
+.sp-item{padding:7px 10px;font-size:12.5px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.sp-item:hover,.sp-item.sp-ativo{background:var(--row-hover);}
+.sp-item.sp-sel{color:var(--brand);font-weight:700;}
+.sp-vazio{padding:8px 10px;font-size:12px;color:#8C97A6;}
 .retirada-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.03em;background:var(--brand)22;color:var(--brand);border:1px solid var(--brand)55;white-space:nowrap;margin-right:6px;vertical-align:middle;}
 /* ---- Item 3: cluster compacto de Lead Time no Dashboard (Média/Mínimo/Máximo/Retirada) ---- */
 .lead-time-card{padding:12px 16px;margin-bottom:22px;}
@@ -578,6 +596,14 @@ const DEFAULT_CONFIG_VALUES = {
   metas_entrega: [800,800,800,800,800,400],
   fatores_producao_perfilar: {},
   permissoes_usuarios: {},
+  /* Matérias-primas inativadas — lista de ids. Item inativo não pode ser usado no sistema
+     até ser ativado de novo na tela Matéria-Prima. */
+  materiais_inativos: [],
+  /* Pendências de Entrega (falta de material na entrega): motivos, pessoas responsáveis e
+     o histórico das pendências — tudo em app_config, mesmo padrão dos cancelamentos. */
+  motivos_falta_material: ["Faltou parafuso","Faltou telha","Faltou cumeeira","Faltou acabamento","Outro"],
+  pessoas_erro_entrega: [],
+  pendencias_entrega: [],
 };
 async function configGet(key){
   const { data, error } = await sb.from("app_config").select("value").eq("key", key).maybeSingle();
@@ -752,6 +778,8 @@ function diasEstoqueDoMaterial(materialId){
 }
 /* Classificação estilo DIO (Days Inventory Outstanding), conforme a legenda pedida:
    0–30 Excelente, 31–60 Atenção, 61–90 Alto, +90 Crítico. */
+/* Cor dos avisos de atenção de estoque (abaixo do mínimo / divergência). Vermelho = só estoque negativo. */
+const COR_ATENCAO_MINIMO = "#E67E22";
 function classificacaoDiasEstoque(dias){
   if(dias===null || dias===undefined) return null;
   if(dias<=30) return {cor:"#2FBF8F", label:"Excelente"};
@@ -1579,7 +1607,7 @@ function categoryBarChartHtml(items, cor, unidade, inteiros){
     const tip = (it.label||"")+" — "+fmtVal(it.value)+(unidade?" "+unidade:"");
     return '<div class="chart-col" style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px" title="'+escapeAttr(tip)+'">'+
       (it.value>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(it.value)+'</div>' : '')+
-      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+cor+'"></div>'+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(it.cor||cor)+'"></div>'+
     '</div>';
   }).join('');
   const labels = items.map(function(it){
@@ -1726,6 +1754,11 @@ const STATE = {
   /* Item: {"0,43":3.75, ...} — metros × fator = kg, por tipo de telha. */
   fatoresKgTelha:{},
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
+  /* Matérias-primas inativas (ids) — ver materialInativo(). */
+  materiaisInativosIds:[],
+  /* Pendências de Entrega — ver seção PENDÊNCIAS DE ENTREGA. */
+  pendenciasEntrega:[], motivosFaltaMaterial:[], pessoasErroEntrega:[],
+  pendenciasFiltro:{mes:"",ano:String(new Date().getFullYear()),motivo:"",responsavel:"",status:"",cliente:"",op:""},
   calMonth: new Date().getMonth(), calYear: new Date().getFullYear(), calMaquinaId:"", calStatusVisiveis:{},
   cidades:[], equipamentos:[], materiais:[], statusOptions:[], pedidos:[], notas:[], motoristas:[],
   baixasManual:[], transferencias:[], fatorConversaoHistorico:[], movimentacoes:[],
@@ -1824,6 +1857,13 @@ async function loadAllData(){
   STATE.pedidosRegional = (pedidosRegional && typeof pedidosRegional==="object") ? pedidosRegional : {};
   STATE.fatoresKgTelha = Object.assign({}, DEFAULT_CONFIG_VALUES.fatores_kg_telha,
     (fatoresKgTelha && typeof fatoresKgTelha==="object") ? fatoresKgTelha : {});
+  const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega] = await Promise.all([
+    configGet("materiais_inativos"), configGet("pendencias_entrega"), configGet("motivos_falta_material"), configGet("pessoas_erro_entrega"),
+  ]);
+  STATE.materiaisInativosIds = Array.isArray(materiaisInativos) ? materiaisInativos : [];
+  STATE.pendenciasEntrega = Array.isArray(pendenciasEntrega) ? pendenciasEntrega : [];
+  STATE.motivosFaltaMaterial = Array.isArray(motivosFaltaMaterial) && motivosFaltaMaterial.length ? motivosFaltaMaterial : DEFAULT_CONFIG_VALUES.motivos_falta_material.slice();
+  STATE.pessoasErroEntrega = Array.isArray(pessoasErroEntrega) ? pessoasErroEntrega : [];
   await carregarRecados();
   STATE.lancCores = normalizarLancCores(await configGet("lancamentos_cores_dia"));
 
@@ -2176,6 +2216,7 @@ function openAcertoModal(materialId){
   const m = STATE.materiais.find(x=>x.id===materialId);
   if(!m) return;
   if(!isCurrentUserAdmin()){ showToast("error","Apenas administradores podem fazer acerto de estoque."); return; }
+  if(materialInativo(m.id)){ avisoMaterialInativo(m); return; }
   const nomeDisplay = m.tipo==="Bobina" ? coilSwatchHtml(m.nome) : '<span style="font-size:14px;font-weight:600">'+escapeHtml(m.nome)+'</span>';
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
@@ -2221,7 +2262,7 @@ function openBaixaManualModal(){
         '<form onsubmit="return submitBaixaManualForm(event)">'+
           '<div class="grid-2">'+
             '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima *</label><select class="field-select" name="materialId" required><option value="">Selecione…</option>'+
-              STATE.materiais.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+')</option>').join("")+
+              STATE.materiais.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+')'+sufixoInativo(m)+'</option>').join("")+
               '</select></div>'+
             '<div><label class="field-label">Quantidade a baixar *</label><input class="field-input" type="number" step="0.01" min="0.01" name="quantidade" required/></div>'+
             '<div><label class="field-label">Data</label><input class="field-input" type="date" name="data" value="'+todayStr()+'"/></div>'+
@@ -2243,6 +2284,7 @@ async function submitBaixaManualForm(event){
   const m = STATE.materiais.find(x=>x.id===data.materialId);
   const qtd = Number(data.quantidade||0);
   if(!m || qtd<=0) return false;
+  if(materialInativo(m.id)){ avisoMaterialInativo(m); return false; }
   const novoEstoque = Math.round((m.estoque - qtd)*100)/100;
   const { data:row, error:insErr } = await sb.from("baixas_manual").insert({
     material_id:data.materialId, quantidade:qtd, motivo:data.motivo||"", observacao:data.observacao||"", data:data.data||todayStr(),
@@ -2428,7 +2470,7 @@ function clearAvulsoFiltro(){ STATE.avulsoFiltro = {op:"",materialId:"",status:"
 function updateAvulsoConcluidosFiltro(key, val){ STATE.avulsoConcluidosFiltro[key]=val; renderScreen(); }
 function clearAvulsoConcluidosFiltro(){ STATE.avulsoConcluidosFiltro = {op:"",materialId:"",dIni:"",dFim:""}; renderScreen(); }
 
-function avulsoMaterialDisplay(m){ return m.tipo+" — "+m.nome+" (estoque: "+fmtNum(m.estoque)+" "+m.unidade+")"; }
+function avulsoMaterialDisplay(m){ return m.tipo+" — "+m.nome+" (estoque: "+fmtNum(m.estoque)+" "+m.unidade+")"+sufixoInativo(m); }
 /* Campo de matéria-prima com busca por texto (digita qualquer parte do nome ou tipo, não só
    o começo) — troca o <select> simples, que ficava ruim de usar com a lista grande.
    Indexado (idx) porque o lançamento agora pode ter vários itens na mesma tela. */
@@ -2462,6 +2504,7 @@ function hideAvulsoMaterialOptions(idx){
 }
 function selectAvulsoMaterial(idx, id){
   const m = STATE.materiais.find(function(x){ return x.id===id; });
+  if(materialInativo(id)){ avisoMaterialInativo(m); hideAvulsoMaterialOptions(idx); return; }
   const input = document.getElementById("avulso-material-input-"+idx);
   const hidden = document.getElementById("avulso-material-id-"+idx);
   if(input && m) input.value = avulsoMaterialDisplay(m);
@@ -2545,6 +2588,7 @@ async function submitAvulsoForm(event, editId){
       const qtd = Number((document.getElementById("avulso-qtd-0")||{}).value||0);
       if(!materialId){ showToast("error","Selecione uma matéria-prima."); return false; }
       if(qtd<=0){ showToast("error","Informe uma quantidade válida."); return false; }
+      if(!checarMateriaisAtivos([materialId], [item.materialId])) return false;
       payload.material_id = materialId;
       payload.quantidade = qtd;
     }
@@ -2565,6 +2609,7 @@ async function submitAvulsoForm(event, editId){
       if(materialId && qtd>0) itens.push({material_id:materialId, quantidade:qtd});
     });
     if(itens.length===0){ showToast("error","Adicione ao menos um item válido (matéria-prima + quantidade)."); return false; }
+    if(!checarMateriaisAtivos(itens.map(function(it){ return it.material_id; }))) return false;
     const rows = itens.map(function(it){
       return {
         op:data.op||"", cliente:data.cliente||"", material_id:it.material_id, quantidade:it.quantidade,
@@ -2610,6 +2655,7 @@ async function doDeleteAvulso(id){
 async function efetivarBaixaAvulso(item){
   const m = STATE.materiais.find(function(x){ return x.id===item.materialId; });
   if(!m){ showToast("error","Matéria-prima não encontrada — não é possível baixar."); return false; }
+  if(materialInativo(m.id)){ avisoMaterialInativo(m); return false; }
   const qtd = Number(item.quantidade||0);
   if(!(qtd>0)){ showToast("error","Quantidade inválida para baixa."); return false; }
   const novoEstoque = Math.round((m.estoque - qtd)*100)/100;
@@ -3008,19 +3054,25 @@ function gerarPdfAvulsosConcluidos(){
 }
 
 /* ============================== TRANSFERÊNCIA DE ESTOQUE ============================== */
+function transfMaterialOptionsHtml(selId){
+  return '<option value="">Selecione…</option>'+
+    STATE.materiais.map(m=>'<option value="'+m.id+'" '+(selId===m.id?"selected":"")+'>'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+')'+sufixoInativo(m)+'</option>').join("");
+}
+function transfNovoBtnHtml(alvo){
+  return '<button type="button" class="btn btn-ghost" style="padding:5px 8px;font-size:11.5px;margin-top:6px" onclick="abrirNovoMaterialTransf(\''+alvo+'\')">'+icon("plus",12)+' Cadastrar novo</button>';
+}
 function openTransferenciaModal(){
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:480px">'+
+      '<div class="modal-card" style="max-width:560px">'+
         '<div class="modal-header"><h3>Nova Transferência de Estoque</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<form id="transf-mp-novo-form" onsubmit="return false"></form>'+
         '<form onsubmit="return submitTransferenciaForm(event)">'+
           '<div class="grid-2">'+
-            '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima de Origem *</label><select class="field-select" name="materialOrigemId" required><option value="">Selecione…</option>'+
-              STATE.materiais.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+')</option>').join("")+
-              '</select></div>'+
-            '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima de Destino *</label><select class="field-select" name="materialDestinoId" required><option value="">Selecione…</option>'+
-              STATE.materiais.map(m=>'<option value="'+m.id+'">'+escapeHtml(m.tipo+" — "+m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+')</option>').join("")+
-              '</select></div>'+
+            '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima de Origem *</label><select class="field-select" id="transf-origem" name="materialOrigemId" required>'+transfMaterialOptionsHtml("")+'</select>'+
+              transfNovoBtnHtml("origem")+'<div id="transf-novo-origem"></div></div>'+
+            '<div style="grid-column:1/-1"><label class="field-label">Matéria-Prima de Destino *</label><select class="field-select" id="transf-destino" name="materialDestinoId" required>'+transfMaterialOptionsHtml("")+'</select>'+
+              transfNovoBtnHtml("destino")+'<div id="transf-novo-destino"></div></div>'+
             '<div><label class="field-label">Quantidade *</label><input class="field-input" type="number" step="0.01" min="0.01" name="quantidade" required/></div>'+
             '<div><label class="field-label">Data</label><input class="field-input" type="date" name="data" value="'+todayStr()+'"/></div>'+
             '<div style="grid-column:1/-1"><label class="field-label">Observação</label><input class="field-input" name="observacao" placeholder="Motivo da transferência (opcional)"/></div>'+
@@ -3032,6 +3084,50 @@ function openTransferenciaModal(){
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
+/* Cadastro de matéria-prima sem sair da Nova Transferência — mesmos campos da tela
+   "Nova Matéria-Prima". Os campos ficam ligados a um <form> vazio próprio (atributo form),
+   para não entrarem na validação nem nos dados da transferência. Um painel aberto por vez. */
+function abrirNovoMaterialTransf(alvo){
+  ["origem","destino"].forEach(function(a){ const c = document.getElementById("transf-novo-"+a); if(c) c.innerHTML = ""; });
+  const cont = document.getElementById("transf-novo-"+alvo);
+  if(!cont) return;
+  const campos = ENTITY_CONFIGS.material.fields.filter(function(f){ return f.key!=="estoqueInicial"; });
+  cont.innerHTML =
+    '<div class="pcp-card" style="margin-top:8px;padding:12px;border:1px solid '+COLORS.brand+'55">'+
+      '<div style="font-size:12.5px;font-weight:700;margin-bottom:10px;color:'+COLORS.brand+'">Nova Matéria-Prima ('+(alvo==="origem"?"Origem":"Destino")+')</div>'+
+      '<div class="grid-2">'+campos.map(function(f){ return fieldHtml(f, null); }).join("")+'</div>'+
+      '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">'+
+        '<button type="button" class="btn btn-ghost" onclick="fecharNovoMaterialTransf(\''+alvo+'\')">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" id="transf-novo-salvar" onclick="salvarNovoMaterialTransf(\''+alvo+'\')">Cadastrar e selecionar</button>'+
+      '</div>'+
+    '</div>';
+  cont.querySelectorAll("input, select, textarea").forEach(function(el){ el.setAttribute("form","transf-mp-novo-form"); });
+  const primeiro = cont.querySelector("#f-tipo");
+  if(primeiro) primeiro.focus();
+}
+function fecharNovoMaterialTransf(alvo){ const c = document.getElementById("transf-novo-"+alvo); if(c) c.innerHTML = ""; }
+async function salvarNovoMaterialTransf(alvo){
+  const cont = document.getElementById("transf-novo-"+alvo);
+  if(!cont) return;
+  const data = {};
+  cont.querySelectorAll("[name]").forEach(function(el){ data[el.name] = el.value; });
+  if(!(data.tipo||"").trim()){ showToast("error","Informe o Tipo."); return; }
+  if(!(data.nome||"").trim()){ showToast("error","Informe o Nome / Cor."); return; }
+  if(data.estoque===undefined || data.estoque===""){ showToast("error","Informe o Estoque atual (pode ser 0)."); return; }
+  data.tipo = data.tipo.trim(); data.nome = data.nome.trim();
+  const btn = document.getElementById("transf-novo-salvar");
+  if(btn) btn.disabled = true;
+  const antes = STATE.materiais.length;
+  const ok = await ENTITY_CONFIGS.material.onAdd(data);
+  if(btn) btn.disabled = false;
+  if(ok===false || STATE.materiais.length===antes) return;
+  const novo = STATE.materiais[STATE.materiais.length-1];
+  const selO = document.getElementById("transf-origem"), selD = document.getElementById("transf-destino");
+  const valO = selO ? selO.value : "", valD = selD ? selD.value : "";
+  if(selO) selO.innerHTML = transfMaterialOptionsHtml(alvo==="origem" ? novo.id : valO);
+  if(selD) selD.innerHTML = transfMaterialOptionsHtml(alvo==="destino" ? novo.id : valD);
+  fecharNovoMaterialTransf(alvo);
+}
 async function submitTransferenciaForm(event){
   event.preventDefault();
   const fd = new FormData(event.target);
@@ -3041,6 +3137,7 @@ async function submitTransferenciaForm(event){
   const origem = STATE.materiais.find(x=>x.id===data.materialOrigemId);
   const destino = STATE.materiais.find(x=>x.id===data.materialDestinoId);
   if(!origem || !destino || qtd<=0) return false;
+  if(!checarMateriaisAtivos([origem.id, destino.id])) return false;
   const novoOrigem = Math.round((origem.estoque - qtd)*100)/100;
   const novoDestino = Math.round((destino.estoque + qtd)*100)/100;
   const { data:row, error:insErr } = await sb.from("transferencias").insert({
@@ -3247,8 +3344,8 @@ const ENTITY_CONFIGS = {
          com a conta fechada, nada é exibido. */
       const avisoDivergencia = divergentes>0
         ? '<div class="no-print" style="margin:-4px 0 12px"><button type="button" class="btn btn-ghost" '+
-            'style="padding:4px 10px;font-size:11.5px;color:'+COLORS.red+'" onclick="openDiagnosticoDivergenciasModal()" '+
-            'title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",12,COLORS.red)+
+            'style="padding:4px 10px;font-size:11.5px;color:'+COR_ATENCAO_MINIMO+'" onclick="openDiagnosticoDivergenciasModal()" '+
+            'title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",12,COR_ATENCAO_MINIMO)+
             ' '+divergentes+' material(is) com saldo inicial divergente — ver diagnóstico</button></div>'
         : '';
       return avisoDivergencia+
@@ -3279,7 +3376,8 @@ const ENTITY_CONFIGS = {
     },
     columns: [
       {key:"atencao", label:"Atenção", render:(it)=>'<button type="button" class="icon-btn'+(it.atencao?" atencao-on":"")+'" title="'+(it.atencao?"Remover destaque de atenção":"Marcar como produto de atenção")+'" onclick="toggleMaterialAtencao(\''+it.id+'\')">'+icon("star",14)+'</button>'},      {key:"tipo", label:"Tipo"},
-      {key:"nome", label:"Material", render:(it)=> it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome)},
+      {key:"nome", label:"Material", render:(it)=> (it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome))+
+        (materialInativo(it.id) ? ' <span class="inativo-badge" title="Item inativo — bloqueado para uso. Ative para voltar a usar.">INATIVO</span>' : '')},
       {key:"cor", label:"É Cor?", render:(it)=> it.cor==="S" ? "Sim" : "Não"},
       {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>{
         const div = divergenciaDoMaterial(it);
@@ -3292,9 +3390,10 @@ const ENTITY_CONFIGS = {
             '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.textMuted+';white-space:nowrap">'+valorTxt+'</span></button>';
         }
         const tip = "Divergência de "+fmtNum(Math.abs(div))+" "+it.unidade+". Para a conta fechar com os movimentos reais, o Saldo Inicial deveria ser "+fmtNum(sugerido)+" "+it.unidade+(admin?". Clique para alterar.":". Peça a um administrador para corrigir.");
-        if(!admin) return '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap;display:inline-flex;align-items:center;gap:5px" title="'+escapeAttr(tip)+'">'+valorTxt+icon("alert",12,COLORS.red)+'</span>';
-        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;gap:5px;border-color:'+COLORS.red+';white-space:nowrap" title="'+escapeAttr(tip)+'" onclick="corrigirSaldoInicial(\''+it.id+'\')">'+
-          '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COLORS.red+';white-space:nowrap">'+valorTxt+'</span>'+icon("alert",12,COLORS.red)+'</button>';
+        /* Aviso de atenção (não é estoque negativo) — laranja; vermelho fica reservado para estoque negativo. */
+        if(!admin) return '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COR_ATENCAO_MINIMO+';white-space:nowrap;display:inline-flex;align-items:center;gap:5px" title="'+escapeAttr(tip)+'">'+valorTxt+icon("alert",12,COR_ATENCAO_MINIMO)+'</span>';
+        return '<button type="button" class="icon-btn" style="width:auto;padding:2px 7px;gap:5px;border-color:'+COR_ATENCAO_MINIMO+';white-space:nowrap" title="'+escapeAttr(tip)+'" onclick="corrigirSaldoInicial(\''+it.id+'\')">'+
+          '<span style="font-family:\'IBM Plex Mono\',monospace;color:'+COR_ATENCAO_MINIMO+';white-space:nowrap">'+valorTxt+'</span>'+icon("alert",12,COR_ATENCAO_MINIMO)+'</button>';
       }},
       {key:"entradas", label:"Entradas", render:(it)=>{
         const t = movTotaisDoMaterial(it.id);
@@ -3309,10 +3408,14 @@ const ENTITY_CONFIGS = {
           '<span style="color:'+COLORS.red+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">-'+fmtNum(t.saidas)+'&nbsp;'+it.unidade+'</span></button>';
       }},
       {key:"estoque", label:"Saldo Atual", render:(it)=>{
-        const low = it.estoque < it.estoqueMinimo;
+        /* Vermelho só quando o estoque está negativo; abaixo do mínimo (atenção) fica laranja. */
+        const negativo = Number(it.estoque||0) < 0;
+        const low = !negativo && it.estoque < it.estoqueMinimo;
+        const corAlerta = negativo ? COLORS.red : (low ? COR_ATENCAO_MINIMO : null);
         const t = movTotaisDoMaterial(it.id);
-        const tip = "Saldo Inicial "+fmtNum(it.estoqueInicial||0)+" + Entradas "+fmtNum(t.entradas)+" − Saídas "+fmtNum(t.saidas)+" = "+fmtNum(Number(it.estoqueInicial||0)+t.entradas-t.saidas)+" "+it.unidade;
-        return '<span style="color:'+(low?COLORS.red:COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+fmtNum(it.estoque)+'&nbsp;'+it.unidade+(low?icon("alert",12,COLORS.red):'')+'</span>';
+        const tip = "Saldo Inicial "+fmtNum(it.estoqueInicial||0)+" + Entradas "+fmtNum(t.entradas)+" − Saídas "+fmtNum(t.saidas)+" = "+fmtNum(Number(it.estoqueInicial||0)+t.entradas-t.saidas)+" "+it.unidade+
+          (negativo ? " · ESTOQUE NEGATIVO" : (low ? " · Abaixo do estoque mínimo ("+fmtNum(it.estoqueMinimo)+" "+it.unidade+")" : ""));
+        return '<span style="color:'+(corAlerta||COLORS.text)+';font-family:\'IBM Plex Mono\',monospace;font-weight:600;display:inline-flex;align-items:center;gap:5px;white-space:nowrap" title="'+escapeAttr(tip)+'">'+fmtNum(it.estoque)+'&nbsp;'+it.unidade+(corAlerta?icon("alert",12,corAlerta):'')+'</span>';
       }},
       {key:"diasEstoque", label:"Dias em Estoque", render:(it)=>{
         const dias = diasEstoqueDoMaterial(it.id);
@@ -3337,7 +3440,7 @@ const ENTITY_CONFIGS = {
         const futuro = saldoFuturoDoMaterial(it, preTotals);
         const negativo = futuro < 0;
         const abaixoMinimo = !negativo && Number(it.estoqueMinimo||0)>0 && futuro < Number(it.estoqueMinimo||0);
-        const cor = negativo ? COLORS.red : (abaixoMinimo ? "#C98A00" : COLORS.green);
+        const cor = negativo ? COLORS.red : (abaixoMinimo ? COR_ATENCAO_MINIMO : COLORS.green);
         const limOpt = STATE.materiaisFiltro.preSemanaLimite
           ? preProducaoSemanasDisponiveis().find(w=>w.chave===STATE.materiaisFiltro.preSemanaLimite) : null;
         const tip = "Saldo Atual "+fmtNum(it.estoque)+" − Pré-produção "+fmtNum(pre)+" = "+fmtNum(futuro)+" "+it.unidade+
@@ -3560,6 +3663,58 @@ async function toggleMaterialAtencao(id){
   renderScreen();
 }
 
+/* ============================== MATÉRIA-PRIMA ATIVA / INATIVA ==============================
+   Item inativo continua no cadastro e no histórico (filtros, relatórios), mas não pode ser
+   usado: não entra em novo pedido, baixa, separação avulsa, transferência, nota nem acerto.
+   Tentou usar → aviso de que está inativo. Para voltar a usar, ativar na tela Matéria-Prima. */
+function materialInativo(id){ return !!id && (STATE.materiaisInativosIds||[]).indexOf(id)!==-1; }
+function sufixoInativo(m){ return m && materialInativo(m.id) ? " — INATIVO" : ""; }
+function avisoMaterialInativo(m){
+  showToast("error", 'O item "'+(m?m.nome:"?")+'" está INATIVO e não pode ser usado. Para usar, ative-o novamente na tela Matéria-Prima.');
+}
+/* Confere uma lista de ids; idsJaUsados = ids que o registro já tinha antes (edição), que continuam
+   liberados para não travar a edição de campos que não têm a ver com o material. */
+function checarMateriaisAtivos(ids, idsJaUsados){
+  const livres = idsJaUsados || [];
+  for(const id of ids){
+    if(!id || livres.indexOf(id)!==-1) continue;
+    if(materialInativo(id)){ avisoMaterialInativo(STATE.materiais.find(x=>x.id===id)); return false; }
+  }
+  return true;
+}
+function confirmToggleMaterialAtivo(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  if(!m) return;
+  const inativo = materialInativo(id);
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>'+(inativo?"Ativar":"Inativar")+' matéria-prima</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">'+
+          (inativo
+            ? 'Ativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item volta a poder ser usado em pedidos, baixas, transferências e notas.'
+            : 'Inativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item fica bloqueado: não poderá ser usado no sistema até ser ativado novamente. O histórico é mantido.')+
+        '</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn '+(inativo?"btn-primary":"btn-danger")+'" onclick="toggleMaterialAtivo(\''+id+'\')">'+(inativo?"Ativar":"Inativar")+'</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function toggleMaterialAtivo(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  const atual = await configGet("materiais_inativos");
+  const lista = Array.isArray(atual) ? atual.slice() : (STATE.materiaisInativosIds||[]).slice();
+  const eraInativo = lista.indexOf(id)!==-1;
+  const nova = eraInativo ? lista.filter(x=>x!==id) : lista.concat([id]);
+  const ok = await configSet("materiais_inativos", nova);
+  closeModal();
+  if(!ok) return;
+  STATE.materiaisInativosIds = nova;
+  renderScreen();
+  showToast("success", (m?'"'+m.nome+'" ':"Item ")+(eraInativo ? "ativado — liberado para uso." : "inativado — bloqueado para uso no sistema."));
+}
+
 function fieldHtml(f, item){
   const val = item ? (item[f.key] != null ? item[f.key] : "") : (f.default || "");
   const label = '<label class="field-label">'+f.label+(f.required?" *":"")+'</label>';
@@ -3656,10 +3811,14 @@ function renderGenericScreen(type){
   const rows = items.map(it=>{
     const tds = cfg.columns.map(c=>'<td>'+(c.render ? c.render(it) : escapeHtml(it[c.key]||"—"))+'</td>').join("");
     const acertoBtn = (type==="material" && isCurrentUserAdmin()) ? '<button class="icon-btn" title="Acerto de Estoque" onclick="openAcertoModal(\''+it.id+'\')">'+icon("sliders",13)+'</button>' : '';
-    return '<tr>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
+    const inativo = type==="material" && materialInativo(it.id);
+    const ativoBtn = type==="material"
+      ? '<button class="icon-btn'+(inativo?' ativar-btn':'')+'" title="'+(inativo?"Ativar produto (liberar para uso)":"Inativar produto (bloquear o uso no sistema)")+'" onclick="confirmToggleMaterialAtivo(\''+it.id+'\')">'+icon(inativo?"checkCircle":"xCircle",13)+'</button>'
+      : '';
+    return '<tr'+(inativo?' class="row-inativo"':'')+'>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+ativoBtn+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
   }).join("");
   const table = items.length===0 ? emptyStateHtml() :
-    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=> cfg.headerCell ? cfg.headerCell(c) : '<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:110px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=> cfg.headerCell ? cfg.headerCell(c) : '<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:'+(type==="material"?140:110)+'px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
   const extra = cfg.extraTop ? cfg.extraTop(items) : "";
   const filterBar = cfg.filterBar ? cfg.filterBar() : "";
   const printHeader = cfg.printable ? '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de '+cfg.title+' — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>' : "";
@@ -4510,15 +4669,15 @@ function openPedidoModal(mode, id){
           '<div style="grid-column:1/-1"><label class="field-label">Observações</label><textarea class="field-input" name="observacoes" rows="2" style="resize:vertical;font-family:inherit" placeholder="Anotações gerais sobre o pedido (opcional)">'+escapeHtml(observacoesAtual||"")+'</textarea></div>'+
 
           '<div><label class="field-label">Cor Sup.</label><select class="field-select" id="f-corSupId" name="corSupId" onchange="updateStockPreview()"><option value="">— nenhuma —</option>'+
-            bobinas.map(m=>'<option value="'+m.id+'" '+(f.corSupId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+' · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')</option>').join("")+
+            bobinas.map(m=>'<option value="'+m.id+'" '+(f.corSupId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+' · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')'+sufixoInativo(m)+'</option>').join("")+
             '</select></div>'+
           '<div><label class="field-label">Cor Inf.</label><select class="field-select" id="f-corInfId" name="corInfId" onchange="updateStockPreview()"><option value="">— nenhuma —</option>'+
-            bobinas.map(m=>'<option value="'+m.id+'" '+(f.corInfId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+' · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')</option>').join("")+
+            bobinas.map(m=>'<option value="'+m.id+'" '+(f.corInfId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (estoque: '+fmtNum(m.estoque)+' '+m.unidade+' · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')'+sufixoInativo(m)+'</option>').join("")+
             '</select></div>'+
           '<div><label class="field-label">Metragem</label><input class="field-input" type="number" step="0.01" id="f-metragem" name="metragem" value="'+f.metragem+'" oninput="updateStockPreview()"/></div>'+
 
           '<div><label class="field-label">EPS (opcional)</label><select class="field-select" id="f-epsId" name="epsId" onchange="updateStockPreview()"><option value="">— nenhum —</option>'+
-            epsMats.map(m=>'<option value="'+m.id+'" '+(f.epsId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (fator '+m.fator+'x · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')</option>').join("")+
+            epsMats.map(m=>'<option value="'+m.id+'" '+(f.epsId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+' (fator '+m.fator+'x · '+fmtBRL(m.valorUnitario)+'/'+m.unidade+')'+sufixoInativo(m)+'</option>').join("")+
             '</select></div>'+
           '<div><label class="field-label">Cidade</label><select class="field-select" id="f-cidadeId" name="cidadeId"><option value="">Selecione…</option>'+
             STATE.cidades.map(c=>'<option value="'+c.id+'" '+(f.cidadeId===c.id?"selected":"")+'>'+escapeHtml(c.nome)+'</option>').join("")+
@@ -4584,6 +4743,9 @@ async function submitPedidoForm(event, mode, id){
   if("concPerfilar" in data) valoresConclusao.perfilar = (data.concPerfilar||"").trim();
   if("concPintura" in data) valoresConclusao.pintura = (data.concPintura||"").trim();
   if("concColagem" in data) valoresConclusao.colagem = (data.concColagem||"").trim();
+  /* Matéria-prima inativa não pode ser escolhida; a que o pedido já tinha antes continua liberada. */
+  const pedidoAntes = mode==="edit" ? STATE.pedidos.find(function(x){ return x.id===id; }) : null;
+  if(!checarMateriaisAtivos([data.corSupId, data.corInfId, data.epsId], pedidoAntes ? [pedidoAntes.corSupId, pedidoAntes.corInfId, pedidoAntes.epsId] : [])) return false;
   /* Trava o botão e aguarda o salvamento (que baixa/estorna estoque) terminar antes de
      fechar o modal. Sem isso, um duplo clique ou uma segunda tentativa de salvar antes da
      primeira terminar pode disparar adjustStock() duas vezes para a mesma alteração —
@@ -5497,6 +5659,183 @@ function openEscolherFiltrosModal(i){
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
+/* ============================== FILTROS DE PRODUTO COM BUSCA POR DIGITAÇÃO ==============================
+   Todo filtro (barra .filter-bar) que escolhe produto/material — Material, Material / Cor,
+   Matéria-Prima, Produto, Cor Sup., Cor Inf., EPS, Origem, Destino — ganha um campo onde dá
+   pra digitar parte do nome e escolher na lista filtrada. O <select> original continua lá
+   (escondido) e é ele que recebe o valor e dispara o "change" da tela, então a lógica de
+   cada filtro não muda. Vale para todas as telas, inclusive as que ainda forem criadas. */
+const SP_ROTULOS_PRODUTO = /^(material|material \/ cor|mat[ée]ria-prima|produto|cor sup\.?|cor inf\.?|eps|origem|destino)$/i;
+function aprimorarSelectsProduto(){
+  const content = document.getElementById("content");
+  if(!content) return;
+  content.querySelectorAll(".filter-bar select:not([data-sp])").forEach(function(sel){
+    sel.setAttribute("data-sp","0");
+    const campo = sel.parentElement;
+    const lbl = campo ? campo.querySelector(".field-label") : null;
+    const rotulo = lbl ? normRotuloFiltro(lbl.textContent) : "";
+    if(!SP_ROTULOS_PRODUTO.test(rotulo)) return;
+    sel.setAttribute("data-sp","1");
+    sel.style.display = "none";
+    const wrap = document.createElement("div");
+    wrap.className = "sp-wrap";
+    const inp = document.createElement("input");
+    inp.type = "text";
+    inp.autocomplete = "off";
+    inp.className = "field-input sp-input"+(sel.classList.contains("filter-active")?" filter-active":"");
+    const optSel = sel.options[sel.selectedIndex];
+    const vazio = Array.from(sel.options).find(function(o){ return o.value===""; });
+    inp.placeholder = (vazio ? vazio.text : "Todos")+" — digite para buscar…";
+    inp.value = (optSel && optSel.value!=="") ? optSel.text : "";
+    inp.title = "Digite parte do nome para filtrar a lista";
+    wrap.appendChild(inp);
+    sel.parentNode.insertBefore(wrap, sel.nextSibling);
+    inp.addEventListener("focus", function(){ inp.select(); spAbrirLista(sel, inp, ""); });
+    inp.addEventListener("input", function(){ spAbrirLista(sel, inp, inp.value); });
+    inp.addEventListener("keydown", function(e){ spTecla(e, sel, inp); });
+    inp.addEventListener("blur", function(){ setTimeout(function(){ spFecharLista(sel, inp); }, 160); });
+  });
+}
+let __spLista = null;
+function spFecharLista(sel, inp){
+  if(__spLista){ __spLista.remove(); __spLista = null; }
+  /* Saiu sem escolher: volta a mostrar o que está de fato selecionado. */
+  if(sel && inp && document.body.contains(inp)){
+    const o = sel.options[sel.selectedIndex];
+    inp.value = (o && o.value!=="") ? o.text : "";
+  }
+}
+function spAbrirLista(sel, inp, termo){
+  if(__spLista){ __spLista.remove(); __spLista = null; }
+  const q = normBusca(termo||"").trim();
+  const partes = q ? q.split(/\s+/) : [];
+  const opcoes = Array.from(sel.options).filter(function(o){
+    if(!partes.length) return true;
+    const t = normBusca(o.text);
+    return partes.every(function(p){ return t.indexOf(p)!==-1; });
+  });
+  const lista = document.createElement("div");
+  lista.className = "sp-lista";
+  lista.innerHTML = opcoes.length
+    ? opcoes.map(function(o, i){
+        return '<div class="sp-item'+(o.value===sel.value?' sp-sel':'')+(i===0&&partes.length?' sp-ativo':'')+'" data-v="'+escapeAttr(o.value)+'">'+escapeHtml(o.text)+'</div>';
+      }).join("")
+    : '<div class="sp-vazio">Nenhum produto encontrado.</div>';
+  const r = inp.getBoundingClientRect();
+  lista.style.left = r.left+"px";
+  lista.style.minWidth = r.width+"px";
+  const espacoAbaixo = window.innerHeight - r.bottom;
+  if(espacoAbaixo < 200 && r.top > espacoAbaixo){ lista.style.bottom = (window.innerHeight - r.top + 4)+"px"; }
+  else { lista.style.top = (r.bottom+4)+"px"; }
+  lista.addEventListener("mousedown", function(e){
+    const it = e.target.closest(".sp-item");
+    if(!it) return;
+    e.preventDefault();
+    spEscolher(sel, inp, it.getAttribute("data-v"));
+  });
+  document.body.appendChild(lista);
+  __spLista = lista;
+}
+function spEscolher(sel, inp, valor){
+  if(__spLista){ __spLista.remove(); __spLista = null; }
+  const o = Array.from(sel.options).find(function(x){ return x.value===valor; });
+  inp.value = (o && o.value!=="") ? o.text : "";
+  inp.blur();
+  if(sel.value!==valor){
+    sel.value = valor;
+    sel.dispatchEvent(new Event("change", {bubbles:true}));
+  }
+}
+function spTecla(e, sel, inp){
+  if(e.key==="Escape"){ inp.blur(); return; }
+  if(!__spLista) return;
+  const itens = Array.from(__spLista.querySelectorAll(".sp-item"));
+  if(!itens.length) return;
+  let idx = itens.findIndex(function(x){ return x.classList.contains("sp-ativo"); });
+  if(e.key==="ArrowDown" || e.key==="ArrowUp"){
+    e.preventDefault();
+    if(idx>=0) itens[idx].classList.remove("sp-ativo");
+    idx = e.key==="ArrowDown" ? Math.min(itens.length-1, idx+1) : Math.max(0, idx-1);
+    itens[idx].classList.add("sp-ativo");
+    itens[idx].scrollIntoView({block:"nearest"});
+  } else if(e.key==="Enter"){
+    e.preventDefault();
+    const alvo = idx>=0 ? itens[idx] : (itens.length===1 ? itens[0] : null);
+    if(alvo) spEscolher(sel, inp, alvo.getAttribute("data-v"));
+  }
+}
+window.addEventListener("scroll", function(e){
+  if(!__spLista || e.target===__spLista || __spLista.contains(e.target)) return;
+  if(document.activeElement && document.activeElement.classList.contains("sp-input")) document.activeElement.blur();
+}, true);
+
+/* ============================== BARRA DE ROLAGEM HORIZONTAL SEMPRE VISÍVEL ==============================
+   Em telas menores as tabelas largas ficam com a barra horizontal lá no fim da página/tabela.
+   Aqui, sempre que houver na tela uma área com rolagem horizontal cuja barra nativa não está
+   à vista, aparece uma barra fixa no rodapé da janela, sincronizada com essa área (arrastar
+   uma move a outra). Vale para todas as telas, sem mexer em cada uma. */
+let __hsAlvo = null, __hsSync = false, __hsRaf = null;
+function hsBarra(){
+  let bar = document.getElementById("hscroll-float");
+  if(!bar){
+    bar = document.createElement("div");
+    bar.id = "hscroll-float";
+    bar.innerHTML = "<div></div>";
+    bar.addEventListener("scroll", function(){
+      if(__hsSync){ __hsSync = false; return; }
+      if(__hsAlvo && Math.abs(__hsAlvo.scrollLeft - bar.scrollLeft) > 0.5){ __hsSync = true; __hsAlvo.scrollLeft = bar.scrollLeft; }
+    });
+    document.body.appendChild(bar);
+  }
+  return bar;
+}
+function hsCandidatos(){
+  const content = document.getElementById("content");
+  if(!content || !STATE.loggedIn) return [];
+  const els = [content].concat(Array.from(content.querySelectorAll("div, main, section")));
+  return els.filter(function(el){
+    if(el.scrollWidth - el.clientWidth < 4) return false;
+    const ox = getComputedStyle(el).overflowX;
+    return ox==="auto" || ox==="scroll";
+  });
+}
+function atualizarBarraHorizontal(){
+  const bar = hsBarra();
+  const vh = window.innerHeight, vw = window.innerWidth;
+  let melhor = null, melhorArea = 0;
+  hsCandidatos().forEach(function(el){
+    const r = el.getBoundingClientRect();
+    if(r.bottom <= vh - 2) return;                 // barra nativa já está visível
+    const topo = Math.max(r.top, 0), base = Math.min(r.bottom, vh);
+    const esq = Math.max(r.left, 0), dir = Math.min(r.right, vw);
+    if(base - topo < 60 || dir - esq < 80) return;  // quase fora da tela
+    const area = (base-topo)*(dir-esq) * (el.querySelector("table") ? 2 : 1);
+    if(area > melhorArea){ melhorArea = area; melhor = el; }
+  });
+  if(__hsAlvo && __hsAlvo!==melhor) __hsAlvo.removeEventListener("scroll", hsAlvoRolou);
+  if(!melhor){ __hsAlvo = null; bar.style.display = "none"; return; }
+  if(__hsAlvo!==melhor){ __hsAlvo = melhor; melhor.addEventListener("scroll", hsAlvoRolou); }
+  const r = melhor.getBoundingClientRect();
+  const esq = Math.max(r.left, 0), dir = Math.min(r.right, vw);
+  bar.style.left = esq+"px";
+  bar.style.width = (dir-esq)+"px";
+  bar.firstChild.style.width = (melhor.scrollWidth - melhor.clientWidth + (dir-esq))+"px";
+  bar.style.display = "block";
+  if(Math.abs(bar.scrollLeft - melhor.scrollLeft) > 1){ __hsSync = true; bar.scrollLeft = melhor.scrollLeft; }
+}
+function hsAlvoRolou(){
+  const bar = document.getElementById("hscroll-float");
+  if(!bar || !__hsAlvo) return;
+  if(__hsSync){ __hsSync = false; return; }
+  if(Math.abs(bar.scrollLeft - __hsAlvo.scrollLeft) > 0.5){ __hsSync = true; bar.scrollLeft = __hsAlvo.scrollLeft; }
+}
+function agendarBarraHorizontal(){
+  if(__hsRaf) return;
+  __hsRaf = requestAnimationFrame(function(){ __hsRaf = null; atualizarBarraHorizontal(); });
+}
+window.addEventListener("scroll", function(e){ if(e.target && e.target.id==="hscroll-float") return; agendarBarraHorizontal(); }, true);
+window.addEventListener("resize", agendarBarraHorizontal);
+
 /* Algumas telas redesenham só um pedaço (ou terminam de desenhar depois de carregar algo);
    o observador reaplica as preferências sempre que surge uma barra de filtros nova. */
 let __foObserver = null, __foPendente = false;
@@ -5507,7 +5846,7 @@ function iniciarObservadorFiltros(){
   __foObserver = new MutationObserver(function(){
     if(__foPendente) return;
     __foPendente = true;
-    requestAnimationFrame(function(){ __foPendente = false; aprimorarFiltrosDaTela(false); });
+    requestAnimationFrame(function(){ __foPendente = false; aprimorarFiltrosDaTela(false); aprimorarSelectsProduto(); agendarBarraHorizontal(); });
   });
   __foObserver.observe(c, {childList:true, subtree:true});
 }
@@ -6873,6 +7212,8 @@ function computeStageAtivos(stage, exceptColKey){
     if(s.material && !textoCombinaBusca(textoBuscaMaterialPedido(p), s.material)) return false;
     if(s.op && !(p.op||"").toLowerCase().includes(s.op.toLowerCase())) return false;
     if(stage==="entrega" && s.motoristaId && p.motoristaId!==s.motoristaId) return false;
+    /* Pedido com falta de material fica na tela Pendências de Entrega até ser concluído. */
+    if(stage==="entrega" && pendenciaAbertaDoPedido(p.id)) return false;
     return true;
   }), exceptColKey);
 }
@@ -6958,7 +7299,7 @@ function renderStageScreen(stage){
         selDiaHtml+
       '</div>'+
       '<div class="pcp-card drag-target" data-dia="'+b.date+'" style="padding:0;overflow:auto" ondragover="event.preventDefault()" ondragenter="this.classList.add(\'drag-over\')" ondragleave="this.classList.remove(\'drag-over\')" ondrop="handleDrop(event,\''+b.date+'\')">'+
-        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, null, stage==="entrega" ? "Produção finalizada" : null, isCurrentUserAdmin(), {selStage:stage, colCtx:stage})+
+        pedidoTableHtml(b.items, true, stage!=="entrega", true, false, visibleCols, true, editableMotorista, stage==="entrega" ? btnFaltaMaterialHtml : null, stage==="entrega" ? "Produção finalizada" : null, isCurrentUserAdmin(), {selStage:stage, colCtx:stage})+
       '</div>'+
     '</div>';
   }).join('<div style="height:2px"></div>');
@@ -7037,6 +7378,530 @@ function renderStageScreen(stage){
     '</div>'+
     '<div id="selecao-bar" class="no-print"></div>';
   atualizarSelecaoUI(stage);
+}
+
+/* ============================== PENDÊNCIAS DE ENTREGA ==============================
+   Fluxo: na Prog. Entregas, o botão "Falta de material" registra a pendência (motivo +
+   pessoa responsável). O pedido sai da Prog. Entregas e vai para esta tela, onde se informa
+   a data prevista da nova entrega. Enquanto não for concluída, a pendência aparece como
+   "AGUARDANDO" (vermelho) e entra no aviso mostrado a todos ao abrir o sistema. Ao concluir,
+   o pedido segue para Pedidos Entregues e aqui fica uma cópia marcada "PEDIDO ENTREGUE"
+   (verde) — é o histórico que alimenta o lead time e os gráficos.
+   Tudo mora em app_config (pendencias_entrega, motivos_falta_material, pessoas_erro_entrega),
+   mesmo padrão dos cancelamentos: não precisa de tabela nova no Supabase. */
+const PEND_CORES = ["#E2574C","#C98A00","#0080C6","#2F9E5B","#8B5FBF","#2FA6A6","#E67E22","#6C8EBF","#7A9E3B","#D6457A"];
+function novaPendenciaId(){ return "pend-"+Date.now()+"-"+Math.random().toString(36).slice(2,7); }
+function pendenciaAbertaDoPedido(pedidoId){
+  return (STATE.pendenciasEntrega||[]).find(function(x){ return x.pedidoId===pedidoId && x.status!=="entregue"; }) || null;
+}
+/* Lead time da pendência: dias úteis do registro da falta até a conclusão (ou até hoje, se aguardando). */
+function leadTimePendencia(x){
+  if(!x || !x.registradoEm) return null;
+  return diasUteisEntre(x.registradoEm, x.status==="entregue" && x.concluidoEm ? x.concluidoEm : todayStr());
+}
+/* Grava relendo a lista do banco antes: dois usuários mexendo ao mesmo tempo não se sobrescrevem. */
+async function salvarPendencias(mutar){
+  const atual = await configGet("pendencias_entrega");
+  const lista = (Array.isArray(atual) ? atual : (STATE.pendenciasEntrega||[])).map(function(x){ return Object.assign({}, x); });
+  const res = mutar(lista);
+  const ok = await configSet("pendencias_entrega", lista);
+  if(ok) STATE.pendenciasEntrega = lista;
+  return ok ? (res===undefined ? true : res) : false;
+}
+/* Responsável por solucionar: login (e-mail) de quem pode dar a pendência como concluída.
+   A tela abre para todos, mas só esse login conclui. Pendência sem responsável (registros
+   antigos) continua podendo ser concluída por qualquer um. */
+function responsavelSolucaoDe(x){ return String((x && x.responsavelSolucao)||"").trim().toLowerCase(); }
+function podeConcluirPendencia(x){
+  const resp = responsavelSolucaoDe(x);
+  return !resp || resp===emailAtualNormalizado();
+}
+function emailValido(e){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e); }
+function btnFaltaMaterialHtml(p){
+  return '<button class="icon-btn" title="Falta de material — enviar para Pendências de Entrega" style="color:'+COLORS.red+';border-color:'+COLORS.red+'66" onclick="openFaltaMaterialModal(\''+p.id+'\')">'+icon("alert",13)+'</button>';
+}
+function pendStatusBadge(x){
+  return x.status==="entregue"
+    ? '<span style="font-size:9.5px;font-weight:700;color:'+COLORS.green+';background:'+COLORS.green+'18;border:1px solid '+COLORS.green+'66;border-radius:10px;padding:2px 8px;white-space:nowrap">PEDIDO ENTREGUE</span>'
+    : '<span style="font-size:9.5px;font-weight:700;color:'+COLORS.red+';background:'+COLORS.red+'18;border:1px solid '+COLORS.red+'66;border-radius:10px;padding:2px 8px;white-space:nowrap">AGUARDANDO</span>';
+}
+
+/* ---- Registro da falta de material (aberto pela Prog. Entregas) ---- */
+function openFaltaMaterialModal(pedidoId, motivoSel, pessoaSel, obsAtual, editId, solucaoAtual){
+  const edit = editId ? (STATE.pendenciasEntrega||[]).find(function(x){ return x.id===editId; }) : null;
+  const p = STATE.pedidos.find(function(x){ return x.id===pedidoId; });
+  if(!edit && !p) return;
+  const ref = edit || {op:p.op, cliente:p.cliente, metragem:p.metragem, material:p.material};
+  if(edit){
+    if(motivoSel===undefined) motivoSel = edit.motivo;
+    if(pessoaSel===undefined) pessoaSel = edit.responsavel;
+    if(obsAtual===undefined) obsAtual = edit.observacao;
+    if(solucaoAtual===undefined) solucaoAtual = edit.responsavelSolucao;
+  }
+  /* Na edição, só administrador troca o responsável — senão qualquer um passaria a pendência pra si. */
+  const travaSolucao = !!edit && !isCurrentUserAdmin();
+  const optMotivos = STATE.motivosFaltaMaterial.map(function(m){ return '<option value="'+escapeAttr(m)+'" '+(motivoSel===m?"selected":"")+'>'+escapeHtml(m)+'</option>'; }).join("");
+  const optPessoas = STATE.pessoasErroEntrega.map(function(m){ return '<option value="'+escapeAttr(m)+'" '+(pessoaSel===m?"selected":"")+'>'+escapeHtml(m)+'</option>'; }).join("");
+  const args = "'"+(pedidoId||"")+"','"+(editId||"")+"'";
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>'+(edit?"Editar Pendência de Entrega":"Falta de Material na Entrega")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="border:1px solid var(--steel-border);border-radius:8px;padding:10px 12px;font-size:12.5px;line-height:1.6;margin-bottom:14px">'+
+          '<div><strong>OP</strong> '+escapeHtml(ref.op||"—")+' · <strong>Cliente</strong> '+escapeHtml(ref.cliente||"—")+'</div>'+
+          '<div style="color:'+COLORS.textMuted+'">'+escapeHtml(ref.material||"—")+' · '+fmtNum(ref.metragem)+' m</div>'+
+        '</div>'+
+        '<label class="field-label">Motivo (o que faltou) *</label>'+
+        '<select class="field-select" id="falta-motivo"><option value="">Selecione…</option>'+optMotivos+'</select>'+
+        '<div style="display:flex;gap:8px;margin-top:6px"><input class="field-input" id="falta-novo-motivo" placeholder="Novo motivo — ex.: Faltou parafuso"/>'+
+          '<button type="button" class="btn btn-ghost" onclick="addMotivoFaltaInline('+args+')">'+icon("plus",13)+' Cadastrar</button></div>'+
+        '<div style="margin-top:14px"><label class="field-label">Pessoa que errou *</label>'+
+        '<select class="field-select" id="falta-pessoa"><option value="">Selecione…</option>'+optPessoas+'</select>'+
+        '<div style="display:flex;gap:8px;margin-top:6px"><input class="field-input" id="falta-nova-pessoa" placeholder="Nome da pessoa"/>'+
+          '<button type="button" class="btn btn-ghost" onclick="addPessoaErroInline('+args+')">'+icon("plus",13)+' Cadastrar</button></div></div>'+
+        '<div style="margin-top:14px"><label class="field-label">Responsável por solucionar (login) *</label>'+
+          '<input class="field-input" id="falta-solucao" type="email" list="falta-solucao-lista" autocomplete="off" placeholder="ex.: almoxarifado@elevetelhasmetalicas.com.br" value="'+escapeAttr(solucaoAtual||"")+'" '+(travaSolucao?'readonly style="background:var(--panel-alt)"':'')+'/>'+
+          '<datalist id="falta-solucao-lista">'+emailsConhecidos().map(function(e){ return '<option value="'+escapeAttr(e)+'">'; }).join("")+'</datalist>'+
+          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:5px 0 0;line-height:1.4">'+(travaSolucao?'Somente um administrador pode trocar o responsável.':'Só este login poderá dar a pendência como concluída. A tela continua visível para todos.')+'</p></div>'+
+        '<div style="margin-top:14px"><label class="field-label">Observação</label>'+
+          '<textarea class="field-input" id="falta-obs" rows="2" placeholder="Detalhe o que faltou (opcional)">'+escapeHtml(obsAtual||"")+'</textarea></div>'+
+        (edit ? '' : '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O pedido sai da Prog. Entregas e vai para <strong>Pendências de Entrega</strong>, onde você informa a data prevista da nova entrega.</p>')+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn btn-primary" id="falta-confirmar" onclick="confirmarFaltaMaterial('+args+')">'+(edit?"Salvar":"Registrar falta de material")+'</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function faltaValoresAtuais(){
+  return {
+    motivo: (document.getElementById("falta-motivo")||{}).value||"",
+    pessoa: (document.getElementById("falta-pessoa")||{}).value||"",
+    obs: (document.getElementById("falta-obs")||{}).value||"",
+    solucao: ((document.getElementById("falta-solucao")||{}).value||"").trim().toLowerCase(),
+  };
+}
+async function addMotivoFaltaInline(pedidoId, editId){
+  const v = faltaValoresAtuais();
+  const val = ((document.getElementById("falta-novo-motivo")||{}).value||"").trim();
+  if(!val){ showToast("info","Digite o motivo antes de cadastrar."); return; }
+  if(STATE.motivosFaltaMaterial.indexOf(val)===-1){
+    STATE.motivosFaltaMaterial.push(val);
+    const ok = await configSet("motivos_falta_material", STATE.motivosFaltaMaterial);
+    if(!ok){ STATE.motivosFaltaMaterial.pop(); return; }
+    showToast("success","Motivo cadastrado.");
+  }
+  openFaltaMaterialModal(pedidoId, val, v.pessoa, v.obs, editId||undefined, v.solucao);
+}
+async function addPessoaErroInline(pedidoId, editId){
+  const v = faltaValoresAtuais();
+  const val = ((document.getElementById("falta-nova-pessoa")||{}).value||"").trim();
+  if(!val){ showToast("info","Digite o nome antes de cadastrar."); return; }
+  if(STATE.pessoasErroEntrega.indexOf(val)===-1){
+    STATE.pessoasErroEntrega.push(val);
+    const ok = await configSet("pessoas_erro_entrega", STATE.pessoasErroEntrega);
+    if(!ok){ STATE.pessoasErroEntrega.pop(); return; }
+    showToast("success","Pessoa cadastrada.");
+  }
+  openFaltaMaterialModal(pedidoId, v.motivo, val, v.obs, editId||undefined, v.solucao);
+}
+async function confirmarFaltaMaterial(pedidoId, editId){
+  const v = faltaValoresAtuais();
+  if(!v.motivo){ showToast("error","Escolha o motivo."); return; }
+  if(!v.pessoa){ showToast("error","Escolha a pessoa que errou."); return; }
+  if(!v.solucao){ showToast("error","Informe o login (e-mail) do responsável por solucionar."); return; }
+  if(!emailValido(v.solucao)){ showToast("error","Login do responsável inválido — informe o e-mail completo."); return; }
+  const btn = document.getElementById("falta-confirmar");
+  if(btn) btn.disabled = true;
+  if(editId){
+    const ok = await salvarPendencias(function(lista){
+      const x = lista.find(function(i){ return i.id===editId; });
+      if(x){ x.motivo = v.motivo; x.responsavel = v.pessoa; x.observacao = v.obs.trim(); if(isCurrentUserAdmin() || !x.responsavelSolucao) x.responsavelSolucao = v.solucao; }
+    });
+    if(btn) btn.disabled = false;
+    if(!ok) return;
+    closeModal(); renderScreen();
+    showToast("success","Pendência atualizada.");
+    return;
+  }
+  const p = STATE.pedidos.find(function(x){ return x.id===pedidoId; });
+  if(!p){ if(btn) btn.disabled = false; return; }
+  const rec = {
+    id: novaPendenciaId(), pedidoId: p.id, op: p.op||"", cliente: p.cliente||"", material: p.material||"",
+    metragem: Number(p.metragem||0), cidadeId: p.cidadeId||"",
+    motivo: v.motivo, responsavel: v.pessoa, observacao: v.obs.trim(), responsavelSolucao: v.solucao,
+    registradoEm: todayStr(), registradoEmISO: new Date().toISOString(), registradoPor: STATE.currentUserEmail||"",
+    dataPrevista: "", status: "aguardando", concluidoEm: "",
+  };
+  const ok = await salvarPendencias(function(lista){ lista.unshift(rec); });
+  if(btn) btn.disabled = false;
+  if(!ok) return;
+  closeModal();
+  showToast("success","Falta de material registrada — pedido enviado para Pendências de Entrega.");
+  if(telaPermitida("pendenciasEntrega")){
+    setScreen("pendenciasEntrega");
+    openDataPrevistaModal(rec.id);
+  } else {
+    renderScreen();
+  }
+}
+
+/* ---- Data prevista da nova entrega ---- */
+function openDataPrevistaModal(id){
+  const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; });
+  if(!x) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Data prevista da nova entrega</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="font-size:12.5px;line-height:1.6;margin-bottom:12px"><strong>OP</strong> '+escapeHtml(x.op||"—")+' · <strong>Cliente</strong> '+escapeHtml(x.cliente||"—")+
+          '<div style="color:'+COLORS.textMuted+'">Falta: '+escapeHtml(x.motivo||"—")+'</div></div>'+
+        '<label class="field-label">Data prevista *</label>'+
+        '<input class="field-input" type="date" id="pend-data-prevista" value="'+escapeAttr(x.dataPrevista||"")+'"/>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Depois</button>'+
+          '<button type="button" class="btn btn-primary" onclick="salvarDataPrevista(\''+id+'\')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function salvarDataPrevista(id){
+  const val = ((document.getElementById("pend-data-prevista")||{}).value||"").trim();
+  if(!val){ showToast("error","Informe a data prevista."); return; }
+  const ok = await salvarPendencias(function(lista){
+    const x = lista.find(function(i){ return i.id===id; });
+    if(x) x.dataPrevista = val;
+  });
+  if(!ok) return;
+  closeModal(); renderScreen();
+  showToast("success","Data prevista registrada: "+fmtDateBR(val)+".");
+}
+
+/* ---- Concluir: pedido vai para Pedidos Entregues, aqui fica a cópia "PEDIDO ENTREGUE" ---- */
+function avisoSoResponsavelConclui(x){
+  showToast("error","Somente o responsável ("+responsavelSolucaoDe(x)+") pode dar esta pendência como concluída.");
+}
+function confirmConcluirPendencia(id){
+  const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; });
+  if(!x) return;
+  if(!podeConcluirPendencia(x)){ avisoSoResponsavelConclui(x); return; }
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Concluir entrega</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Confirmar a entrega do material que faltou na OP <strong>'+escapeHtml(x.op||"—")+'</strong>? O pedido vai para <strong>Pedidos Entregues</strong> e esta pendência fica registrada aqui como "Pedido entregue".</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn btn-primary" onclick="concluirPendencia(\''+id+'\')">'+icon("checkCircle",14)+' Concluir entrega</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function concluirPendencia(id){
+  const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; });
+  if(!x) return;
+  closeModal();
+  if(!podeConcluirPendencia(x)){ avisoSoResponsavelConclui(x); return; }
+  let negado = false;
+  const ok = await salvarPendencias(function(lista){
+    const it = lista.find(function(i){ return i.id===id; });
+    /* Confere de novo na versão do banco (o responsável pode ter sido trocado por outro usuário). */
+    if(it && !podeConcluirPendencia(it)){ negado = true; return; }
+    if(it){ it.status = "entregue"; it.concluidoEm = todayStr(); it.concluidoPor = STATE.currentUserEmail||""; }
+  });
+  if(!ok) return;
+  if(negado){ avisoSoResponsavelConclui(x); renderScreen(); return; }
+  const p = STATE.pedidos.find(function(i){ return i.id===x.pedidoId; });
+  if(p && p.etapaAtual==="entrega"){
+    await concludeTimer(p.id);   // mesmo caminho do "Confirmar Entrega": vai para Pedidos Entregues
+  } else {
+    renderScreen();
+    showToast("success","Pendência concluída.");
+  }
+}
+function confirmExcluirPendencia(id){
+  const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; });
+  if(!x) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Excluir pendência</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Excluir a pendência da OP <strong>'+escapeHtml(x.op||"—")+'</strong>?'+
+          (x.status!=="entregue" ? ' O pedido volta para a Prog. Entregas.' : ' O pedido continua em Pedidos Entregues; só o registro da pendência sai do histórico.')+'</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn btn-danger" onclick="excluirPendencia(\''+id+'\')">Excluir</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function excluirPendencia(id){
+  const ok = await salvarPendencias(function(lista){
+    const i = lista.findIndex(function(x){ return x.id===id; });
+    if(i>=0) lista.splice(i,1);
+  });
+  closeModal();
+  if(!ok) return;
+  renderScreen();
+  showToast("info","Pendência excluída.");
+}
+
+/* ---- Cadastros: motivos e pessoas ---- */
+function openCadastroListaPendModal(tipo){
+  const ehMotivo = tipo==="motivos";
+  const lista = ehMotivo ? STATE.motivosFaltaMaterial : STATE.pessoasErroEntrega;
+  const campo = ehMotivo ? "motivo" : "responsavel";
+  const rows = lista.map(function(t,i){
+    const usos = (STATE.pendenciasEntrega||[]).filter(function(x){ return x[campo]===t; }).length;
+    return '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--steel-border)">'+
+      '<span style="font-size:13.5px">'+escapeHtml(t)+(usos?' <span style="font-size:10.5px;color:'+COLORS.textMuted+'">· '+usos+' uso(s)</span>':'')+'</span>'+
+      '<button type="button" class="icon-btn" title="Remover" onclick="removerItemListaPend(\''+tipo+'\','+i+')">'+icon("trash",13)+'</button>'+
+    '</div>';
+  }).join("");
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>'+(ehMotivo?"Motivos de Falta de Material":"Pessoas (responsáveis pelo erro)")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="margin-bottom:14px">'+(rows||'<p style="font-size:12.5px;color:'+COLORS.textMuted+'">Nenhum cadastro ainda.</p>')+'</div>'+
+        '<label class="field-label">'+(ehMotivo?"Novo motivo":"Nova pessoa")+'</label>'+
+        '<div style="display:flex;gap:8px"><input class="field-input" id="novo-item-lista-pend" placeholder="'+(ehMotivo?"Ex.: Faltou parafuso":"Nome")+'"/>'+
+        '<button type="button" class="btn btn-primary" onclick="adicionarItemListaPend(\''+tipo+'\')">Adicionar</button></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:12px 0 0;line-height:1.5">Remover daqui não altera as pendências já registradas.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal(); renderScreen();">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function adicionarItemListaPend(tipo){
+  const val = ((document.getElementById("novo-item-lista-pend")||{}).value||"").trim();
+  if(!val) return;
+  const lista = tipo==="motivos" ? STATE.motivosFaltaMaterial : STATE.pessoasErroEntrega;
+  if(lista.indexOf(val)===-1){
+    lista.push(val);
+    const ok = await configSet(tipo==="motivos" ? "motivos_falta_material" : "pessoas_erro_entrega", lista);
+    if(!ok){ lista.pop(); }
+  }
+  openCadastroListaPendModal(tipo);
+}
+async function removerItemListaPend(tipo, idx){
+  const lista = tipo==="motivos" ? STATE.motivosFaltaMaterial : STATE.pessoasErroEntrega;
+  const removido = lista[idx];
+  lista.splice(idx,1);
+  const ok = await configSet(tipo==="motivos" ? "motivos_falta_material" : "pessoas_erro_entrega", lista);
+  if(!ok) lista.splice(idx,0,removido);
+  openCadastroListaPendModal(tipo);
+}
+
+/* ---- Tela ---- */
+function updatePendenciasFiltro(key, val){ STATE.pendenciasFiltro[key]=val; renderScreen(); }
+function clearPendenciasFiltro(){ STATE.pendenciasFiltro = {mes:"",ano:String(new Date().getFullYear()),motivo:"",responsavel:"",status:"",cliente:"",op:""}; renderScreen(); }
+function filtrarPendencias(ignorarMes){
+  const f = STATE.pendenciasFiltro;
+  return (STATE.pendenciasEntrega||[]).filter(function(x){
+    const d = x.registradoEm||"";
+    if(f.ano && d.slice(0,4)!==f.ano) return false;
+    if(!ignorarMes && f.mes && d.slice(5,7)!==f.mes) return false;
+    if(f.motivo && x.motivo!==f.motivo) return false;
+    if(f.responsavel && x.responsavel!==f.responsavel) return false;
+    if(f.status==="aguardando" && x.status==="entregue") return false;
+    if(f.status==="entregue" && x.status!=="entregue") return false;
+    if(f.cliente && !(x.cliente||"").toLowerCase().includes(f.cliente.toLowerCase())) return false;
+    if(f.op && !(x.op||"").toLowerCase().includes(f.op.toLowerCase())) return false;
+    return true;
+  }).sort(function(a,b){
+    if((a.status==="entregue")!==(b.status==="entregue")) return a.status==="entregue" ? 1 : -1;   // aguardando primeiro
+    return (b.registradoEmISO||b.registradoEm||"").localeCompare(a.registradoEmISO||a.registradoEm||"");
+  });
+}
+function anosPendenciasDisponiveis(){
+  const anos = {};
+  (STATE.pendenciasEntrega||[]).forEach(function(x){ const a = (x.registradoEm||"").slice(0,4); if(a) anos[a] = true; });
+  anos[String(new Date().getFullYear())] = true;
+  return Object.keys(anos).sort().reverse();
+}
+/* Rosca simples (motivos) — mesmo visual da rosca do Dashboard, sem o clique de detalhe. */
+function pizzaMotivosHtml(itens){
+  const total = itens.reduce(function(s,i){ return s+i.valor; }, 0);
+  if(!total) return emptyStateHtml("Nenhuma pendência no período selecionado.");
+  const R = 92, r = 54, cx = 100, cy = 100;
+  let ang = -Math.PI/2;
+  const ponto = function(raio, a){ return [(cx+raio*Math.cos(a)).toFixed(2), (cy+raio*Math.sin(a)).toFixed(2)]; };
+  const fatias = itens.map(function(it){
+    const frac = it.valor/total, delta = frac*Math.PI*2, a0 = ang, a1 = ang+delta;
+    ang = a1;
+    const pctTxt = (frac*100).toFixed(1).replace(".",",")+"%";
+    const tip = '<title>'+escapeAttr(it.label+" — "+it.valor+" pedido(s) ("+pctTxt+")")+'</title>';
+    if(frac>=0.9999) return '<circle cx="'+cx+'" cy="'+cy+'" r="'+((R+r)/2)+'" fill="none" stroke="'+it.cor+'" stroke-width="'+(R-r)+'">'+tip+'</circle>';
+    const grande = delta>Math.PI ? 1 : 0;
+    const p1 = ponto(R,a0), p2 = ponto(R,a1), p3 = ponto(r,a1), p4 = ponto(r,a0);
+    const d = "M "+p1[0]+" "+p1[1]+" A "+R+" "+R+" 0 "+grande+" 1 "+p2[0]+" "+p2[1]+" L "+p3[0]+" "+p3[1]+" A "+r+" "+r+" 0 "+grande+" 0 "+p4[0]+" "+p4[1]+" Z";
+    const pr = ponto((R+r)/2, (a0+a1)/2);
+    const rot = frac>=0.06 ? '<text x="'+pr[0]+'" y="'+pr[1]+'" font-size="9.5" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff" style="pointer-events:none">'+pctTxt+'</text>' : '';
+    return '<path d="'+d+'" fill="'+it.cor+'">'+tip+'</path>'+rot;
+  }).join("");
+  const legenda = itens.map(function(it){
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:12px;padding:3px 5px">'+
+      '<span style="width:11px;height:11px;border-radius:3px;background:'+it.cor+';flex-shrink:0"></span>'+
+      '<span style="flex:1">'+escapeHtml(it.label)+'</span>'+
+      '<strong style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+((it.valor/total)*100).toFixed(1).replace(".",",")+'%</strong>'+
+      '<span style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;min-width:36px;text-align:right">'+it.valor+'</span>'+
+    '</div>';
+  }).join("");
+  return '<div class="pizza-wrap" style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">'+
+    '<svg class="pizza-svg" viewBox="0 0 200 200">'+fatias+
+      '<text x="'+cx+'" y="'+(cy-7)+'" font-size="10.5" text-anchor="middle" fill="'+COLORS.textMuted+'">Pedidos</text>'+
+      '<text x="'+cx+'" y="'+(cy+11)+'" font-size="15" font-weight="700" text-anchor="middle" fill="'+COLORS.text+'">'+total+'</text>'+
+    '</svg>'+
+    '<div class="pizza-legenda">'+legenda+'</div>'+
+  '</div>';
+}
+function renderPendenciasEntregaScreen(){
+  const f = STATE.pendenciasFiltro;
+  const lista = filtrarPendencias(false);
+  const aguardando = lista.filter(function(x){ return x.status!=="entregue"; });
+  const pedidosDistintos = {};
+  lista.forEach(function(x){ pedidosDistintos[x.pedidoId||x.id] = true; });
+  const lts = lista.map(leadTimePendencia).filter(function(d){ return d!==null; });
+  const ltMedio = lts.length ? Math.round((lts.reduce(function(s,d){ return s+d; },0)/lts.length)*10)/10 : null;
+  const admin = isCurrentUserAdmin();
+
+  /* Pizza dos motivos — respeita todos os filtros. */
+  const porMotivo = {};
+  lista.forEach(function(x){ const k = x.motivo||"Sem motivo"; porMotivo[k] = (porMotivo[k]||0)+1; });
+  const motivoItens = Object.keys(porMotivo).map(function(k){ return {label:k, valor:porMotivo[k]}; })
+    .sort(function(a,b){ return b.valor-a.valor; })
+    .map(function(it,i){ it.cor = PEND_CORES[i % PEND_CORES.length]; return it; });
+
+  /* Barras jan–dez do ano filtrado (demais filtros valem; o mês escolhido fica em destaque). */
+  const anoGrafico = f.ano || String(new Date().getFullYear());
+  const contMes = new Array(12).fill(0);
+  filtrarPendencias(true).forEach(function(x){
+    const d = x.registradoEm||"";
+    if(d.slice(0,4)!==anoGrafico) return;
+    const i = parseInt(d.slice(5,7),10)-1;
+    if(i>=0 && i<12) contMes[i]++;
+  });
+  const mesItens = MESES.map(function(nome,i){
+    return {label:nome.slice(0,3), value:contMes[i], cor: (f.mes && pad2(i+1)!==f.mes) ? COLORS.red+"55" : COLORS.red};
+  });
+  const totalAno = contMes.reduce(function(s,v){ return s+v; },0);
+
+  const rows = lista.map(function(x){
+    const lt = leadTimePendencia(x);
+    const atrasada = x.status!=="entregue" && x.dataPrevista && x.dataPrevista < todayStr();
+    const dataPrevHtml = x.dataPrevista
+      ? '<span style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;'+(atrasada?'color:'+COLORS.red+';font-weight:700':'')+'" '+(atrasada?'title="Data prevista já passou"':'')+'>'+fmtDateBR(x.dataPrevista)+(atrasada?' '+icon("alert",11,COLORS.red):'')+'</span>'
+      : (x.status!=="entregue" ? '<button class="btn btn-ghost" style="padding:3px 8px;font-size:11px;color:'+COLORS.red+'" onclick="openDataPrevistaModal(\''+x.id+'\')">'+icon("calendar",11)+' Informar</button>' : '<span style="color:'+COLORS.textMuted+'">—</span>');
+    const acoes =
+      (x.status!=="entregue"
+        ? (podeConcluirPendencia(x)
+            ? '<button class="icon-btn" title="Concluir entrega — envia o pedido para Pedidos Entregues" style="color:'+COLORS.green+';border-color:'+COLORS.green+'88" onclick="confirmConcluirPendencia(\''+x.id+'\')">'+icon("checkCircle",13)+'</button>'
+            : '<button class="icon-btn" title="Somente '+escapeAttr(responsavelSolucaoDe(x))+' pode concluir" style="opacity:.35;cursor:not-allowed" onclick="avisoSoResponsavelConclui((STATE.pendenciasEntrega||[]).find(function(i){return i.id===\''+x.id+'\';}))">'+icon("checkCircle",13)+'</button>')+
+          '<button class="icon-btn" title="Data prevista da nova entrega" onclick="openDataPrevistaModal(\''+x.id+'\')">'+icon("calendar",13)+'</button>'
+        : '')+
+      '<button class="icon-btn" title="Editar motivo / pessoa / observação" onclick="openFaltaMaterialModal(\''+(x.pedidoId||"")+'\', undefined, undefined, undefined, \''+x.id+'\')">'+icon("edit",13)+'</button>'+
+      (admin ? '<button class="icon-btn" title="Excluir pendência" onclick="confirmExcluirPendencia(\''+x.id+'\')">'+icon("trash",13)+'</button>' : '');
+    return '<tr data-pend-id="'+escapeAttr(x.id)+'">'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+fmtDateBR(x.registradoEm)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(x.op||"—")+'</td>'+
+      '<td>'+escapeHtml(x.cliente||"—")+'</td>'+
+      '<td>'+escapeHtml(x.motivo||"—")+(x.observacao?' <span title="'+escapeAttr(x.observacao)+'" style="cursor:help;display:inline-block;vertical-align:middle">'+icon("fileText",11,COLORS.textMuted)+'</span>':'')+'</td>'+
+      '<td>'+escapeHtml(x.responsavel||"—")+'</td>'+
+      '<td style="font-size:12px;'+(responsavelSolucaoDe(x)===emailAtualNormalizado()?'color:'+COLORS.brand+';font-weight:700':'')+'">'+(responsavelSolucaoDe(x) ? escapeHtml(responsavelSolucaoDe(x)) : '<span style="color:'+COLORS.textMuted+'">—</span>')+'</td>'+
+      '<td>'+dataPrevHtml+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;color:'+COLORS.red+';font-weight:700" title="Dias úteis desde o registro da falta'+(x.status==="entregue"?" até a entrega":" até hoje")+'">'+leadTimeLabel(lt)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+(x.concluidoEm?fmtDateBR(x.concluidoEm):'<span style="color:'+COLORS.textMuted+'">—</span>')+'</td>'+
+      '<td>'+pendStatusBadge(x)+'</td>'+
+      '<td class="no-print"><div style="display:flex;gap:6px;justify-content:flex-end">'+acoes+'</div></td>'+
+    '</tr>';
+  }).join("");
+  const table = lista.length===0
+    ? emptyStateHtml("Nenhuma pendência de entrega com os filtros atuais.")
+    : '<table class="pcp-table"><thead><tr><th>Registrado em</th><th>OP</th><th>Cliente</th><th>Motivo</th><th>Pessoa que errou</th><th>Responsável p/ solucionar</th><th>Data prevista</th><th>Lead Time</th><th>Entregue em</th><th>Status</th><th class="no-print" style="width:150px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+
+  const motivosUsados = {}, pessoasUsadas = {};
+  (STATE.pendenciasEntrega||[]).forEach(function(x){ if(x.motivo) motivosUsados[x.motivo] = true; if(x.responsavel) pessoasUsadas[x.responsavel] = true; });
+  STATE.motivosFaltaMaterial.forEach(function(m){ motivosUsados[m] = true; });
+  STATE.pessoasErroEntrega.forEach(function(m){ pessoasUsadas[m] = true; });
+  const optsDe = function(obj, sel){ return Object.keys(obj).sort().map(function(m){ return '<option value="'+escapeAttr(m)+'" '+(sel===m?"selected":"")+'>'+escapeHtml(m)+'</option>'; }).join(""); };
+
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("alert","Pendências de Entrega","Pedidos entregues com falta de material — aguardando a nova entrega",
+      '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+        '<button class="btn btn-ghost" onclick="openCadastroListaPendModal(\'motivos\')">'+icon("settings",14)+' Motivos</button>'+
+        '<button class="btn btn-ghost" onclick="openCadastroListaPendModal(\'pessoas\')">'+icon("users",14)+' Pessoas</button>'+
+      '</div>')+
+    '<div class="stat-row">'+
+      statCardHtml("Pedidos com Pendência", Object.keys(pedidosDistintos).length, "alert", Object.keys(pedidosDistintos).length?COLORS.red:COLORS.textMuted)+
+      statCardHtml("Aguardando Entrega", aguardando.length, "clock", aguardando.length?COLORS.red:COLORS.textMuted)+
+      statCardHtml("Lead Time Médio (dias úteis)", leadTimeLabel(ltMedio), "clock", COLORS.red)+
+    '</div>'+
+    '<div class="pcp-card filter-bar">'+
+      '<div style="min-width:140px"><label class="field-label">Mês</label><select class="field-select" onchange="updatePendenciasFiltro(\'mes\', this.value)"><option value="">Todos</option>'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(f.mes===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+      '<div style="width:120px"><label class="field-label">Ano</label><select class="field-select" onchange="updatePendenciasFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
+        anosPendenciasDisponiveis().map(function(a){ return '<option value="'+a+'" '+(f.ano===a?"selected":"")+'>'+a+'</option>'; }).join("")+'</select></div>'+
+      '<div style="min-width:170px"><label class="field-label">Motivo</label><select class="field-select" onchange="updatePendenciasFiltro(\'motivo\', this.value)"><option value="">Todos</option>'+optsDe(motivosUsados, f.motivo)+'</select></div>'+
+      '<div style="min-width:170px"><label class="field-label">Pessoa</label><select class="field-select" onchange="updatePendenciasFiltro(\'responsavel\', this.value)"><option value="">Todas</option>'+optsDe(pessoasUsadas, f.responsavel)+'</select></div>'+
+      '<div style="min-width:150px"><label class="field-label">Status</label><select class="field-select" onchange="updatePendenciasFiltro(\'status\', this.value)"><option value="">Todos</option>'+
+        '<option value="aguardando" '+(f.status==="aguardando"?"selected":"")+'>Aguardando</option><option value="entregue" '+(f.status==="entregue"?"selected":"")+'>Pedido entregue</option></select></div>'+
+      '<div style="min-width:160px"><label class="field-label">Cliente</label><input class="field-input" value="'+escapeAttr(f.cliente)+'" placeholder="Buscar cliente…" onchange="updatePendenciasFiltro(\'cliente\', this.value)"/></div>'+
+      '<div style="width:110px"><label class="field-label">OP</label><input class="field-input" value="'+escapeAttr(f.op)+'" placeholder="Nº pedido" onchange="updatePendenciasFiltro(\'op\', this.value)"/></div>'+
+      '<button class="btn btn-ghost" onclick="clearPendenciasFiltro()">Limpar filtros</button>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px,1fr));gap:16px;margin-bottom:16px">'+
+      '<div class="pcp-card"><div class="preview-title">Motivos das Pendências</div>'+pizzaMotivosHtml(motivoItens)+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px">'+lista.length+' pendência(s) nos filtros acima.</div></div>'+
+      '<div class="pcp-card"><div class="preview-title">Pedidos com Pendência por Mês — '+escapeHtml(anoGrafico)+'</div>'+
+        (totalAno ? categoryBarChartHtml(mesItens, COLORS.red, "pedido(s)", true) : emptyStateHtml("Nenhuma pendência em "+escapeHtml(anoGrafico)+"."))+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px">'+totalAno+' pedido(s) com pendência no ano'+(f.mes?' · mês filtrado em destaque':'')+'.</div></div>'+
+    '</div>'+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+
+/* ---- Aviso ao abrir o sistema: lembra todos das pendências aguardando. Só fecha pelo botão. ---- */
+function fecharAvisoPendenciasEntrega(){ const el = document.getElementById("aviso-pendencias-root"); if(el) el.remove(); }
+/* Fechar o aviso (ou clicar num pedido dele) leva para a tela Pendências de Entrega.
+   Clicando num pedido, a linha dele fica destacada na tela. */
+function irParaPendenciasDoAviso(pendId){
+  fecharAvisoPendenciasEntrega();
+  if(!telaPermitida("pendenciasEntrega")) return;
+  setScreen("pendenciasEntrega");
+  if(!pendId) return;
+  setTimeout(function(){
+    const tr = document.querySelector('#content tr[data-pend-id="'+pendId+'"]');
+    if(!tr) return;
+    tr.scrollIntoView({block:"center", behavior:"smooth"});
+    tr.classList.add("pend-destaque");
+    setTimeout(function(){ tr.classList.remove("pend-destaque"); }, 2600);
+  }, 60);
+}
+function mostrarAvisoPendenciasEntrega(){
+  const abertas = (STATE.pendenciasEntrega||[]).filter(function(x){ return x.status!=="entregue"; })
+    .sort(function(a,b){ return (a.registradoEm||"").localeCompare(b.registradoEm||""); });
+  if(abertas.length===0) return;
+  fecharAvisoPendenciasEntrega();
+  const hoje = todayStr();
+  const linhas = abertas.map(function(x){
+    const lt = leadTimePendencia(x);
+    const atrasada = x.dataPrevista && x.dataPrevista < hoje;
+    return '<tr style="cursor:pointer" title="Abrir em Pendências de Entrega" onclick="irParaPendenciasDoAviso(\''+x.id+'\')">'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(x.op||"—")+'</td>'+
+      '<td>'+escapeHtml(x.cliente||"—")+'</td>'+
+      '<td>'+escapeHtml(x.motivo||"—")+'</td>'+
+      '<td style="font-size:12px">'+escapeHtml(responsavelSolucaoDe(x)||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;'+(atrasada||!x.dataPrevista?'color:'+COLORS.red+';font-weight:700':'')+'">'+(x.dataPrevista?fmtDateBR(x.dataPrevista):"sem data")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;color:'+COLORS.red+';font-weight:700">'+leadTimeLabel(lt)+'</td>'+
+    '</tr>';
+  }).join("");
+  const el = document.createElement("div");
+  el.id = "aviso-pendencias-root";
+  el.innerHTML =
+    '<div class="modal-overlay" style="z-index:10000;background:rgba(0,0,0,.55)">'+
+      '<div class="modal-card" style="max-width:680px;max-height:85vh;display:flex;flex-direction:column;border-top:3px solid '+COLORS.red+'">'+
+        '<div class="modal-header" style="margin-bottom:6px"><h3 style="color:'+COLORS.red+'">'+icon("truck",17)+' Aviso de entrega — '+(abertas.length===1?"1 pedido aguardando":abertas.length+" pedidos aguardando")+'</h3></div>'+
+        '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 12px;line-height:1.5">Pedidos entregues com falta de material que ainda aguardam a nova entrega. Clique em um pedido para abri-lo na tela Pendências de Entrega.</p>'+
+        '<div style="overflow:auto;flex:1"><table class="pcp-table"><thead><tr><th>OP</th><th>Cliente</th><th>Motivo</th><th>Responsável</th><th>Data prevista</th><th>Lead Time</th></tr></thead><tbody>'+linhas+'</tbody></table></div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-primary" onclick="irParaPendenciasDoAviso()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.body.appendChild(el);
 }
 
 /* ============================== PEDIDOS ENTREGUES ============================== */
@@ -9089,7 +9954,7 @@ function notaItemRowHtml(item){
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
       '<select class="field-select nota-item-material" onchange="onNotaItemMaterialChange(this)" style="flex:1">'+
         '<option value="">Selecione o material…</option>'+
-        STATE.materiais.map(m=>'<option value="'+m.id+'" '+(m.id===materialId?"selected":"")+' data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'" data-fator-kg="'+fatorVigenteDoMaterial(m.id)+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+'</option>').join("")+
+        STATE.materiais.map(m=>'<option value="'+m.id+'" '+(m.id===materialId?"selected":"")+' data-unidade="'+escapeAttr(m.unidade)+'" data-valor="'+m.valorUnitario+'" data-fator-kg="'+fatorVigenteDoMaterial(m.id)+'">'+escapeHtml(m.nome)+' ('+m.tipo+') — lote mín. '+fmtNum(m.loteMinimo||0)+' '+m.unidade+sufixoInativo(m)+'</option>').join("")+
       '</select>'+
       '<button type="button" class="icon-btn" onclick="this.closest(\'.nota-item-row\').remove()">'+icon("x",14)+'</button>'+
     '</div>'+
@@ -9157,6 +10022,8 @@ async function submitNotaForm(event, editId){
     if(materialId && quantidade>0) itens.push({materialId, quantidade, unidade, valorUnitario, kgTotais, custoPorKg});
   });
   if(itens.length===0) return false;
+  const notaAntes = editId ? STATE.notas.find(function(n){ return n.id===editId; }) : null;
+  if(!checarMateriaisAtivos(itens.map(function(it){ return it.materialId; }), notaAntes ? (notaAntes.itens||[]).map(function(it){ return it.materialId; }) : [])) return false;
   const ok = editId ? await updateNota(editId, {data, fornecedor, numeroNota, itens}) : await addNota({data, fornecedor, numeroNota, itens});
   if(ok===false) return false;
   closeModal();
@@ -10515,6 +11382,7 @@ const NAV_GROUPS = [
     {id:"prog-pintura", label:"Prog. Pintura", icon:"droplet"},
     {id:"prog-colagem", label:"Prog. Coladeira", icon:"layers"},
     {id:"prog-entrega", label:"Prog. Entregas", icon:"truck"},
+    {id:"pendenciasEntrega", label:"Pendências de Entrega", icon:"alert"},
     {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
     {id:"pedidosCancelados", label:"Pedidos Cancelados", icon:"xCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
@@ -10777,6 +11645,7 @@ function coletarDadosBackup(){
       fatorConversaoHistorico: STATE.fatorConversaoHistorico,
       materiaisAvulsos: STATE.materiaisAvulsos,
       pedidosCancelados: STATE.pedidosCancelados,
+      pendenciasEntrega: STATE.pendenciasEntrega,
     },
     configuracoes: {
       materialTipos: STATE.materialTipos,
@@ -10796,6 +11665,9 @@ function coletarDadosBackup(){
       pedidosRegional: STATE.pedidosRegional,
       fatoresKgTelha: STATE.fatoresKgTelha,
       recados: STATE.recados,
+      materiaisInativos: STATE.materiaisInativosIds,
+      motivosFaltaMaterial: STATE.motivosFaltaMaterial,
+      pessoasErroEntrega: STATE.pessoasErroEntrega,
     },
   };
 }
@@ -10973,6 +11845,7 @@ function renderScreen(){
   else if(STATE.screen==="prog-pintura") renderStageScreen("pintura");
   else if(STATE.screen==="prog-colagem") renderStageScreen("colagem");
   else if(STATE.screen==="prog-entrega") renderStageScreen("entrega");
+  else if(STATE.screen==="pendenciasEntrega") renderPendenciasEntregaScreen();
   else if(STATE.screen==="entregues") renderEntreguesScreen();
   else if(STATE.screen==="pedidosCancelados") renderPedidosCanceladosScreen();
   else if(STATE.screen==="calendario") renderCalendarioScreen();
@@ -11000,7 +11873,9 @@ function renderScreen(){
   else if(STATE.screen==="backup") renderBackupScreen();
   iniciarObservadorFiltros();
   aprimorarFiltrosDaTela(false);
+  aprimorarSelectsProduto();
   aplicarBotaoExpandirTela();
+  agendarBarraHorizontal();
 }
 function showLoginError(msg){
   const el = document.getElementById("login-error");
@@ -11026,6 +11901,7 @@ async function enterApp(userName){
   renderScreen();
   /* Recados pendentes aparecem ao abrir; o Realtime cuida dos que chegarem depois. */
   mostrarPopupRecados();
+  mostrarAvisoPendenciasEntrega();
   iniciarRealtimeRecados();
   executarBackupAutomaticoSeNecessario();
 }
@@ -11053,6 +11929,8 @@ async function handleLogin(event){
   return false;
 }
 async function handleLogout(){
+  fecharAvisoPendenciasEntrega();
+  { const hb = document.getElementById("hscroll-float"); if(hb) hb.style.display = "none"; }
   pararRealtimeRecados();
   await sb.auth.signOut();
   STATE.loggedIn = false;

@@ -62,7 +62,7 @@ button,input,select{font-family:'Inter',sans-serif;}
 .chart-col{flex:1 1 0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;height:100%;position:relative;}
 .chart-bar{width:78%;border-radius:3px 3px 0 0;min-height:1px;transition:height .2s;}
 .chart-days{display:flex;gap:2px;margin-top:5px;padding:0 2px;}
-.chart-day{flex:1 1 0;text-align:center;font-size:8.5px;color:var(--text-muted);font-family:'IBM Plex Mono',monospace;}
+.chart-day{flex:1 1 0;text-align:center;font-size:calc(10.5px * var(--rot,1));color:var(--text-muted);font-family:'IBM Plex Mono',monospace;}
 .chart-day-clickable{cursor:pointer;border-radius:3px;padding:1px 0;}
 .chart-day-clickable:hover{color:var(--brand);background:var(--brand)15;}
 .chart-day-obs-dot{display:block;width:4px;height:4px;border-radius:50%;margin:2px auto 0;}
@@ -355,6 +355,7 @@ button,input,select{font-family:'Inter',sans-serif;}
    Fica oculto na tela o tempo todo e só é exibido dentro do @media print, quando o body
    está com a classe print-escopo-telhas. */
 .telhas-print-header{display:none !important;}
+.dash-graficos-print-header{display:none !important;}
 @media print{
   @page { size: landscape; margin: 8mm; }
   body *{visibility:hidden;}
@@ -413,6 +414,20 @@ button,input,select{font-family:'Inter',sans-serif;}
 
   /* Produto cortado na Perfiladeira — PDF só desse bloco. A classe entra no body pelo
      printTelhasComo() e sai no afterprint, então nenhuma outra tela é afetada. */
+  /* Gráficos de Cidade/Cor/EPS/Cancelamentos do Dashboard — PDF só desse bloco. */
+  body.print-escopo-dashgraf #content > *{display:none !important;}
+  body.print-escopo-dashgraf #dash-graficos-print-area{display:block !important;}
+  body.print-escopo-dashgraf .dash-graficos-print-header{display:flex !important;align-items:center;gap:14px;
+    border-bottom:2px solid #333;padding-bottom:8px;margin-bottom:10px;}
+  body.print-escopo-dashgraf .dash-graficos-print-header img{height:28px;width:auto;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .filter-bar{display:none !important;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .pcp-card{padding:8px !important;page-break-inside:avoid;break-inside:avoid;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .chart-wrap,
+  body.print-escopo-dashgraf #dash-graficos-print-area .chart-days{min-width:0 !important;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .chart-col,
+  body.print-escopo-dashgraf #dash-graficos-print-area .chart-days > div{min-width:0 !important;flex:1 1 0 !important;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .chart-wrap{height:150px !important;}
+  body.print-escopo-dashgraf #dash-graficos-print-area .pizza-svg{max-width:170px !important;}
   body.print-escopo-telhas #content > *{display:none !important;}
   body.print-escopo-telhas #telhas-print-area{display:block !important;}
   body.print-escopo-telhas .telhas-print-header{display:flex !important;align-items:center;gap:14px;
@@ -1593,6 +1608,43 @@ function barListHtml(items){
   }).join('');
 }
 /* Gráfico de barras verticais para comparar categorias (cidade, cor, tipo de EPS, etc). */
+/* ---- Tamanho dos rótulos dos gráficos (Dashboard e Acompanhamento da Produção) ----
+   Cada tela guarda a própria escala neste navegador. Os rótulos usam
+   calc(Npx * var(--rot)), e --rot é definido em #content a cada renderScreen(). */
+const ROT_ESCALAS = [0.85, 1, 1.25, 1.5, 1.75, 2];
+function rf(px){ return "calc("+px+"px * var(--rot,1))"; }
+function rotEscalaDe(tela){
+  if(!STATE.rotEscala){
+    try{ STATE.rotEscala = JSON.parse(window.localStorage.getItem("eleve_rot_escala")||"{}") || {}; }
+    catch(e){ STATE.rotEscala = {}; }
+  }
+  const v = Number(STATE.rotEscala[tela]);
+  return v>0 ? v : 1;
+}
+function setRotEscala(tela, v){
+  rotEscalaDe(tela);
+  STATE.rotEscala[tela] = Number(v)||1;
+  try{ window.localStorage.setItem("eleve_rot_escala", JSON.stringify(STATE.rotEscala)); }catch(e){}
+  renderScreen();
+}
+function passoRotEscala(tela, dir){
+  const atual = rotEscalaDe(tela);
+  let i = ROT_ESCALAS.indexOf(atual);
+  if(i<0) i = 1;
+  i = Math.max(0, Math.min(ROT_ESCALAS.length-1, i+dir));
+  setRotEscala(tela, ROT_ESCALAS[i]);
+}
+function rotuloControleHtml(tela){
+  const atual = rotEscalaDe(tela);
+  return '<div class="sort-control no-print" title="Tamanho dos rótulos de todos os gráficos desta tela">'+
+    '<label>Rótulos</label>'+
+    '<button type="button" class="icon-btn" title="Diminuir rótulos" onclick="passoRotEscala(\''+tela+'\',-1)" style="font-weight:700;font-size:12px;padding:4px 8px">A−</button>'+
+    '<select onchange="setRotEscala(\''+tela+'\', this.value)">'+
+      ROT_ESCALAS.map(function(v){ return '<option value="'+v+'" '+(v===atual?"selected":"")+'>'+Math.round(v*100)+'%</option>'; }).join("")+
+    '</select>'+
+    '<button type="button" class="icon-btn" title="Aumentar rótulos" onclick="passoRotEscala(\''+tela+'\',1)" style="font-weight:700;font-size:14px;padding:3px 8px">A+</button>'+
+  '</div>';
+}
 function categoryBarChartHtml(items, cor, unidade, inteiros){
   unidade = (unidade===undefined || unidade===null) ? "m" : unidade;
   /* inteiros=true para séries de contagem (ex.: nº de pedidos), que não fazem sentido
@@ -1600,24 +1652,27 @@ function categoryBarChartHtml(items, cor, unidade, inteiros){
   const fmtVal = inteiros ? fmtNumCard : fmtNum;
   if(!items.length) return emptyStateHtml("Sem dados para o filtro selecionado.");
   const maxVal = Math.max.apply(null, items.map(function(i){ return i.value; }).concat([1]));
-  const escala = maxVal * 1.15;
-  const colWidth = 42;
+  const escala = maxVal * 1.22;
+  /* Colunas crescem com o tamanho do rótulo, para o nome caber em até 2 linhas.
+     Com poucas categorias, as colunas se esticam e ocupam o card inteiro. */
+  const esc = rotEscalaDe(STATE.screen);
+  const colWidth = Math.round(58 * Math.max(1, esc*0.9));
+  const colStyle = 'flex:1 0 '+colWidth+'px;min-width:'+colWidth+'px';
   const bars = items.map(function(it){
     const alturaPct = escala>0 ? Math.min(100, (it.value/escala)*100) : 0;
     const tip = (it.label||"")+" — "+fmtVal(it.value)+(unidade?" "+unidade:"");
-    return '<div class="chart-col" style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px" title="'+escapeAttr(tip)+'">'+
-      (it.value>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(it.value)+'</div>' : '')+
-      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(it.cor||cor)+'"></div>'+
+    return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
+      (it.value>0 ? '<div style="font-size:'+rf(11)+';font-weight:700;color:'+COLORS.text+';margin-bottom:3px;white-space:nowrap">'+fmtNumCard(it.value)+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;max-width:64px;background:'+(it.cor||cor)+'"></div>'+
     '</div>';
   }).join('');
   const labels = items.map(function(it){
-    const txt = (it.label||"").length>11 ? (it.label||"").slice(0,10)+"…" : (it.label||"");
-    return '<div style="min-width:'+colWidth+'px;flex:0 0 '+colWidth+'px;text-align:center;font-size:9px;color:'+COLORS.textMuted+';white-space:nowrap;overflow:hidden" title="'+escapeAttr(it.label||"")+'">'+escapeHtml(txt)+'</div>';
+    return '<div style="'+colStyle+';text-align:center;font-size:'+rf(10.5)+';line-height:1.25;color:'+COLORS.textMuted+';overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word;padding:0 2px" title="'+escapeAttr(it.label||"")+'">'+escapeHtml(it.label||"")+'</div>';
   }).join('');
   const totalWidth = items.length*colWidth;
   return '<div style="overflow-x:auto">'+
     '<div class="chart-wrap" style="min-width:'+totalWidth+'px">'+bars+'</div>'+
-    '<div class="chart-days" style="min-width:'+totalWidth+'px">'+labels+'</div>'+
+    '<div class="chart-days" style="min-width:'+totalWidth+'px;align-items:flex-start">'+labels+'</div>'+
   '</div>';
 }
 
@@ -7731,11 +7786,11 @@ function pizzaMotivosHtml(itens){
     const p1 = ponto(R,a0), p2 = ponto(R,a1), p3 = ponto(r,a1), p4 = ponto(r,a0);
     const d = "M "+p1[0]+" "+p1[1]+" A "+R+" "+R+" 0 "+grande+" 1 "+p2[0]+" "+p2[1]+" L "+p3[0]+" "+p3[1]+" A "+r+" "+r+" 0 "+grande+" 0 "+p4[0]+" "+p4[1]+" Z";
     const pr = ponto((R+r)/2, (a0+a1)/2);
-    const rot = frac>=0.06 ? '<text x="'+pr[0]+'" y="'+pr[1]+'" font-size="9.5" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff" style="pointer-events:none">'+pctTxt+'</text>' : '';
+    const rot = frac>=0.06 ? '<text x="'+pr[0]+'" y="'+pr[1]+'" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff" style="pointer-events:none;font-size:'+rf(9.5)+'">'+pctTxt+'</text>' : '';
     return '<path d="'+d+'" fill="'+it.cor+'">'+tip+'</path>'+rot;
   }).join("");
   const legenda = itens.map(function(it){
-    return '<div style="display:flex;align-items:center;gap:7px;font-size:12px;padding:3px 5px">'+
+    return '<div style="display:flex;align-items:center;gap:7px;font-size:'+rf(12.5)+';padding:3px 5px">'+
       '<span style="width:11px;height:11px;border-radius:3px;background:'+it.cor+';flex-shrink:0"></span>'+
       '<span style="flex:1">'+escapeHtml(it.label)+'</span>'+
       '<strong style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+((it.valor/total)*100).toFixed(1).replace(".",",")+'%</strong>'+
@@ -8827,12 +8882,12 @@ function pizzaChartHtml(itens, total){
     const meio = (a0+a1)/2;
     const pRot = ponto((R+r)/2, meio);
     const rotulo = frac>=0.06
-      ? '<text x="'+pRot[0]+'" y="'+pRot[1]+'" font-size="9.5" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff" style="pointer-events:none">'+it.pct.toFixed(1).replace(".",",")+'%</text>'
+      ? '<text x="'+pRot[0]+'" y="'+pRot[1]+'" font-weight="700" text-anchor="middle" dominant-baseline="middle" fill="#fff" style="pointer-events:none;font-size:'+rf(9.5)+'">'+it.pct.toFixed(1).replace(".",",")+'%</text>'
       : '';
     return '<path d="'+d+'" fill="'+preenche+'" class="pizza-fatia" onclick="openTelhasDetalheModal(\''+it.chave+'\')"><title>'+escapeAttr(it.label+" — "+fmtNum(it.valor)+" m ("+it.pct.toFixed(1).replace(".",",")+"%)")+'</title></path>'+rotulo;
   }).join("");
   const legenda = comValor.map(function(it){
-    return '<div class="pizza-legenda-item" onclick="openTelhasDetalheModal(\''+it.chave+'\')" title="'+escapeAttr("Ver os lançamentos de "+it.label)+'" style="display:flex;align-items:center;gap:7px;font-size:12px;padding:3px 5px;border-radius:5px;cursor:pointer">'+
+    return '<div class="pizza-legenda-item" onclick="openTelhasDetalheModal(\''+it.chave+'\')" title="'+escapeAttr("Ver os lançamentos de "+it.label)+'" style="display:flex;align-items:center;gap:7px;font-size:'+rf(12.5)+';padding:3px 5px;border-radius:5px;cursor:pointer">'+
       '<span style="width:11px;height:11px;border-radius:3px;background:linear-gradient(180deg,'+clarearHex(it.cor,0.42)+','+it.cor+');flex-shrink:0"></span>'+
       '<span style="flex:1">'+escapeHtml(it.label)+'</span>'+
       '<strong style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+it.pct.toFixed(1).replace(".",",")+'%</strong>'+
@@ -9134,7 +9189,7 @@ function telhasBarrasKgHtml(){
   /* A linha de média é desenhada sobre as barras, na mesma escala. */
   const linhaMedia = (media>0 && escala>0)
     ? '<div style="position:absolute;left:0;right:0;bottom:'+Math.min(99,(media/escala)*100)+'%;border-top:2px dashed '+COLORS.red+';pointer-events:none">'+
-        '<span style="position:absolute;left:2px;bottom:2px;font-size:8.5px;font-weight:700;color:'+COLORS.red+';background:var(--panel);padding:0 3px">média '+fmtKg(media)+'</span>'+
+        '<span style="position:absolute;left:2px;bottom:2px;font-size:'+rf(10)+';font-weight:700;color:'+COLORS.red+';background:var(--panel);padding:0 3px">média '+fmtKg(media)+'</span>'+
       '</div>'
     : '';
   const barras = visiveis.length
@@ -9143,7 +9198,7 @@ function telhasBarrasKgHtml(){
         const alturaPct = escala>0 ? Math.min(100,(v/escala)*100) : 0;
         const tip = MESES[i]+"/"+cfg.ano+" — "+fmtKg(v)+" kg · "+fmtNum(dados.metros[i])+" m"+(dados.qtd[i]?(" · "+dados.qtd[i]+" pedido(s)"):"");
         return '<div class="chart-col" title="'+escapeAttr(tip)+'">'+
-          (v>0 ? '<div style="font-size:8.5px;font-weight:700;color:'+cor+';margin-bottom:2px;white-space:nowrap">'+Math.round(v).toLocaleString("pt-BR")+'</div>' : '')+
+          (v>0 ? '<div style="font-size:'+rf(11)+';font-weight:700;color:'+cor+';margin-bottom:3px;white-space:nowrap">'+Math.round(v).toLocaleString("pt-BR")+'</div>' : '')+
           '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(v===0?"var(--steel-border)":"linear-gradient(180deg,"+clarearHex(cor,0.42)+" 0%,"+cor+" 100%)")+'"></div>'+
         '</div>';
       }).join("")
@@ -9196,37 +9251,8 @@ function renderDashboardScreen(){
      programada) — contado pela data em que o Perfilar foi de fato concluído, com fallback pra
      Data Prog. em pedidos concluídos antes dessa funcionalidade existir. */
   const pedidosFiltrados = pedidosDashboardFiltrados();
-  const pedidosConcluidosIds = new Set(pedidosFiltrados.map(p=>p.id));
-  const baixasFiltradas = getEfetivaBaixaRows().filter(r=>matchesDateFilters(r.data, f) && pedidosConcluidosIds.has(r.pedidoId));
-
-  const porCidade = {};
-  pedidosFiltrados.forEach(p=>{ if(!p.cidadeId) return; porCidade[p.cidadeId] = (porCidade[p.cidadeId]||0) + Number(p.metragem||0); });
-  const cidadeItems = Object.keys(porCidade).map(cid=>{
-    const c = STATE.cidades.find(x=>x.id===cid);
-    return {label: c?c.nome:"?", value: porCidade[cid]};
-  }).sort((a,b)=>b.value-a.value);
-
-  const porCor = {};
-  baixasFiltradas.forEach(r=>{
-    const mat = STATE.materiais.find(m=>m.id===r.materialId);
-    if(!mat || mat.tipo!=="Bobina") return;
-    porCor[r.materialId] = (porCor[r.materialId]||0) + r.quantidade;
-  });
-  const corItems = Object.keys(porCor).map(mid=>{
-    const m = STATE.materiais.find(x=>x.id===mid);
-    return {label: m?m.nome:"?", value: porCor[mid]};
-  }).sort((a,b)=>b.value-a.value);
-
-  const porEps = {};
-  baixasFiltradas.forEach(r=>{
-    const mat = STATE.materiais.find(m=>m.id===r.materialId);
-    if(!mat || mat.tipo!=="EPS") return;
-    porEps[r.materialId] = (porEps[r.materialId]||0) + r.quantidade;
-  });
-  const epsItems = Object.keys(porEps).map(mid=>{
-    const m = STATE.materiais.find(x=>x.id===mid);
-    return {label: m?m.nome:"?", value: porEps[mid]};
-  }).sort((a,b)=>b.value-a.value);
+  const _graf = dashGraficosDados(f, pedidosFiltrados);
+  const cidadeItems = _graf.cidade, corItems = _graf.cor, epsItems = _graf.eps;
 
   const totalMetragem = pedidosFiltrados.reduce((s,p)=>s+Number(p.metragem||0),0);
 
@@ -9284,7 +9310,7 @@ function renderDashboardScreen(){
   const tot = dashTotais(f);
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("barChart","Dashboard","Metas do período, compras, entregas e produção por cidade, cor e tipo de EPS")+
+    screenHeaderHtml("barChart","Dashboard","Metas do período, compras, entregas e produção por cidade, cor e tipo de EPS", rotuloControleHtml("dashboard"))+
     gaugesHtml+
     '<div class="stat-row">'+
       toggleStatCardHtml("bobinasCompradas","Bobinas Compradas", tot.bobinasCompradas, "package", COLORS.brand)+
@@ -9299,6 +9325,21 @@ function renderDashboardScreen(){
     '</div>'+
     telhasDashboardHtml()+
     dashLeadTimeCardHtml(f)+
+    '<div id="dash-graficos-print-area">'+
+    '<div class="dash-graficos-print-header">'+
+      '<img src="data:image/png;base64,'+LOGO_LIGHT_BG_B64+'" alt="ELEVE"/>'+
+      '<div style="flex:1"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:15px;font-weight:700">Dashboard — Produção e Cancelamentos</div>'+
+        '<div style="font-size:10.5px">'+escapeHtml(dashFiltroDescricao(f))+'</div></div>'+
+      '<div style="font-size:10px;text-align:right">Emitido em '+fmtDateBR(todayStr())+'</div>'+
+    '</div>'+
+    '<div class="no-print" style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 0 10px">'+
+      '<div class="preview-title" style="margin:0">Produção por cidade, cor, EPS e cancelamentos</div>'+
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">'+
+        '<button class="btn" onclick="printDashGraficosComo(\'landscape\')" title="PDF só destes gráficos, em paisagem">'+icon("printer",13)+' PDF Paisagem</button>'+
+        '<button class="btn" onclick="printDashGraficosComo(\'portrait\')" title="PDF só destes gráficos, em retrato">'+icon("printer",13)+' PDF Retrato</button>'+
+        '<button class="btn" onclick="exportarDashGraficosExcel()" title="Planilha com os números de todos estes gráficos (.csv, abre no Excel)">'+icon("package",13)+' Excel</button>'+
+      '</div>'+
+    '</div>'+
     '<div class="pcp-card filter-bar">'+
       '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashFiltro(\'ano\', this.value)"><option value="">Todos</option>'+
         anos.map(y=>'<option value="'+y+'" '+(f.ano===y?"selected":"")+'>'+y+'</option>').join("")+'</select></div>'+
@@ -9314,25 +9355,133 @@ function renderDashboardScreen(){
       '<div class="pcp-card"><div class="preview-title">Quantidade por Cor — Bobinas (m)</div>'+categoryBarChartHtml(corItems, COLORS.green)+'</div>'+
       '<div class="pcp-card"><div class="preview-title">Quantidade por Tipo de EPS (m)</div>'+categoryBarChartHtml(epsItems, "#C98A00")+'</div>'+
     '</div>'+
-    canceladosDashboardHtml(f);
+    canceladosDashboardHtml(f)+
+    '</div>';
+}
+function dashFiltroDescricao(f){
+  if(f.dia) return "Dia "+fmtDateBR(f.dia);
+  if(f.dIni || f.dFim) return "Período "+(f.dIni?fmtDateBR(f.dIni):"…")+" a "+(f.dFim?fmtDateBR(f.dFim):"…");
+  if(f.mes && f.ano) return MESES[Number(f.mes)-1]+" de "+f.ano;
+  if(f.ano) return "Ano de "+f.ano;
+  if(f.mes) return MESES[Number(f.mes)-1]+" (todos os anos)";
+  return "Todo o período";
+}
+function printDashGraficosComo(orientacao){
+  document.body.classList.add("print-escopo-dashgraf");
+  const limparEscopo = function(){
+    document.body.classList.remove("print-escopo-dashgraf");
+    window.removeEventListener("afterprint", limparEscopo);
+  };
+  window.addEventListener("afterprint", limparEscopo);
+  printTelaComo(orientacao);
+}
+function exportarDashGraficosExcel(){
+  const f = STATE.dashFiltro;
+  const d = dashGraficosDados(f);
+  const periodo = dashFiltroDescricao(f);
+  const head = ["Gráfico","Período","Categoria","Valor","Unidade"];
+  const body = [];
+  const add = function(graf, per, itens, unidade, inteiro){
+    if(!itens.length){ body.push([graf, per, "(sem dados)", "", unidade]); return; }
+    itens.forEach(function(it){ body.push([graf, per, it.label, inteiro ? String(Math.round(it.value)) : csvNum(it.value), unidade]); });
+  };
+  add("Produção por Cidade", periodo, d.cidade, "m");
+  add("Quantidade por Cor — Bobinas", periodo, d.cor, "m");
+  add("Quantidade por Tipo de EPS", periodo, d.eps, "m");
+  const ano = cancelAnoGrafico(f);
+  const serie = canceladosPorMes(ano);
+  MESES.forEach(function(nome,i){
+    body.push(["Pedidos Cancelados por Mês", String(ano), nome, String(serie.contagem[i]), "pedido(s)"]);
+    body.push(["Metragem Cancelada por Mês", String(ano), nome, csvNum(serie.metragem[i]), "m"]);
+  });
+  const perMot = cancelMotivoPeriodo(f);
+  const mot = canceladosPorMotivo(perMot.filtro);
+  const totMot = mot.reduce(function(s,i){ return s+i.value; }, 0);
+  const perTxt = perMot.desc.replace(/^em |^no /,"");
+  if(!mot.length) body.push(["Motivos de Cancelamento", perTxt, "(sem dados)", "", "pedido(s)"]);
+  mot.forEach(function(it){
+    body.push(["Motivos de Cancelamento", perTxt, it.label, String(it.value), "pedido(s)"]);
+    body.push(["Motivos de Cancelamento (%)", perTxt, it.label, csvNum(totMot ? it.value/totMot*100 : 0), "%"]);
+  });
+  baixarCsv("dashboard-graficos-"+todayStr()+".csv", head, body);
 }
 /* Bloco de cancelamentos do dashboard: um gráfico de pedidos cancelados mês a mês
    (ano inteiro, para a comparação fazer sentido) e outro com a distribuição dos motivos,
    este sim respeitando o período escolhido nos filtros da tela. */
+/* Dados dos gráficos de Cidade / Cor / EPS do Dashboard — usados na tela e no Excel. */
+function dashGraficosDados(f, pedidosFiltrados){
+  pedidosFiltrados = pedidosFiltrados || pedidosDashboardFiltrados();
+  const pedidosConcluidosIds = new Set(pedidosFiltrados.map(p=>p.id));
+  const baixasFiltradas = getEfetivaBaixaRows().filter(r=>matchesDateFilters(r.data, f) && pedidosConcluidosIds.has(r.pedidoId));
+
+  const porCidade = {};
+  pedidosFiltrados.forEach(p=>{ if(!p.cidadeId) return; porCidade[p.cidadeId] = (porCidade[p.cidadeId]||0) + Number(p.metragem||0); });
+  const cidadeItems = Object.keys(porCidade).map(cid=>{
+    const c = STATE.cidades.find(x=>x.id===cid);
+    return {label: c?c.nome:"?", value: porCidade[cid]};
+  }).sort((a,b)=>b.value-a.value);
+
+  const porCor = {};
+  baixasFiltradas.forEach(r=>{
+    const mat = STATE.materiais.find(m=>m.id===r.materialId);
+    if(!mat || mat.tipo!=="Bobina") return;
+    porCor[r.materialId] = (porCor[r.materialId]||0) + r.quantidade;
+  });
+  const corItems = Object.keys(porCor).map(mid=>{
+    const m = STATE.materiais.find(x=>x.id===mid);
+    return {label: m?m.nome:"?", value: porCor[mid]};
+  }).sort((a,b)=>b.value-a.value);
+
+  const porEps = {};
+  baixasFiltradas.forEach(r=>{
+    const mat = STATE.materiais.find(m=>m.id===r.materialId);
+    if(!mat || mat.tipo!=="EPS") return;
+    porEps[r.materialId] = (porEps[r.materialId]||0) + r.quantidade;
+  });
+  const epsItems = Object.keys(porEps).map(mid=>{
+    const m = STATE.materiais.find(x=>x.id===mid);
+    return {label: m?m.nome:"?", value: porEps[mid]};
+  }).sort((a,b)=>b.value-a.value);
+
+  return {cidade:cidadeItems, cor:corItems, eps:epsItems};
+}
+/* Período do gráfico de Motivos de Cancelamento (padrão: ano inteiro). */
+function cancelAnoGrafico(f){
+  return f.ano || (f.dIni ? f.dIni.slice(0,4) : "") || (f.dia ? f.dia.slice(0,4) : "") || String(new Date().getFullYear());
+}
+function cancelMotivoPeriodo(f){
+  const anoGrafico = cancelAnoGrafico(f);
+  const baseMot = STATE.dashCancelMotivoBase || "ano";
+  if(baseMot==="filtros") return {base:baseMot, filtro:f, desc:"no período dos filtros acima"};
+  if(/^\d{2}$/.test(baseMot)) return {base:baseMot, filtro:{ano:String(anoGrafico), mes:baseMot}, desc:"em "+MESES[Number(baseMot)-1]+"/"+anoGrafico};
+  return {base:"ano", filtro:{ano:String(anoGrafico)}, desc:"em "+anoGrafico};
+}
+const CANCEL_MOTIVO_CORES = ["#C98A00","#E2574C","#0080C6","#2F9E5B","#8B5FBF","#2FA6A6","#E67E22","#6C8EBF","#7A9E3B","#D6457A"];
 function canceladosDashboardHtml(f){
-  const anoGrafico = f.ano || (f.dIni ? f.dIni.slice(0,4) : "") || (f.dia ? f.dia.slice(0,4) : "") || String(new Date().getFullYear());
+  const anoGrafico = cancelAnoGrafico(f);
   const serie = canceladosPorMes(anoGrafico);
   const mesItems = MESES.map(function(nome,i){ return {label:nome.slice(0,3), value:serie.contagem[i]}; });
   const totalAno = serie.contagem.reduce(function(s,v){ return s+v; }, 0);
   const metragemAno = serie.metragem.reduce(function(s,v){ return s+v; }, 0);
-  const motivoItems = canceladosPorMotivo(f);
+  /* Antes usava o filtro de período da tela, que abre no mês atual — como os
+     cancelamentos eram de outros meses, o gráfico aparecia sempre vazio. Agora o
+     padrão é o ano inteiro (o mesmo do gráfico mensal ao lado); dá pra escolher um
+     mês específico ou voltar ao período dos filtros. */
+  const perMot = cancelMotivoPeriodo(f);
+  const baseMot = perMot.base, descMot = perMot.desc;
+  const motivoItems = canceladosPorMotivo(perMot.filtro);
+  const selMot = '<select class="field-select no-print" style="width:auto;padding:4px 8px;font-size:12px" onchange="STATE.dashCancelMotivoBase=this.value;renderScreen()">'+
+      '<option value="ano" '+(baseMot==="ano"?"selected":"")+'>Ano inteiro ('+anoGrafico+')</option>'+
+      MESES.map(function(nome,i){ const v=pad2(i+1); return '<option value="'+v+'" '+(baseMot===v?"selected":"")+'>'+nome+'/'+anoGrafico+(serie.contagem[i]?' ('+serie.contagem[i]+')':'')+'</option>'; }).join("")+
+      '<option value="filtros" '+(baseMot==="filtros"?"selected":"")+'>Período dos filtros</option>'+
+    '</select>';
   const totalMotivos = motivoItems.reduce(function(s,i){ return s+i.value; }, 0);
   const vazioAno = totalAno===0
     ? emptyStateHtml("Nenhum pedido cancelado em "+anoGrafico+".")
     : categoryBarChartHtml(mesItems, COLORS.red, "pedido(s)", true);
   const vazioMotivos = motivoItems.length===0
-    ? emptyStateHtml("Nenhum pedido cancelado no período selecionado.")
-    : categoryBarChartHtml(motivoItems, "#C98A00", "pedido(s)", true);
+    ? emptyStateHtml("Nenhum pedido cancelado "+descMot+".")
+    : pizzaMotivosHtml(motivoItems.map(function(it,i){ return {label:it.label, valor:it.value, cor:CANCEL_MOTIVO_CORES[i % CANCEL_MOTIVO_CORES.length]}; }));
   return '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px,1fr));gap:16px;margin-top:16px">'+
       '<div class="pcp-card">'+
         '<div class="preview-title">Pedidos Cancelados por Mês — '+escapeHtml(String(anoGrafico))+'</div>'+
@@ -9340,9 +9489,9 @@ function canceladosDashboardHtml(f){
         '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+totalAno+' pedido(s) · '+fmtNumCard(metragemAno)+' m cancelados no ano. O gráfico mostra o ano inteiro, independente do filtro de mês.</div>'+
       '</div>'+
       '<div class="pcp-card">'+
-        '<div class="preview-title">Motivos de Cancelamento</div>'+
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px"><div class="preview-title" style="margin:0">Motivos de Cancelamento</div>'+selMot+'</div>'+
         vazioMotivos+
-        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+totalMotivos+' pedido(s) cancelado(s) no período dos filtros acima.</div>'+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:10px;line-height:1.5">'+totalMotivos+' pedido(s) cancelado(s) '+descMot+'.</div>'+
       '</div>'+
     '</div>';
 }
@@ -10680,7 +10829,7 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes){
     const valor = maxValor*f;
     const y = yFor(valor);
     return '<line x1="'+padX+'" y1="'+y.toFixed(1)+'" x2="'+(W-padX)+'" y2="'+y.toFixed(1)+'" stroke="'+COLORS.steelBorder+'" stroke-width="1" stroke-dasharray="4,4"/>'+
-      '<text x="'+(W-padX-4)+'" y="'+(y-3).toFixed(1)+'" font-size="12" text-anchor="end" fill="'+COLORS.textMuted+'">'+Math.round(valor)+'</text>';
+      '<text x="'+(W-padX-4)+'" y="'+(y-3).toFixed(1)+'" text-anchor="end" fill="'+COLORS.textMuted+'" style="font-size:'+rf(12)+'">'+Math.round(valor)+'</text>';
   }).join('');
   const diaRef = diaReferenciaAteHoje(ano, mes, maxDia);
   const hojeLineHtml = (diaRef>0 && diaRef<=maxDia)
@@ -10704,7 +10853,7 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes){
       '<polyline points="'+realPts+'" fill="none" stroke="'+cor+'" stroke-width="3"/>'+
       metaCircles+realCircles+
     '</svg>'+
-    '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
+    '<div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px;font-size:'+rf(12)+';color:'+COLORS.textMuted+'">'+
       '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta Acumulada (dias úteis)</div>'+
       '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;height:3px;background:'+cor+';display:inline-block;border-radius:2px"></span> Real Acumulado</div>'+
       (hojeLineHtml ? '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.brand+'"></span> Hoje</div>' : '')+
@@ -10717,13 +10866,13 @@ function chartGridlinesHtml(escala){
   return [0.25,0.5,0.75,1].map(function(f){
     const valor = Math.round(escala*f);
     return '<div style="position:absolute;left:0;right:0;bottom:'+(f*100)+'%;border-top:1px dashed '+COLORS.steelBorder+';pointer-events:none">'+
-      '<span style="position:absolute;right:2px;bottom:2px;font-size:8px;color:'+COLORS.textMuted+';background:var(--panel);padding:0 3px;line-height:1.4">'+valor+'</span>'+
+      '<span style="position:absolute;right:2px;bottom:2px;font-size:'+rf(10)+';color:'+COLORS.textMuted+';background:var(--panel);padding:0 3px;line-height:1.4">'+valor+'</span>'+
     '</div>';
   }).join('');
 }
 /* Legenda de cores do gráfico de barras "por dia". */
 function chartBarLegendHtml(cor){
-  return '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:'+COLORS.textMuted+'">'+
+  return '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-top:8px;font-size:'+rf(11.5)+';color:'+COLORS.textMuted+'">'+
     '<div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+cor+';display:inline-block"></span> Produção do dia</div>'+
     '<div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+COLORS.green+';display:inline-block"></span> Meta batida</div>'+
     '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta do dia</div>'+
@@ -10772,7 +10921,7 @@ function producaoChartHtml(stage, titulo, iconName, cor){
       : '';
     const tip = "Dia "+diaStr+(isHoje?" (hoje)":"")+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
     return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
-      (v>0 ? '<div style="font-size:8px;color:'+COLORS.textMuted+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
+      (v>0 ? '<div style="font-size:'+rf(10.5)+';font-weight:700;color:'+COLORS.text+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
       metaTick+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
     '</div>';
@@ -10884,7 +11033,7 @@ function acumuladoAnualChartHtml(meses, pedidosMes, cor, ano){
     const colStyle = isAtual ? "background:"+COLORS.brand+"1F;border-radius:5px 5px 0 0;box-shadow:inset 0 0 0 1px "+COLORS.brand+"55" : "";
     const tip = MESES[i]+"/"+ano+(isAtual?" (mês atual, ainda em andamento)":"")+" — "+fmtNum(v)+" m"+((pedidosMes&&pedidosMes[i])?(" · "+pedidosMes[i]+" pedido(s)"):"");
     return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
-      (v>0 ? '<div class="chart-bar-label" style="font-size:9.5px;font-weight:700;color:'+cor+';margin-bottom:3px;white-space:nowrap">'+fmtNum(Math.round(v))+'</div>' : '')+
+      (v>0 ? '<div class="chart-bar-label" style="font-size:'+rf(12)+';font-weight:700;color:'+cor+';margin-bottom:3px;white-space:nowrap">'+fmtNum(Math.round(v))+'</div>' : '')+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(v===0?"var(--steel-border)":cor)+';opacity:'+(futuro?0.35:1)+'"></div>'+
     '</div>';
   }).join("");
@@ -10928,7 +11077,8 @@ function renderAcompanhamentoScreen(){
   const anos = Array.from(new Set(anosPedidos.concat([String(new Date().getFullYear())]))).sort();
   const anoAcum = f.anoAcum || String(new Date().getFullYear());
   const anosAcum = Array.from(new Set(anos.concat([anoAcum]))).sort();
-  const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
+  const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
+    rotuloControleHtml("acompanhamento")+
     '<button class="btn" onclick="printTelaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
     '<button class="btn" onclick="printTelaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
   '</div>';
@@ -11833,6 +11983,8 @@ function renderSidebar(){
     '<button class="pcp-sidebar-btn" onclick="handleLogout()">'+icon("logout",16)+' Sair</button>';
 }
 function renderScreen(){
+  { const c = document.getElementById("content");
+    if(c) c.style.setProperty("--rot", (STATE.screen==="dashboard"||STATE.screen==="acompanhamento") ? rotEscalaDe(STATE.screen) : 1); }
   if(typeof fecharMenuColuna==="function" && document.getElementById("col-menu")) fecharMenuColuna();
   invalidateMovTotais();
   invalidarCacheFeriados();

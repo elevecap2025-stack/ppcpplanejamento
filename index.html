@@ -368,6 +368,7 @@ button,input,select{font-family:'Inter',sans-serif;}
   .pcp-table{font-size:9px;}
   .pcp-table th{padding:3px 5px;font-size:7.5px;color:#000;border-color:#999;}
   .pcp-table td{padding:3px 5px;color:#000;border-color:#ddd;line-height:1.25;}
+  .pcp-table td.col-cola-fator, .pcp-table td.col-cola-fator span{color:#D1493E !important;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
   .row-atencao td{background:#FFDD66 !important;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important;}
   .atencao-flag-icon{display:inline-flex !important;}
   .stat-value,.screen-title{color:#000 !important;}
@@ -603,6 +604,12 @@ const DEFAULT_CONFIG_VALUES = {
      19.872,60 m × 3,750 kg/m = 74.522,25 kg.
      Editável na tela pelo botão "Fator kg" do bloco "Produto cortado na Perfiladeira". */
   fatores_kg_telha: {"0,35":3.450, "0,43":3.750, "0,50":4.410, "0,65":5.9, "pintada":3.8},
+  /* Fator Consumo de Cola: kg de cola por metro colado, por tipo de produto (mesma lista de
+     produtos do Fator Produção Perfilar). */
+  fatores_consumo_cola: {},
+  /* Cola por pedido: {id: {kg, fator, metros, previsto, atualizadoEm, atualizadoPor}}.
+     kg = cola usada, lançada à mão na Prog. Coladeira; previsto = metros × fator (gravado). */
+  pedidos_cola: {},
   tipo_options: ["Simples","Colonial","Colonial Simples","Sanduíche","Semi-Sanduíche","Bandeja"],
   cumeeira_options: ["-","Cumeeira","Acabamento","Cumeeira/Acab","Cantoneira/Canaleta"],
   metas_perfilar: [800,800,800,800,800,400],
@@ -1690,7 +1697,7 @@ const STAGE_DEFS = {
 function defaultStageFilterState(){
   return {
     weekStart:"", dIni:"", dFim:"", maquinaId:"", cidadeId:"", corSupId:"", corInfId:"", epsId:"", material:"", motoristaId:"", op:"",
-    colunasVisiveis:{dataProg:true,cliente:true,op:true,opImpressa:true,situacao:true,material:true,corSup:true,corInf:true,eps:true,metragem:true,cidade:true,motorista:true},
+    colunasVisiveis:{dataProg:true,cliente:true,op:true,opImpressa:true,situacao:true,material:true,corSup:true,corInf:true,eps:true,metragem:true,colaPrevista:true,colaKg:true,cidade:true,motorista:true},
     diasVisiveis:[true,true,true,true,true,true],
     metas:[800,800,800,800,800,400],
   };
@@ -1808,6 +1815,9 @@ const STATE = {
   pedidosRegional:{},
   /* Item: {"0,43":3.75, ...} — metros × fator = kg, por tipo de telha. */
   fatoresKgTelha:{},
+  fatoresConsumoCola:{},
+  pedidosCola:{},
+  dashColaAno:String(new Date().getFullYear()),
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   /* Matérias-primas inativas (ids) — ver materialInativo(). */
   materiaisInativosIds:[],
@@ -1911,6 +1921,9 @@ async function loadAllData(){
   STATE.pedidosRegional = (pedidosRegional && typeof pedidosRegional==="object") ? pedidosRegional : {};
   STATE.fatoresKgTelha = Object.assign({}, DEFAULT_CONFIG_VALUES.fatores_kg_telha,
     (fatoresKgTelha && typeof fatoresKgTelha==="object") ? fatoresKgTelha : {});
+  const [fatoresConsumoCola, pedidosColaCfg] = await Promise.all([configGet("fatores_consumo_cola"), configGet("pedidos_cola")]);
+  STATE.fatoresConsumoCola = (fatoresConsumoCola && typeof fatoresConsumoCola==="object") ? fatoresConsumoCola : {};
+  STATE.pedidosCola = (pedidosColaCfg && typeof pedidosColaCfg==="object") ? pedidosColaCfg : {};
   const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega] = await Promise.all([
     configGet("materiais_inativos"), configGet("pendencias_entrega"), configGet("motivos_falta_material"), configGet("pessoas_erro_entrega"),
   ]);
@@ -4278,6 +4291,7 @@ async function deletePedido(id){
   if(STATE.pedidosEquipamentoInf[id]) await syncEquipamentoInfAposSalvar(id, "");
   if(STATE.pedidosProducaoInf[id]) await resetTimerInf(id);
   if(STATE.pedidosObservacoes[id]) await syncObservacaoAposSalvar(id, "");
+  if(STATE.pedidosCola[id]) await removerColaDoPedido(id);
   showToast("info","Pedido removido e estoque estornado.");
 }
 async function reschedulePedido(id, newDate){
@@ -4419,6 +4433,7 @@ async function concludeTimer(id){
     await registrarDataConclusaoEtapa(id, fromStage, todayStr());
   }
   if(fromStage==="perfilar") await finalizarTimerInfNaConclusao(id);
+  if(fromStage==="colagem") await registrarColaNaConclusao(id);
   await adjustStock(oldSnapshot, p);
   renderScreen();
 }
@@ -4938,13 +4953,15 @@ const PEDIDO_COLUMNS = [
   {key:"dataProg", label:"Prog."}, {key:"cliente", label:"Cliente"}, {key:"op", label:"OP"},
   {key:"opImpressa", label:"OP impressa"},
   {key:"situacao", label:"Situação"}, {key:"material", label:"Material"}, {key:"corSup", label:"Cor Sup."},
-  {key:"corInf", label:"Cor Inf."}, {key:"eps", label:"EPS"}, {key:"metragem", label:"Metragem"}, {key:"cidade", label:"Cidade"},
+  {key:"corInf", label:"Cor Inf."}, {key:"eps", label:"EPS"}, {key:"metragem", label:"Metragem"},
+  {key:"colaPrevista", label:"Fator de cola (m)"}, {key:"colaKg", label:"Cola usada (m)"},
+  {key:"cidade", label:"Cidade"},
   {key:"regional", label:"Regional"},
   {key:"motorista", label:"Motorista"}, {key:"leadTime", label:"Lead Time"},
 ];
 /* Colunas exclusivas das telas de programação (não aparecem na tela/PDF/classificação de
    Lançamentos). "OP impressa" só faz sentido na Prog. Perfiladeira. */
-const PEDIDO_COLUNAS_STAGE_ONLY = ["opImpressa"];
+const PEDIDO_COLUNAS_STAGE_ONLY = ["opImpressa","colaKg","colaPrevista"];
 function colunasLancamento(){ return PEDIDO_COLUMNS.filter(function(c){ return PEDIDO_COLUNAS_STAGE_ONLY.indexOf(c.key)<0; }); }
 const PEDIDO_SORT_ACCESSORS = {
   dataProg: p=>p.dataProg||"",
@@ -4986,6 +5003,21 @@ function pedidoCellHtml(key, p, opts){
     }
     case "cliente": return '<td>'+(pedidoEhRetirada(p)?'<span class="retirada-badge" title="Cliente retira o pedido — não precisa de motorista">'+icon("package",10)+' RETIRA</span>':"")+escapeHtml(p.cliente||"—")+'</td>';
     case "op": return '<td style="font-family:\'IBM Plex Mono\',monospace">'+escapeHtml(p.op||"—")+(observacaoDoPedido(p)?' <span title="'+escapeAttr(observacaoDoPedido(p))+'" style="cursor:help;display:inline-block;vertical-align:middle">'+icon("fileText",11,COLORS.textMuted)+'</span>':'')+'</td>';
+    case "colaKg": {
+      const kg = colaKgDoPedido(p);
+      return '<td><span class="no-print"><input class="field-input" type="number" step="0.01" min="0" draggable="false" placeholder="m" '+
+        'title="Cola usada neste pedido (m) — Enter ou Tab para salvar" '+
+        'style="width:100px;padding:5px 7px;font-size:12.5px;font-family:\'IBM Plex Mono\',monospace" value="'+(kg===null?"":kg)+'" '+
+        'onmousedown="event.stopPropagation()" onclick="event.stopPropagation()" ondragstart="event.preventDefault();event.stopPropagation()" '+
+        'onkeydown="if(event.key===\'Enter\') this.blur();" onchange="salvarColaKgPedido(\''+p.id+'\', this.value)"/></span>'+
+        '<span class="print-only">'+(kg===null?"—":fmtNum(kg)+" m")+'</span></td>';
+    }
+    case "colaPrevista": {
+      const cp = colaPrevistaDoPedido(p);
+      if(!(cp.fator>0)) return '<td class="col-cola-fator"><span style="color:'+COLORS.red+';font-size:12px" title="Sem fator cadastrado para o tipo \''+escapeAttr(p.tipo||"—")+'\' em Fator Consumo de Cola">sem fator</span></td>';
+      const tip = fmtNum(cp.metros)+" m × "+fmtFatorCola(cp.fator)+" m/kg = "+fmtNum(cp.valor)+" m"+(cp.gravado?" (gravado)":"");
+      return '<td class="col-cola-fator" style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;color:'+COLORS.red+';font-weight:600" title="'+escapeAttr(tip)+'">'+fmtNum(cp.valor)+' m</td>';
+    }
     case "opImpressa": {
       const imp = pedidoOpImpressa(p);
       return '<td style="text-align:center"><button type="button" title="'+(imp?"OP impressa — clique para desmarcar":"Marcar OP como impressa")+'" onclick="toggleOpImpressaPedido(\''+p.id+'\')" style="background:transparent;border:none;cursor:pointer;padding:4px;display:inline-flex;align-items:center;justify-content:center">'+flagOpImpressaHtml(imp)+'</button></td>';
@@ -5931,6 +5963,7 @@ function colDisponiveis(ctx){
   return PEDIDO_COLUMNS.map(function(c){ return c.key; }).filter(function(k){
     if(k==="motorista") return ctx==="entrega" || ctx==="entregues";
     if(k==="opImpressa") return ctx==="perfilar";
+    if(k==="colaKg" || k==="colaPrevista") return ctx==="colagem";
     return true;
   });
 }
@@ -5969,13 +6002,19 @@ function colCfg(ctx){
     Object.keys(salvo.visiveis).forEach(function(k){ visiveis[k] = !!salvo.visiveis[k]; });
   }
   if(colEhStage(ctx)) visiveis.dataProg = true;
+  let migrouCola = false;
+  if(!salvo.colaOrdemV2){
+    const iK = ordem.indexOf("colaKg"), iP = ordem.indexOf("colaPrevista");
+    if(iK>=0 && iP>=0 && iK<iP){ ordem.splice(iP,1); ordem.splice(iK,0,"colaPrevista"); migrouCola = true; }
+  }
   STATE.colCfg[ctx] = {ordem:ordem, visiveis:visiveis};
+  if(migrouCola) salvarColCfg(ctx);
   return STATE.colCfg[ctx];
 }
 function salvarColCfg(ctx){
   const cfg = colCfg(ctx);
   const todos = colCfgSalvo();
-  todos[ctx] = {ordem:cfg.ordem.slice(), visiveis:Object.assign({}, cfg.visiveis)};
+  todos[ctx] = {ordem:cfg.ordem.slice(), visiveis:Object.assign({}, cfg.visiveis), colaOrdemV2:true};
   try{ window.localStorage.setItem(COL_CFG_STORAGE, JSON.stringify(todos)); }catch(err){}
 }
 function colunasVisiveisOrdenadas(ctx){
@@ -5995,6 +6034,8 @@ function colValorTexto(key, p){
     case "cliente": v = p.cliente||""; break;
     case "op": v = p.op||""; break;
     case "opImpressa": v = pedidoOpImpressa(p) ? "Impressa" : "Não impressa"; break;
+    case "colaKg": { const kg = colaKgDoPedido(p); v = kg===null ? "" : fmtNum(kg)+" m"; break; }
+    case "colaPrevista": { const cp = colaPrevistaDoPedido(p); v = cp.fator>0 ? fmtNum(cp.valor)+" m" : ""; break; }
     case "situacao": { const st = STATE.statusOptions.find(function(x){ return x.id===p.situacaoId; }); v = st ? st.nome : ""; break; }
     case "material": v = p.material||""; break;
     case "corSup": v = colNomeMaterial(p.corSupId); break;
@@ -6012,6 +6053,8 @@ function colValorTexto(key, p){
 function colValorOrdem(key, p){
   if(key==="dataProg") return p.dataProg || "";
   if(key==="metragem") return Number(p.metragem||0);
+  if(key==="colaKg"){ const kg = colaKgDoPedido(p); return kg===null ? -1 : kg; }
+  if(key==="colaPrevista") return colaPrevistaDoPedido(p).valor;
   if(key==="leadTime"){ const d = leadTimeDias(p); return d===null ? -1 : d; }
   return colValorTexto(key, p).toLowerCase();
 }
@@ -9356,6 +9399,7 @@ function renderDashboardScreen(){
       '<div class="pcp-card"><div class="preview-title">Quantidade por Tipo de EPS (m)</div>'+categoryBarChartHtml(epsItems, "#C98A00")+'</div>'+
     '</div>'+
     canceladosDashboardHtml(f)+
+    colaDashboardHtml()+
     '</div>';
 }
 function dashFiltroDescricao(f){
@@ -10644,6 +10688,204 @@ function renderFatorProducaoPerfilarScreen(){
 }
 
 
+/* ============================== CONSUMO DE COLA ==============================
+   Fator Consumo de Cola: kg de cola por metro colado, por tipo de produto (mesma lista de
+   produtos usada no Fator Produção Perfilar). Na Prog. Coladeira cada pedido ganha:
+   - "Cola usada (kg)": lançada à mão;
+   - "Fator de cola (kg)": total de metros do pedido × fator de consumo do tipo.
+   Os dois ficam gravados em app_config → "pedidos_cola" (sem coluna nova no Supabase).
+   Enquanto o pedido está na Coladeira o fator de cola acompanha o fator e a metragem atuais e
+   é regravado a cada lançamento de kg; ao concluir a Colagem o valor fica congelado, para uma
+   mudança de fator no futuro não reescrever o histórico. */
+function fatorConsumoColaPara(tipo){
+  if(!tipo) return 0;
+  const alvo = normTipoStr(tipo);
+  const mapa = STATE.fatoresConsumoCola || {};
+  const chave = Object.keys(mapa).find(function(k){ return normTipoStr(k)===alvo; });
+  const val = chave ? Number(mapa[chave]) : 0;
+  return val>0 ? val : 0;
+}
+function fmtFatorCola(n){ return Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:4}); }
+function colaKgDoPedido(p){
+  const rec = p && STATE.pedidosCola[p.id];
+  if(!rec || rec.kg===null || rec.kg===undefined || rec.kg==="") return null;
+  const v = Number(rec.kg);
+  return isNaN(v) ? null : v;
+}
+function colaPrevistaAtual(p){
+  const metros = Number(p.metragem||0);
+  const fator = fatorConsumoColaPara(p.tipo);
+  return {metros:metros, fator:fator, valor:Math.round(metros*fator*100)/100};
+}
+function colaPrevistaDoPedido(p){
+  const rec = STATE.pedidosCola[p.id];
+  if(rec && rec.previsto!=null && stageConcluido(p,"colagem")){
+    return {metros:Number(rec.metros||0), fator:Number(rec.fator||0), valor:Number(rec.previsto||0), gravado:true};
+  }
+  const a = colaPrevistaAtual(p);
+  a.gravado = !!(rec && rec.previsto!=null);
+  return a;
+}
+/* Grava relendo do banco antes, pra dois usuários lançando ao mesmo tempo não se sobrescreverem. */
+async function salvarPedidoCola(id, patch){
+  const atual = (await configGet("pedidos_cola")) || {};
+  const novo = Object.assign({}, atual);
+  novo[id] = Object.assign({}, novo[id]||{}, patch);
+  const ok = await configSet("pedidos_cola", novo);
+  if(ok) STATE.pedidosCola = novo;
+  return ok;
+}
+async function removerColaDoPedido(id){
+  const atual = (await configGet("pedidos_cola")) || {};
+  if(!atual[id]) return;
+  const novo = Object.assign({}, atual);
+  delete novo[id];
+  const ok = await configSet("pedidos_cola", novo);
+  if(ok) STATE.pedidosCola = novo;
+}
+async function salvarColaKgPedido(id, valorStr){
+  const p = STATE.pedidos.find(function(x){ return x.id===id; });
+  if(!p) return;
+  const txt = String(valorStr==null?"":valorStr).trim().replace(",",".");
+  const kg = txt==="" ? null : Number(txt);
+  if(kg!==null && (isNaN(kg) || kg<0)){ showToast("error","Informe uma quantidade de cola válida (m)."); return; }
+  const prev = colaPrevistaAtual(p);
+  const ok = await salvarPedidoCola(id, {
+    kg: kg===null ? null : Math.round(kg*1000)/1000,
+    metros: prev.metros, fator: prev.fator, previsto: prev.valor,
+    atualizadoEm: new Date().toISOString(), atualizadoPor: STATE.currentUserEmail||"",
+  });
+  if(!ok) return;
+  showToast("success", kg===null ? "Quantidade de cola removida do pedido OP "+(p.op||"—")+"." : "Cola usada gravada: "+fmtNum(kg)+" m (OP "+(p.op||"—")+").");
+}
+/* Na conclusão da Colagem: congela metros, fator e fator de cola do pedido. */
+async function registrarColaNaConclusao(id){
+  const p = STATE.pedidos.find(function(x){ return x.id===id; });
+  if(!p || !p.temColagem) return;
+  const prev = colaPrevistaAtual(p);
+  await salvarPedidoCola(id, {metros:prev.metros, fator:prev.fator, previsto:prev.valor, concluidoEm: todayStr()});
+}
+async function saveFatorConsumoCola(tipo, valor){
+  const novo = Object.assign({}, STATE.fatoresConsumoCola);
+  const fatorNum = Number(String(valor==null?"":valor).replace(",","."));
+  if(fatorNum>0) novo[tipo] = fatorNum; else delete novo[tipo];
+  const ok = await configSet("fatores_consumo_cola", novo);
+  if(!ok) return;
+  STATE.fatoresConsumoCola = novo;
+  showToast("success","Fator de consumo de cola atualizado.");
+  renderScreen();
+}
+function openAdicionarTipoColaModal(){
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:420px">'+
+        '<div class="modal-header"><h3>Novo Tipo de Produto</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Tipo de produto</label><input class="field-input" id="novo-tipo-cola-nome" placeholder="Ex.: Sanduíche"/></div>'+
+        '<div style="margin-top:12px"><label class="field-label">Fator de cola (m/kg)</label><input class="field-input" type="number" step="0.001" min="0" id="novo-tipo-cola-fator" placeholder="Ex.: 0,35"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">O tipo também passa a aparecer no Fator Produção Perfilar e na lista de tipos do pedido.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="submitNovoTipoCola()">Adicionar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function submitNovoTipoCola(){
+  const nome = ((document.getElementById("novo-tipo-cola-nome")||{}).value||"").trim();
+  const fator = Number(((document.getElementById("novo-tipo-cola-fator")||{}).value||"0").replace(",","."));
+  if(!nome){ showToast("error","Informe o tipo de produto."); return; }
+  if(!(fator>0)){ showToast("error","Informe o fator de cola (m/kg)."); return; }
+  if(!STATE.tipoOptions.some(function(t){ return normTipoStr(t)===normTipoStr(nome); })){
+    STATE.tipoOptions.push(nome);
+    await configSet("tipo_options", STATE.tipoOptions);
+  }
+  closeModal();
+  await saveFatorConsumoCola(nome, fator);
+}
+function renderFatorConsumoColaScreen(){
+  const tipos = Array.from(new Set(STATE.tipoOptions.concat(Object.keys(STATE.fatoresProducaoPerfilar||{})).concat(Object.keys(STATE.fatoresConsumoCola||{}))))
+    .sort(function(a,b){ return a.localeCompare(b); });
+  const rows = tipos.map(function(tipo){
+    const f = fatorConsumoColaPara(tipo);
+    const exemplo = f>0
+      ? '<span style="color:'+COLORS.textMuted+'">100 m × '+fmtFatorCola(f)+' = '+fmtNum(100*f)+' m de cola</span>'
+      : '<span style="color:'+COLORS.textMuted+'">Sem fator — o pedido mostra "sem fator" na Prog. Coladeira</span>';
+    return '<tr>'+
+      '<td>'+escapeHtml(tipo)+'</td>'+
+      '<td style="max-width:180px"><input class="field-input" type="number" step="0.001" min="0" placeholder="m/kg" style="max-width:130px;font-family:\'IBM Plex Mono\',monospace" value="'+(f>0?f:"")+'" onchange="saveFatorConsumoCola(\''+escapeAttr(tipo)+'\', this.value)"/></td>'+
+      '<td>'+exemplo+'</td>'+
+    '</tr>';
+  }).join("");
+  const table = tipos.length===0
+    ? emptyStateHtml('Nenhum tipo de produto cadastrado ainda.')
+    : '<table class="pcp-table"><thead><tr><th>Tipo de Produto</th><th>Fator de Cola (m/kg)</th><th>Exemplo</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("droplet","Fator Consumo de Cola","Fator de cola por tipo de produto (m/kg) — total de metros do pedido × fator — usado na Prog. Coladeira",
+      '<button class="btn btn-primary" onclick="openAdicionarTipoColaModal()">'+icon("plus",14)+' Novo Tipo</button>')+
+    '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 14px;line-height:1.5">Mesmos tipos de produto do Fator Produção Perfilar. Na Prog. Coladeira, a coluna "Fator de cola (m)" = total de metros do pedido × este fator, e fica gravada junto com a cola usada lançada à mão. Deixe em branco para não calcular. Mudar o fator não altera pedidos com a Colagem já concluída.</p>'+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+}
+
+/* ---- Dashboard: consumo de cola (jan a dez) e média de consumo por metro ----
+   Conta os pedidos com cola usada lançada, no mês da conclusão da Colagem (ou da Data Prog.
+   se ainda não concluída). Média por metro = kg de cola ÷ metros desses pedidos. */
+function updateDashColaAno(v){ STATE.dashColaAno = v; renderScreen(); }
+function consumoColaMensal(ano){
+  const kg = new Array(12).fill(0), metros = new Array(12).fill(0), qtd = new Array(12).fill(0);
+  STATE.pedidos.forEach(function(p){
+    const k = colaKgDoPedido(p);
+    if(k===null) return;
+    const dataRef = dataConclusaoEtapa(p,"colagem") || p.dataProg;
+    if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
+    const m = Number(dataRef.slice(5,7));
+    if(!(m>=1 && m<=12)) return;
+    kg[m-1] += k; metros[m-1] += Number(p.metragem||0); qtd[m-1] += 1;
+  });
+  return {kg:kg, metros:metros, qtd:qtd};
+}
+function colaMesChartHtml(valores, cor, fmtRotulo, fmtTip){
+  const maxValor = Math.max.apply(null, valores.concat([0]));
+  if(!(maxValor>0)) return emptyStateHtml("Nenhuma cola lançada neste ano.");
+  const escala = maxValor*1.2;
+  const barras = valores.map(function(v,i){
+    const alturaPct = Math.min(100,(v/escala)*100);
+    return '<div class="chart-col" title="'+escapeAttr(MESES[i]+" — "+fmtTip(i))+'">'+
+      (v>0 ? '<div style="font-size:'+rf(11)+';font-weight:700;color:'+cor+';margin-bottom:3px;white-space:nowrap">'+fmtRotulo(v)+'</div>' : '')+
+      '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+(v>0?"linear-gradient(180deg,"+clarearHex(cor,0.42)+" 0%,"+cor+" 100%)":"var(--steel-border)")+'"></div>'+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(n){ return '<div class="chart-day" style="flex:1;text-align:center">'+n.slice(0,3)+'</div>'; }).join("");
+  return '<div class="chart-wrap" style="position:relative">'+chartGridlinesHtml(escala)+barras+'</div>'+
+    '<div class="chart-days" style="display:flex">'+rotulos+'</div>';
+}
+function colaDashboardHtml(){
+  const ano = STATE.dashColaAno || String(new Date().getFullYear());
+  const anos = Array.from(new Set(STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean)
+    .concat([String(new Date().getFullYear()), ano]))).sort();
+  const d = consumoColaMensal(ano);
+  const totalKg = d.kg.reduce(function(a,b){ return a+b; },0);
+  const totalM = d.metros.reduce(function(a,b){ return a+b; },0);
+  const totalQtd = d.qtd.reduce(function(a,b){ return a+b; },0);
+  const media = d.kg.map(function(k,i){ return d.metros[i]>0 ? k/d.metros[i] : 0; });
+  const fmt3 = function(v){ return Number(v||0).toLocaleString("pt-BR",{minimumFractionDigits:3,maximumFractionDigits:3}); };
+  const mediaAno = totalM>0 ? totalKg/totalM : 0;
+  const corKg = "#8B5CF6", corMedia = "#2FA6A6";
+  return '<div class="pcp-card" style="margin-top:16px">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div><div class="preview-title" style="margin:0">Consumo de Cola — '+escapeHtml(ano)+'</div>'+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+';margin-top:3px">'+totalQtd+' pedido(s) com cola lançada · '+fmtNum(totalKg)+' m de cola · '+fmtNum(totalM)+' m colados · média do ano '+fmt3(mediaAno)+' por metro</div></div>'+
+      '<div class="no-print" style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateDashColaAno(this.value)">'+
+        anos.map(function(y){ return '<option value="'+y+'" '+(ano===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select></div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(320px,1fr));gap:16px">'+
+      '<div class="pcp-card" style="margin:0"><div class="preview-title">Consumo de cola por mês (m)</div>'+
+        colaMesChartHtml(d.kg, corKg, function(v){ return fmtNumCard(v); }, function(i){ return fmtNum(d.kg[i])+" m · "+d.qtd[i]+" pedido(s)"; })+'</div>'+
+      '<div class="pcp-card" style="margin:0"><div class="preview-title">Média de consumo de cola por metro</div>'+
+        colaMesChartHtml(media, corMedia, fmt3, function(i){ return fmt3(media[i])+" por metro ("+fmtNum(d.kg[i])+" m de cola ÷ "+fmtNum(d.metros[i])+" m)"; })+'</div>'+
+    '</div>'+
+  '</div>';
+}
+
+
 /* ============================== ACOMPANHAMENTO DA PRODUÇÃO ============================== */
 function updateAcompFiltro(key, val){ STATE.acompFiltro[key]=val; renderScreen(); }
 function clearAcompFiltro(){
@@ -11559,6 +11801,7 @@ const NAV_GROUPS = [
     {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
     {id:"fatorConversao", label:"Fator de Conversão", icon:"repeat"},
     {id:"fatorProducaoPerfilar", label:"Fator Produção Perfilar", icon:"sliders"},
+    {id:"fatorConsumoCola", label:"Fator Consumo de Cola", icon:"droplet"},
     {id:"motoristas", label:"Motoristas", icon:"truck"},
     {id:"cidades", label:"Cidades", icon:"mapPin"},
     {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
@@ -11777,6 +12020,119 @@ function renderPermissoesUsuariosScreen(){
    baixados (ex.: numa pasta do Google Drive sincronizada). Também dá pra baixar na hora,
    a qualquer momento, pela tela "Backup dos Dados". */
 const BACKUP_LOCALSTORAGE_KEY = "eleve_backup_ultima_data";
+const BACKUP_CFG_KEY = "eleve_backup_cfg";
+const BACKUP_DESTINO_KEY = "eleve_backup_ultimo_destino";
+/* ---- Configuração do backup (por navegador/computador) ----
+   frequencia: diario | semanal | quinzenal | mensal | manual
+   json / excel: quais arquivos gerar (os dois por padrão).
+   A pasta escolhida fica guardada no IndexedDB deste navegador (o navegador não permite
+   guardar o caminho em texto, só uma "alça" de acesso à pasta). */
+const BACKUP_FREQUENCIAS = [
+  {v:"diario", t:"Diário (1× por dia)"},
+  {v:"semanal", t:"Semanal (a cada 7 dias)"},
+  {v:"quinzenal", t:"Quinzenal (a cada 15 dias)"},
+  {v:"mensal", t:"Mensal (1× por mês)"},
+  {v:"manual", t:"Só manual (desligar o automático)"},
+];
+function backupCfg(){
+  let c = {};
+  try{ c = JSON.parse(window.localStorage.getItem(BACKUP_CFG_KEY)||"{}") || {}; }catch(err){ c = {}; }
+  if(!BACKUP_FREQUENCIAS.some(function(f){ return f.v===c.frequencia; })) c.frequencia = "diario";
+  if(typeof c.json!=="boolean") c.json = true;
+  if(typeof c.excel!=="boolean") c.excel = true;
+  return c;
+}
+function salvarBackupCfg(c){
+  try{ window.localStorage.setItem(BACKUP_CFG_KEY, JSON.stringify(c)); }catch(err){}
+}
+function updateBackupCfg(key, val){
+  const c = backupCfg();
+  c[key] = val;
+  if(!c.json && !c.excel){ showToast("error","Deixe pelo menos um formato marcado (JSON ou Excel)."); renderScreen(); return; }
+  salvarBackupCfg(c);
+  renderScreen();
+  showToast("success","Configuração do backup salva neste computador.");
+}
+
+/* ---- IndexedDB: guarda a alça da pasta escolhida ---- */
+function idbBackup(){
+  return new Promise(function(ok, falha){
+    if(!window.indexedDB){ falha(new Error("IndexedDB indisponível")); return; }
+    const req = indexedDB.open("eleve-backup", 1);
+    req.onupgradeneeded = function(){ req.result.createObjectStore("kv"); };
+    req.onsuccess = function(){ ok(req.result); };
+    req.onerror = function(){ falha(req.error); };
+  });
+}
+async function idbBackupGet(chave){
+  try{
+    const db = await idbBackup();
+    return await new Promise(function(ok){
+      const r = db.transaction("kv","readonly").objectStore("kv").get(chave);
+      r.onsuccess = function(){ ok(r.result||null); };
+      r.onerror = function(){ ok(null); };
+    });
+  }catch(err){ return null; }
+}
+async function idbBackupSet(chave, valor){
+  const db = await idbBackup();
+  await new Promise(function(ok, falha){
+    const tx = db.transaction("kv","readwrite");
+    if(valor===null) tx.objectStore("kv").delete(chave); else tx.objectStore("kv").put(valor, chave);
+    tx.oncomplete = function(){ ok(); };
+    tx.onerror = function(){ falha(tx.error); };
+  });
+}
+function pastaBackupSuportada(){ return typeof window.showDirectoryPicker==="function"; }
+async function escolherPastaBackup(){
+  if(!pastaBackupSuportada()){
+    showToast("error","Este navegador não permite escolher pasta. Use Chrome ou Edge no computador — nos outros, o backup vai para a pasta de Downloads.");
+    return;
+  }
+  try{
+    const handle = await window.showDirectoryPicker({id:"eleve-backup", mode:"readwrite", startIn:"documents"});
+    await idbBackupSet("pasta", handle);
+    STATE.backupPastaInfo = {nome:handle.name, permissao:"granted"};
+    renderScreen();
+    showToast("success",'Pasta "'+handle.name+'" definida para os backups.');
+  }catch(err){
+    if(err && err.name==="AbortError") return;
+    console.error(err);
+    showToast("error","Não foi possível usar essa pasta: "+(err && err.message ? err.message : err));
+  }
+}
+async function removerPastaBackup(){
+  try{ await idbBackupSet("pasta", null); }catch(err){}
+  STATE.backupPastaInfo = {nome:"", permissao:""};
+  renderScreen();
+  showToast("info","Os backups voltam a ir para a pasta de Downloads do navegador.");
+}
+/* pedir=true só em clique do usuário (o navegador exige um clique para liberar a pasta). */
+async function obterPastaBackup(pedir){
+  if(!pastaBackupSuportada()) return {handle:null};
+  const handle = await idbBackupGet("pasta");
+  if(!handle) return {handle:null};
+  let perm = "prompt";
+  try{ perm = await handle.queryPermission({mode:"readwrite"}); }catch(err){}
+  if(perm!=="granted" && pedir){
+    try{ perm = await handle.requestPermission({mode:"readwrite"}); }catch(err){}
+  }
+  return {handle:handle, permitido: perm==="granted"};
+}
+async function carregarInfoPastaBackup(){
+  const info = {nome:"", permissao:""};
+  if(pastaBackupSuportada()){
+    const h = await idbBackupGet("pasta");
+    if(h){
+      info.nome = h.name;
+      try{ info.permissao = await h.queryPermission({mode:"readwrite"}); }catch(err){ info.permissao = "prompt"; }
+    }
+  }
+  STATE.backupPastaInfo = info;
+  if(STATE.screen==="backup") renderScreen();
+}
+
+/* ---- Conteúdo ---- */
 function coletarDadosBackup(){
   return {
     sistema: "ELEVE — Painel de Produção",
@@ -11795,6 +12151,7 @@ function coletarDadosBackup(){
       materiaisAvulsos: STATE.materiaisAvulsos,
       pedidosCancelados: STATE.pedidosCancelados,
       pendenciasEntrega: STATE.pendenciasEntrega,
+      pedidosCola: STATE.pedidosCola,
     },
     configuracoes: {
       materialTipos: STATE.materialTipos,
@@ -11807,6 +12164,7 @@ function coletarDadosBackup(){
       metasColagem: (STATE.stageState.colagem||{}).metas||[],
       metasEntrega: (STATE.stageState.entrega||{}).metas||[],
       fatoresProducaoPerfilar: STATE.fatoresProducaoPerfilar,
+      fatoresConsumoCola: STATE.fatoresConsumoCola,
       metasDiaOverride: STATE.metasDiaOverride,
       feriadosCustom: STATE.feriadosCustom,
       feriadosRemovidos: STATE.feriadosRemovidos,
@@ -11820,21 +12178,137 @@ function coletarDadosBackup(){
     },
   };
 }
-function baixarArquivoJSON(dados, nomeArquivo){
-  try{
-    const blob = new Blob([JSON.stringify(dados, null, 2)], {type:"application/json"});
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = nomeArquivo;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
-    return true;
-  } catch(err){
-    console.error("Erro ao gerar backup", err);
-    return false;
+/* ---- Versão em Excel: uma aba por assunto, com nomes no lugar dos códigos internos ---- */
+async function garantirSheetJS(){
+  if(window.XLSX && window.XLSX.utils) return true;
+  const fontes = [
+    "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js",
+    "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js",
+  ];
+  for(let i=0;i<fontes.length && !(window.XLSX && window.XLSX.utils);i++){
+    try{ await carregarScriptPdf(fontes[i]); }catch(err){ console.warn("[Backup Excel]", err); }
   }
+  return !!(window.XLSX && window.XLSX.utils);
+}
+function bkNome(lista, id){ const x = (lista||[]).find(function(i){ return i.id===id; }); return x ? x.nome : ""; }
+function bkData(iso){ return iso ? fmtDateBR(String(iso).slice(0,10)) : ""; }
+function bkNum(n){ const v = Number(n); return isNaN(v) ? "" : Math.round(v*1000)/1000; }
+function montarExcelBackup(){
+  const X = window.XLSX;
+  const wb = X.utils.book_new();
+  const aba = function(nome, linhas){
+    const ws = linhas.length ? X.utils.json_to_sheet(linhas) : X.utils.aoa_to_sheet([["(sem registros)"]]);
+    if(linhas.length){
+      ws["!cols"] = Object.keys(linhas[0]).map(function(k){
+        let w = k.length;
+        for(let i=0;i<Math.min(linhas.length,300);i++){ const v = linhas[i][k]; if(v!=null) w = Math.max(w, String(v).length); }
+        return {wch: Math.min(48, w+2)};
+      });
+    }
+    X.utils.book_append_sheet(wb, ws, nome.slice(0,31));
+  };
+  const mat = STATE.materiais;
+  aba("Resumo", [
+    {"Item":"Gerado em", "Valor": new Date().toLocaleString("pt-BR")},
+    {"Item":"Gerado por", "Valor": STATE.currentUserEmail||""},
+    {"Item":"Pedidos", "Valor": STATE.pedidos.length},
+    {"Item":"Matérias-primas", "Valor": mat.length},
+    {"Item":"Notas fiscais", "Valor": STATE.notas.length},
+    {"Item":"Pedidos cancelados", "Valor": (STATE.pedidosCancelados||[]).length},
+    {"Item":"Pendências de entrega", "Valor": (STATE.pendenciasEntrega||[]).length},
+  ]);
+  aba("Pedidos", STATE.pedidos.map(function(p){
+    const cola = STATE.pedidosCola[p.id] || {};
+    return {
+      "OP": p.op||"", "Cliente": p.cliente||"", "Tipo": p.tipo||"", "Material": p.material||"",
+      "Situação": bkNome(STATE.statusOptions, p.situacaoId),
+      "Etapa": p.etapaAtual==="entregue" ? "Entregue" : ((STAGE_DEFS[p.etapaAtual]||{}).short||p.etapaAtual||""),
+      "Data Venda": bkData(dataVendaDoPedido(p)), "Data Prog.": bkData(p.dataProg),
+      "Data Entrega": bkData(p.dataEntrega), "Entregue em": bkData(p.dataEntregue),
+      "Cor Sup.": bkNome(mat, p.corSupId), "Cor Inf.": bkNome(mat, p.corInfId), "EPS": bkNome(mat, p.epsId),
+      "Cumeeira": p.cumeeira||"", "Metragem (m)": bkNum(p.metragem),
+      "Cidade": bkNome(STATE.cidades, p.cidadeId), "Regional": regionalDoPedido(p),
+      "Equipamento": bkNome(STATE.equipamentos, p.equipamentoId), "Equipamento Cor Inf.": bkNome(STATE.equipamentos, equipamentoInfDoPedido(p)),
+      "Motorista": bkNome(STATE.motoristas, p.motoristaId),
+      "Pintura": p.temPintura?"Sim":"Não", "Colagem": p.temColagem?"Sim":"Não",
+      "Cliente retira": pedidoEhRetirada(p)?"Sim":"Não", "OP impressa": pedidoOpImpressa(p)?"Sim":"Não",
+      "Fator de cola (m)": cola.previsto==null ? "" : bkNum(cola.previsto), "Cola usada (m)": cola.kg==null ? "" : bkNum(cola.kg),
+      "Ligação": p.ligacao||"", "Observações": observacaoDoPedido(p),
+    };
+  }));
+  aba("Matéria-Prima", mat.map(function(m){
+    return {
+      "Tipo": m.tipo, "Material": m.nome, "É cor": m.cor==="S"?"Sim":"Não", "Unidade": m.unidade,
+      "Saldo inicial": bkNum(m.estoqueInicial), "Estoque atual": bkNum(m.estoque), "Estoque mínimo": bkNum(m.estoqueMinimo),
+      "Lote mínimo": bkNum(m.loteMinimo), "Fator consumo": bkNum(m.fator), "Valor unitário (R$)": bkNum(m.valorUnitario),
+      "Valor em estoque (R$)": bkNum(Number(m.estoque||0)*Number(m.valorUnitario||0)),
+      "Cadastrado em": bkData(m.dataCadastro), "Situação": materialInativo(m.id)?"Inativo":"Ativo",
+    };
+  }));
+  const itensNotas = [];
+  STATE.notas.forEach(function(n){
+    (n.itens||[]).forEach(function(it){
+      itensNotas.push({
+        "Data": bkData(n.data), "Fornecedor": n.fornecedor||"", "Nº nota": n.numeroNota||"",
+        "Material": bkNome(mat, it.materialId), "Quantidade": bkNum(it.quantidade), "Unidade": it.unidade||"",
+        "Valor unit. (R$)": bkNum(it.valorUnitario), "Total (R$)": bkNum(Number(it.quantidade||0)*Number(it.valorUnitario||0)),
+        "Kg na nota": it.kgTotais ? bkNum(it.kgTotais) : "", "Custo por kg (R$)": it.custoPorKg ? bkNum(it.custoPorKg) : "",
+      });
+    });
+  });
+  aba("Notas Fiscais", itensNotas);
+  aba("Baixas Manuais", STATE.baixasManual.map(function(b){
+    return {"Data": bkData(b.data), "Material": bkNome(mat, b.materialId), "Quantidade": bkNum(b.quantidade), "Motivo": b.motivo||"", "Observação": b.observacao||""};
+  }));
+  aba("Transferências", STATE.transferencias.map(function(t){
+    return {"Data": bkData(t.data), "Origem": bkNome(mat, t.materialOrigemId), "Destino": bkNome(mat, t.materialDestinoId), "Quantidade": bkNum(t.quantidade), "Observação": t.observacao||""};
+  }));
+  aba("Movimentações", (STATE.movimentacoes||[]).map(function(m){
+    return {"Data": bkData(m.data), "Material": bkNome(mat, m.materialId), "Tipo": m.tipo||"", "Origem": m.origem||"", "Quantidade": bkNum(m.quantidade), "Referência": m.referencia||""};
+  }));
+  aba("Separação Avulsa", STATE.materiaisAvulsos.map(function(a){
+    return {"OP": a.op||"", "Cliente": a.cliente||"", "Material": bkNome(mat, a.materialId), "Quantidade": bkNum(a.quantidade),
+      "Data prevista": bkData(a.dataPrevista), "Status": statusAvulsoLabel(a.status), "Concluído em": bkData(a.concluidoEm), "Observação": a.observacao||""};
+  }));
+  aba("Pedidos Cancelados", (STATE.pedidosCancelados||[]).map(function(c){
+    const p = c.pedido||{};
+    return {"Cancelado em": bkData(c.canceladoEm), "OP": p.op||"", "Cliente": p.cliente||"", "Material": p.material||"",
+      "Metragem (m)": bkNum(p.metragem), "Motivo": c.motivo||"", "Situação": c.situacaoNome||"",
+      "Material devolvido": c.materialDevolvido?"Sim":"Não", "Cancelado por": c.canceladoPor||"", "Observação": c.observacao||""};
+  }));
+  aba("Pendências Entrega", (STATE.pendenciasEntrega||[]).map(function(x){
+    return {"Registrado em": bkData(x.registradoEm), "OP": x.op||"", "Cliente": x.cliente||"", "Motivo": x.motivo||"",
+      "Pessoa que errou": x.responsavel||"", "Responsável p/ solucionar": x.responsavelSolucao||"",
+      "Data prevista": bkData(x.dataPrevista), "Status": x.status==="entregue"?"Pedido entregue":"Aguardando",
+      "Entregue em": bkData(x.concluidoEm), "Observação": x.observacao||""};
+  }));
+  const fatores = [];
+  Object.keys(STATE.fatoresProducaoPerfilar||{}).forEach(function(k){ fatores.push({"Cadastro":"Fator Produção Perfilar", "Tipo / Item":k, "Valor":bkNum(STATE.fatoresProducaoPerfilar[k])}); });
+  Object.keys(STATE.fatoresConsumoCola||{}).forEach(function(k){ fatores.push({"Cadastro":"Fator Consumo de Cola (m/kg)", "Tipo / Item":k, "Valor":bkNum(STATE.fatoresConsumoCola[k])}); });
+  Object.keys(STATE.fatoresKgTelha||{}).forEach(function(k){ fatores.push({"Cadastro":"Fator kg por metro (telha)", "Tipo / Item":labelClasseTelha(k), "Valor":bkNum(STATE.fatoresKgTelha[k])}); });
+  aba("Fatores", fatores);
+  aba("Cidades", STATE.cidades.map(function(c){ return {"Cidade": c.nome}; }));
+  aba("Equipamentos", STATE.equipamentos.map(function(e){ return {"Equipamento": e.nome, "Tipo / Linha": e.tipo||""}; }));
+  aba("Motoristas", STATE.motoristas.map(function(m){ return {"Motorista": m.nome, "Telefone": m.telefone||""}; }));
+  aba("Situações", STATE.statusOptions.map(function(s){ return {"Situação": s.nome, "Cor": s.cor}; }));
+  return new Blob([X.write(wb, {bookType:"xlsx", type:"array"})], {type:"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"});
+}
+
+/* ---- Gravação ---- */
+function baixarBlob(blob, nomeArquivo){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = nomeArquivo;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+}
+async function gravarNaPasta(pasta, blob, nomeArquivo){
+  const fh = await pasta.getFileHandle(nomeArquivo, {create:true});
+  const w = await fh.createWritable();
+  await w.write(blob);
+  await w.close();
 }
 function getUltimoBackupData(){
   try{ return window.localStorage.getItem(BACKUP_LOCALSTORAGE_KEY) || ""; } catch(err){ return ""; }
@@ -11842,50 +12316,179 @@ function getUltimoBackupData(){
 function setUltimoBackupData(dataStr){
   try{ window.localStorage.setItem(BACKUP_LOCALSTORAGE_KEY, dataStr); } catch(err){}
 }
-function executarBackup(manual){
-  const dados = coletarDadosBackup();
-  const nomeArquivo = "backup-eleve-"+todayStr()+".json";
-  const ok = baixarArquivoJSON(dados, nomeArquivo);
-  if(ok){
-    setUltimoBackupData(todayStr());
-    if(manual) showToast("success","Backup baixado: "+nomeArquivo);
-  } else if(manual){
-    showToast("error","Não foi possível gerar o backup neste navegador.");
-  }
-  return ok;
+function getUltimoDestinoBackup(){
+  try{ return window.localStorage.getItem(BACKUP_DESTINO_KEY) || ""; } catch(err){ return ""; }
 }
-/* Chamado uma vez, logo após o login, sempre que a data do último backup salva neste
-   navegador não for hoje. Silencioso (sem toast) pra não incomodar no dia a dia — só
-   baixa o arquivo direto na pasta de downloads padrão do navegador. */
-function executarBackupAutomaticoSeNecessario(){
+let __backupRodando = false;
+/* manual=true: veio de um clique (pode pedir acesso à pasta e mostra avisos).
+   opts.forcarDownload: ignora a pasta e baixa em Downloads. */
+async function executarBackup(manual, opts){
+  opts = opts || {};
+  if(__backupRodando) return false;
+  __backupRodando = true;
   try{
-    if(getUltimoBackupData()===todayStr()) return;
-    executarBackup(false);
+    const cfg = backupCfg();
+    const pastaInfo = opts.forcarDownload ? {handle:null} : await obterPastaBackup(!!manual);
+    if(pastaInfo.handle && !pastaInfo.permitido){
+      if(manual) showToast("error",'Sem permissão para gravar na pasta "'+pastaInfo.handle.name+'". Clique em Fazer backup agora e autorize, ou escolha outra pasta.');
+      return false;
+    }
+    if(manual) showToast("info","Gerando backup…");
+    const base = "backup-eleve-"+todayStr();
+    const arquivos = [];
+    if(cfg.json){
+      arquivos.push({nome: base+".json", blob: new Blob([JSON.stringify(coletarDadosBackup(), null, 2)], {type:"application/json"})});
+    }
+    let falhaExcel = "";
+    if(cfg.excel){
+      if(await garantirSheetJS()){
+        try{ arquivos.push({nome: base+".xlsx", blob: montarExcelBackup()}); }
+        catch(err){ console.error("[Backup Excel]", err); falhaExcel = (err && err.message) ? err.message : String(err); }
+      } else falhaExcel = "biblioteca de Excel não carregou (sem internet ou bloqueada)";
+    }
+    if(!arquivos.length){
+      if(manual) showToast("error","Não foi possível gerar o backup: "+(falhaExcel||"nenhum formato marcado")+".");
+      return false;
+    }
+    let destino = "Downloads";
+    if(pastaInfo.handle){
+      try{
+        for(const a of arquivos) await gravarNaPasta(pastaInfo.handle, a.blob, a.nome);
+        destino = 'pasta "'+pastaInfo.handle.name+'"';
+      }catch(err){
+        console.error("[Backup pasta]", err);
+        arquivos.forEach(function(a){ baixarBlob(a.blob, a.nome); });
+        showToast("error",'Não deu para gravar na pasta "'+pastaInfo.handle.name+'" — os arquivos foram para Downloads.');
+      }
+    } else {
+      arquivos.forEach(function(a){ baixarBlob(a.blob, a.nome); });
+    }
+    setUltimoBackupData(todayStr());
+    try{ window.localStorage.setItem(BACKUP_DESTINO_KEY, destino); }catch(err){}
+    if(manual){
+      showToast(falhaExcel ? "error" : "success",
+        "Backup salvo em "+destino+": "+arquivos.map(function(a){ return a.nome; }).join(" e ")+(falhaExcel?" (Excel não gerado: "+falhaExcel+")":""));
+    }
+    if(STATE.screen==="backup") renderScreen();
+    return true;
+  } catch(err){
+    console.error("Erro ao gerar backup", err);
+    if(manual) showToast("error","Não foi possível gerar o backup neste navegador.");
+    return false;
+  } finally {
+    __backupRodando = false;
+  }
+}
+function backupVencido(cfg, ultima){
+  if(cfg.frequencia==="manual") return false;
+  if(!ultima) return true;
+  const hoje = todayStr();
+  if(cfg.frequencia==="diario") return ultima!==hoje;
+  if(cfg.frequencia==="mensal") return ultima.slice(0,7)!==hoje.slice(0,7);
+  const dias = Math.round((new Date(hoje+"T00:00:00") - new Date(ultima+"T00:00:00"))/86400000);
+  return dias >= (cfg.frequencia==="semanal" ? 7 : 15);
+}
+function proximoBackupLabel(cfg, ultima){
+  if(cfg.frequencia==="manual") return "Automático desligado";
+  if(!ultima || backupVencido(cfg, ultima)) return "No próximo login";
+  const d = new Date(ultima+"T00:00:00");
+  if(cfg.frequencia==="diario") d.setDate(d.getDate()+1);
+  else if(cfg.frequencia==="semanal") d.setDate(d.getDate()+7);
+  else if(cfg.frequencia==="quinzenal") d.setDate(d.getDate()+15);
+  else { d.setMonth(d.getMonth()+1); d.setDate(1); }
+  return "A partir de "+fmtDateBR(toISO(d));
+}
+/* Chamado logo após o login. Se a frequência escolhida mandar fazer backup e a pasta já
+   estiver liberada, grava sozinho. Se a pasta precisar de autorização (o navegador exige um
+   clique), mostra um aviso com o botão para salvar. Sem pasta escolhida, baixa em Downloads. */
+async function executarBackupAutomaticoSeNecessario(){
+  try{
+    const cfg = backupCfg();
+    if(!backupVencido(cfg, getUltimoBackupData())) return;
+    const pasta = await obterPastaBackup(false);
+    if(pasta.handle && !pasta.permitido){ mostrarAvisoBackupPendente(pasta.handle.name); return; }
+    await executarBackup(false);
   } catch(err){
     console.error("Backup automático falhou", err);
   }
 }
+function fecharAvisoBackup(){ const el = document.getElementById("aviso-backup-root"); if(el) el.remove(); }
+function mostrarAvisoBackupPendente(nomePasta){
+  fecharAvisoBackup();
+  const el = document.createElement("div");
+  el.id = "aviso-backup-root";
+  el.className = "no-print";
+  el.style.cssText = "position:fixed;left:20px;bottom:20px;z-index:9000;max-width:360px;background:var(--panel);border:1px solid "+COLORS.brand+";border-radius:10px;padding:14px;box-shadow:0 12px 32px rgba(0,0,0,.3);font-size:12.5px;line-height:1.5";
+  el.innerHTML =
+    '<div style="font-weight:700;margin-bottom:4px">'+icon("arrowDownCircle",14,COLORS.brand)+' Backup programado pendente</div>'+
+    '<div style="color:'+COLORS.textMuted+'">O navegador pede sua autorização para gravar na pasta <strong style="color:'+COLORS.text+'">'+escapeHtml(nomePasta)+'</strong>.</div>'+
+    '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px">'+
+      '<button type="button" class="btn btn-primary" style="padding:6px 10px;font-size:12px" onclick="fecharAvisoBackup();executarBackup(true)">Salvar agora</button>'+
+      '<button type="button" class="btn" style="padding:6px 10px;font-size:12px" onclick="fecharAvisoBackup();executarBackup(true,{forcarDownload:true})">Baixar em Downloads</button>'+
+      '<button type="button" class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="fecharAvisoBackup()">Depois</button>'+
+    '</div>';
+  document.body.appendChild(el);
+}
 function renderBackupScreen(){
+  if(!STATE.backupPastaInfo){ STATE.backupPastaInfo = {nome:"", permissao:"", carregando:true}; carregarInfoPastaBackup(); }
+  const cfg = backupCfg();
   const ultima = getUltimoBackupData();
-  const statusHtml = ultima
-    ? '<div class="chart-stat"><div class="stat-label">Último backup baixado neste navegador</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+COLORS.green+'">'+fmtDateBR(ultima)+'</div></div>'
-    : '<div class="chart-stat"><div class="stat-label">Último backup baixado neste navegador</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+COLORS.textMuted+'">Nenhum ainda</div></div>';
+  const info = STATE.backupPastaInfo;
+  const suporta = pastaBackupSuportada();
+  const stat = function(rot, val, cor){
+    return '<div class="chart-stat"><div class="stat-label">'+rot+'</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(cor||COLORS.text)+'">'+val+'</div></div>';
+  };
+  const destinoTxt = info.nome ? 'Pasta "'+escapeHtml(info.nome)+'"' : "Downloads do navegador";
+  let permTxt = "";
+  if(info.nome){
+    permTxt = info.permissao==="granted"
+      ? '<span style="color:'+COLORS.green+'">'+icon("checkCircle",12)+' acesso liberado</span>'
+      : '<span style="color:#C98A00">'+icon("alert",12)+' o navegador vai pedir autorização no próximo backup</span>';
+  }
+  const formatos = [cfg.json?"JSON":"", cfg.excel?"Excel":""].filter(Boolean).join(" + ");
   const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
-    '<button class="btn btn-primary" onclick="executarBackup(true)">'+icon("arrowDownCircle",14)+' Baixar backup agora</button>'+
+    '<button class="btn btn-primary" onclick="executarBackup(true)">'+icon("arrowDownCircle",14)+' Fazer backup agora</button>'+
   '</div>';
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("arrowDownCircle","Backup dos Dados","Uma cópia local (.json) de todos os pedidos, cadastros e configurações do sistema.", acoes)+
+    screenHeaderHtml("arrowDownCircle","Backup dos Dados","Cópia de todos os pedidos, cadastros e configurações — em JSON (para restaurar) e em Excel (para consultar).", acoes)+
     '<div class="pcp-card" style="margin-bottom:16px">'+
-      '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap">'+statusHtml+'</div>'+
+      '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap">'+
+        stat("Último backup neste computador", ultima ? fmtDateBR(ultima) : "Nenhum ainda", ultima?COLORS.green:COLORS.textMuted)+
+        stat("Último destino", escapeHtml(getUltimoDestinoBackup()||"—"))+
+        stat("Próximo automático", escapeHtml(proximoBackupLabel(cfg, ultima)), COLORS.brand)+
+        stat("Formatos", escapeHtml(formatos))+
+      '</div>'+
+    '</div>'+
+    '<div class="pcp-card" style="margin-bottom:16px">'+
+      '<div style="font-size:13px;font-weight:700;margin-bottom:12px">Configuração</div>'+
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px">'+
+        '<div><label class="field-label">Frequência do backup automático</label>'+
+          '<select class="field-select" onchange="updateBackupCfg(\'frequencia\', this.value)">'+
+            BACKUP_FREQUENCIAS.map(function(f){ return '<option value="'+f.v+'" '+(cfg.frequencia===f.v?"selected":"")+'>'+f.t+'</option>'; }).join("")+
+          '</select>'+
+          '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:6px 0 0;line-height:1.5">Roda no primeiro login depois do prazo vencer.</p></div>'+
+        '<div><label class="field-label">Arquivos gerados</label>'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:13px;padding:5px 0;cursor:pointer"><input type="checkbox" '+(cfg.json?"checked":"")+' onchange="updateBackupCfg(\'json\', this.checked)" style="accent-color:'+COLORS.brand+'"/> JSON — cópia completa, para restaurar</label>'+
+          '<label style="display:flex;align-items:center;gap:7px;font-size:13px;padding:5px 0;cursor:pointer"><input type="checkbox" '+(cfg.excel?"checked":"")+' onchange="updateBackupCfg(\'excel\', this.checked)" style="accent-color:'+COLORS.brand+'"/> Excel (.xlsx) — uma aba por assunto, para consultar</label></div>'+
+        '<div><label class="field-label">Pasta de destino</label>'+
+          '<div style="font-size:13px;font-weight:600;margin:4px 0">'+destinoTxt+'</div>'+
+          (permTxt ? '<div style="font-size:11.5px;margin-bottom:6px">'+permTxt+'</div>' : '')+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">'+
+            '<button class="btn" '+(suporta?'':'disabled')+' onclick="escolherPastaBackup()">'+icon("package",13)+' '+(info.nome?"Trocar pasta":"Escolher pasta")+'</button>'+
+            (info.nome ? '<button class="btn btn-ghost" onclick="removerPastaBackup()">Usar Downloads</button>' : '')+
+          '</div>'+
+          (suporta ? '' : '<p style="font-size:11px;color:#C98A00;margin:6px 0 0;line-height:1.5">Este navegador não permite escolher pasta — os arquivos vão para Downloads. Use Chrome ou Edge no computador para escolher a pasta.</p>')+
+        '</div>'+
+      '</div>'+
     '</div>'+
     '<div class="pcp-card">'+
       '<div style="font-size:13px;font-weight:700;margin-bottom:8px">Como funciona</div>'+
       '<ul style="font-size:12.5px;color:'+COLORS.textMuted+';line-height:1.8;margin:0;padding-left:18px">'+
-        '<li>Assim que alguém faz login no sistema <strong style="color:'+COLORS.text+'">neste navegador</strong>, o app confere se já baixou um backup hoje. Se ainda não baixou, gera e baixa automaticamente — sem precisar clicar em nada.</li>'+
-        '<li>O backup é baixado <strong style="color:'+COLORS.text+'">no máximo uma vez por dia</strong>, mesmo que várias pessoas façam login no mesmo dia neste computador.</li>'+
-        '<li>O arquivo (<code>backup-eleve-AAAA-MM-DD.json</code>) inclui pedidos, matéria-prima, cidades, equipamentos, motoristas, notas, baixas de estoque, transferências, metas por dia e permissões de usuário.</li>'+
-        '<li>É um download local — o app não guarda histórico de backups antigos. Para manter um histórico seguro, mova os arquivos baixados pra uma pasta sincronizada (Google Drive, OneDrive etc.) de tempos em tempos.</li>'+
-        '<li>O controle de "já baixei hoje" fica salvo neste navegador/computador — em outro computador, o primeiro login do dia também vai gerar um backup.</li>'+
+        '<li>São gerados <strong style="color:'+COLORS.text+'">dois arquivos</strong>: <code>backup-eleve-AAAA-MM-DD.json</code> (cópia completa) e <code>backup-eleve-AAAA-MM-DD.xlsx</code> (abas: Pedidos, Matéria-Prima, Notas Fiscais, Baixas, Transferências, Movimentações, Separação Avulsa, Cancelados, Pendências, Fatores e cadastros).</li>'+
+        '<li>Com uma pasta escolhida, os arquivos são gravados direto nela — dá para escolher uma pasta do Google Drive ou OneDrive sincronizada no computador e manter o histórico. Backup feito duas vezes no mesmo dia substitui o arquivo do dia.</li>'+
+        '<li>O Chrome/Edge pode pedir para confirmar o acesso à pasta. Ao aparecer a pergunta, escolha <strong style="color:'+COLORS.text+'">"Permitir em todas as visitas"</strong> para o backup automático gravar sem perguntar de novo. Se ainda assim pedir, aparece um aviso no canto da tela com o botão "Salvar agora".</li>'+
+        '<li>Frequência, formatos e pasta ficam salvos <strong style="color:'+COLORS.text+'">neste navegador/computador</strong>. Em outro computador, configure lá também.</li>'+
+        '<li>Por segurança do navegador, o sistema mostra só o nome da pasta escolhida, não o caminho completo.</li>'+
       '</ul>'+
     '</div>';
 }
@@ -12015,6 +12618,7 @@ function renderScreen(){
   else if(STATE.screen==="materiais") renderGenericScreen("material");
   else if(STATE.screen==="fatorConversao") renderFatorConversaoScreen();
   else if(STATE.screen==="fatorProducaoPerfilar") renderFatorProducaoPerfilarScreen();
+  else if(STATE.screen==="fatorConsumoCola") renderFatorConsumoColaScreen();
   else if(STATE.screen==="motoristas") renderGenericScreen("motorista");
   else if(STATE.screen==="cidades") renderGenericScreen("cidade");
   else if(STATE.screen==="equipamentos") renderGenericScreen("equipamento");

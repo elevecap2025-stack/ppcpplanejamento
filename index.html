@@ -67,6 +67,10 @@ button,input,select{font-family:'Inter',sans-serif;}
 .chart-day-clickable:hover{color:var(--brand);background:var(--brand)15;}
 .chart-day-obs-dot{display:block;width:4px;height:4px;border-radius:50%;margin:2px auto 0;}
 .chart-obs-item:hover{background:var(--row-hover);}
+.chart-col-click{cursor:pointer;}
+.chart-col-click:hover .chart-bar{filter:brightness(1.12);box-shadow:0 0 0 2px var(--brand) inset;}
+.pdia-row{cursor:pointer;}
+.pdia-row:hover td{background:var(--row-hover);}
 .chart-obs-item .icon-btn{opacity:.55;}
 .chart-obs-item:hover .icon-btn{opacity:1;}
 .chart-meta-line{position:absolute;left:0;right:0;border-top:2px dashed var(--red);pointer-events:none;}
@@ -11056,7 +11060,7 @@ function metaDoDia(stage, ano, mes, dia){
   const metas = (s && s.metas) || [];
   return Number(metas[idx]||0);
 }
-function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes){
+function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes, stage){
   const metaAcum = acumularArray(metasPorDia.slice(0,maxDia));
   const realAcum = acumularArray(dadosDias.slice(0,maxDia));
   const maxValor = Math.max.apply(null, metaAcum.concat(realAcum).concat([1]));
@@ -11083,7 +11087,9 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes){
   }).join('');
   const realCircles = realAcum.map(function(v,i){
     const dia=i+1;
-    return '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="3" fill="'+cor+'"><title>Dia '+pad2(dia)+' — Real acumulado: '+fmtNum(v)+' m</title></circle>';
+    const clk = stage ? ' style="cursor:pointer" onclick="openPedidosDiaProducaoModal(\''+stage+'\','+dia+')"' : '';
+    return '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="3" fill="'+cor+'"/>'+
+      '<circle cx="'+xFor(dia).toFixed(1)+'" cy="'+yFor(v).toFixed(1)+'" r="11" fill="transparent"'+clk+'><title>Dia '+pad2(dia)+' — Real acumulado: '+fmtNum(v)+' m'+(stage?' · clique para ver os pedidos do dia':'')+'</title></circle>';
   }).join('');
   return '<div>'+
     '<svg viewBox="0 0 '+W+' '+H+'" style="width:100%;height:200px;display:block;overflow:visible" preserveAspectRatio="none">'+
@@ -11119,6 +11125,243 @@ function chartBarLegendHtml(cor){
     '<div style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+COLORS.green+';display:inline-block"></span> Meta batida</div>'+
     '<div style="display:flex;align-items:center;gap:6px"><span style="width:16px;border-top:2px dashed '+COLORS.red+'"></span> Meta do dia</div>'+
   '</div>';
+}
+
+/* ============================== PEDIDOS DO DIA (clique no gráfico do Acompanhamento) ==============================
+   Mesma regra de producaoDiariaPorEtapa(): mesmo mês/ano, máquina e Base do cálculo, e no Perfilar
+   o Fator Produção Perfilar por tipo de produto — então a soma da tela fecha com a barra clicada. */
+function pedidosProducaoDoDia(stage, dia){
+  const f = STATE.acompFiltro;
+  const out = [];
+  STATE.pedidos.forEach(function(p){
+    if(stage==="colagem" && !p.temColagem) return;
+    if(f.base==="concl" && !stageConcluido(p, stage)) return;
+    const dataRef = dataBaseProducao(p, stage, f.base);
+    if(!dataRef) return;
+    if(f.ano && dataRef.slice(0,4)!==String(f.ano)) return;
+    if(f.mes && dataRef.slice(5,7)!==String(f.mes)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    if(Number(dataRef.slice(8,10))!==Number(dia)) return;
+    const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
+    const metros = Number(p.metragem||0);
+    out.push({p:p, fator:fator, metros:metros, metrosFator:metros*fator});
+  });
+  out.sort(function(a,b){ return b.metrosFator-a.metrosFator; });
+  return out;
+}
+function pdiaContexto(stage, dia){
+  const f = STATE.acompFiltro;
+  const iso = f.ano+"-"+f.mes+"-"+pad2(dia);
+  const linhas = pedidosProducaoDoDia(stage, dia);
+  const totalM = linhas.reduce(function(s,l){ return s+l.metros; },0);
+  const totalF = linhas.reduce(function(s,l){ return s+l.metrosFator; },0);
+  const meta = metaDoDia(stage, f.ano, f.mes, dia);
+  const maq = STATE.equipamentos.find(function(e){ return e.id===f.maquinaId; });
+  return {
+    f:f, iso:iso, linhas:linhas, totalM:totalM, totalF:totalF, meta:meta,
+    pct: meta>0 ? Math.round((totalF/meta)*100) : null,
+    comFator: stage==="perfilar" && linhas.some(function(l){ return l.fator!==1; }),
+    etapaLabel: stage==="colagem" ? "Colagem" : "Perfilar",
+    cor: stage==="colagem" ? COLORS.brand : "#C98A00",
+    baseLabel: f.base==="prog" ? "Programado (data de prog.)" : "Somente etapas concluídas",
+    maqLabel: maq ? maq.nome : "Todas as máquinas",
+    feriado: feriadoInfo(iso),
+  };
+}
+function pdiaEtapaAtual(p){
+  if(p.etapaAtual==="entregue") return "Entregue";
+  return (STAGE_DEFS[p.etapaAtual]||{}).short || p.etapaAtual || "—";
+}
+function openPedidosDiaProducaoModal(stage, dia){
+  STATE.acompDiaSel = {stage:stage, dia:Number(dia)};
+  const c = pdiaContexto(stage, dia);
+  const nomeMat = function(id){ return colNomeMaterial(id)||"—"; };
+  const corPct = c.pct===null ? COLORS.textMuted : (c.pct>=100 ? COLORS.green : (c.pct>=60 ? COLORS.brand : COLORS.red));
+  const card = function(rot, val, cor){
+    return '<div style="flex:1 1 140px;border:1px solid var(--steel-border);border-radius:8px;padding:10px 12px;background:var(--panel-alt)">'+
+      '<div class="stat-label" style="font-size:9.5px">'+rot+'</div>'+
+      '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;margin-top:3px;color:'+(cor||COLORS.text)+'">'+val+'</div></div>';
+  };
+  const linhasHtml = c.linhas.map(function(l, i){
+    const p = l.p;
+    const cid = STATE.cidades.find(function(x){ return x.id===p.cidadeId; });
+    const eq = STATE.equipamentos.find(function(x){ return x.id===p.equipamentoId; });
+    return '<tr class="pdia-row" title="Abrir o pedido" onclick="closeModal();openPedidoModal(\'edit\',\''+p.id+'\')">'+
+      '<td style="color:'+COLORS.textMuted+';font-family:\'IBM Plex Mono\',monospace">'+(i+1)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+escapeHtml(p.op||"—")+'</td>'+
+      '<td>'+(pedidoEhRetirada(p)?'<span class="retirada-badge">'+icon("package",10)+' RETIRA</span>':'')+escapeHtml(p.cliente||"—")+'</td>'+
+      '<td>'+escapeHtml(p.tipo||"—")+'</td>'+
+      '<td style="max-width:200px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeAttr(p.material||"")+'">'+escapeHtml(p.material||"—")+'</td>'+
+      '<td>'+coilSwatchHtml(colNomeMaterial(p.corSupId)||null)+'</td>'+
+      '<td>'+coilSwatchHtml(colNomeMaterial(p.corInfId)||null)+'</td>'+
+      '<td>'+escapeHtml(nomeMat(p.epsId))+'</td>'+
+      '<td>'+escapeHtml(cid?cid.nome:"—")+'</td>'+
+      '<td>'+escapeHtml(eq?eq.nome:"—")+'</td>'+
+      '<td>'+escapeHtml(pdiaEtapaAtual(p))+'</td>'+
+      '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtNum(l.metros)+' m</td>'+
+      (c.comFator ? '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap'+(l.fator!==1?';color:#C98A00;font-weight:700':'')+'">'+fmtNum(l.metrosFator)+' m</td>' : '')+
+    '</tr>';
+  }).join("");
+  const tabela = c.linhas.length===0
+    ? emptyStateHtml("Nenhum pedido contado neste dia com os filtros atuais.")
+    : '<div style="overflow:auto;max-height:50vh;border:1px solid var(--steel-border);border-radius:8px">'+
+      '<table class="pcp-table" style="font-size:12.5px"><thead><tr>'+
+        '<th>#</th><th>OP</th><th>Cliente</th><th>Tipo</th><th>Material</th><th>Cor Sup.</th><th>Cor Inf.</th><th>EPS</th><th>Cidade</th><th>Equipamento</th><th>Etapa atual</th>'+
+        '<th style="text-align:right">Metragem</th>'+(c.comFator?'<th style="text-align:right" title="Metragem × Fator Produção Perfilar">Com fator</th>':'')+
+      '</tr></thead><tbody>'+linhasHtml+
+        '<tr style="background:var(--panel-alt);font-weight:700"><td colspan="11">Total do dia — '+c.linhas.length+' pedido(s)</td>'+
+        '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtNum(c.totalM)+' m</td>'+
+        (c.comFator?'<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;color:#C98A00">'+fmtNum(c.totalF)+' m</td>':'')+'</tr>'+
+      '</tbody></table></div>';
+  const chip = function(t){ return '<span style="font-size:11px;border:1px solid var(--steel-border);border-radius:12px;padding:2px 9px;color:'+COLORS.textMuted+'">'+escapeHtml(t)+'</span>'; };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:1180px;width:96vw;border-top:4px solid '+c.cor+'">'+
+        '<div class="modal-header" style="align-items:flex-start;margin-bottom:12px">'+
+          '<div style="display:flex;gap:12px;align-items:flex-start">'+
+            '<div style="width:40px;height:40px;border-radius:9px;background:'+c.cor+'1F;display:flex;align-items:center;justify-content:center;flex-shrink:0">'+icon(stage==="colagem"?"layers":"calendar",20,c.cor)+'</div>'+
+            '<div><h3>Pedidos do dia — '+c.etapaLabel+'</h3>'+
+              '<div style="font-size:12.5px;color:'+COLORS.textMuted+';margin-top:3px">'+escapeHtml(weekdayFromDateStr(c.iso))+', '+fmtDateBR(c.iso)+(c.feriado?' · <span style="color:#C98200;font-weight:700">'+escapeHtml(c.feriado.nome)+'</span>':'')+'</div>'+
+              '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:7px">'+chip("Base: "+c.baseLabel)+chip("Máquina: "+c.maqLabel)+'</div></div>'+
+          '</div>'+
+          '<button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button>'+
+        '</div>'+
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px">'+
+          card("Pedidos", c.linhas.length)+
+          card(c.comFator?"Metragem real":"Metragem produzida", fmtNum(c.totalM)+" m", c.cor)+
+          (c.comFator ? card("Metragem com fator", fmtNum(c.totalF)+" m", "#C98A00") : '')+
+          card("Meta do dia", c.meta>0 ? fmtNum(c.meta)+" m" : "Sem meta")+
+          card("% da meta", c.pct===null ? "—" : c.pct+"%", corPct)+
+        '</div>'+
+        tabela+
+        '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Clique numa linha para abrir o pedido.'+(stage==="perfilar"?' "Com fator" é a metragem multiplicada pelo Fator Produção Perfilar — é o número do gráfico.':'')+'</p>'+
+        '<div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap;gap:10px">'+
+          '<button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+          '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+            '<button type="button" class="btn" onclick="gerarPdfPedidosDia(\'landscape\')"'+(c.linhas.length?'':' disabled')+'>'+icon("printer",14)+' PDF Paisagem</button>'+
+            '<button type="button" class="btn btn-primary" onclick="gerarPdfPedidosDia(\'portrait\')"'+(c.linhas.length?'':' disabled')+'>'+icon("printer",14)+' PDF Retrato</button>'+
+          '</div>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+let __pdfDiaUrl = null;
+async function gerarPdfPedidosDia(orientacao){
+  const sel = STATE.acompDiaSel;
+  if(!sel) return;
+  showToast("info","Gerando PDF…");
+  try{
+    if(!(await garantirBibliotecaPdf())){ showToast("error","A biblioteca de PDF não carregou. Recarregue a página e tente de novo."); return; }
+    const c = pdiaContexto(sel.stage, sel.dia);
+    if(!c.linhas.length){ showToast("error","Nenhum pedido neste dia."); return; }
+    const limpa = function(v){ return String(v==null?"":v).replace(/[—–]/g,"-").replace(/[^\x09\x0A\x20-\x7E -ÿ]/g,"").trim() || "-"; };
+    const rgb = function(hex){ const x = hexParaRgb(hex); return [x.r,x.g,x.b]; };
+    const corEtapa = rgb(sel.stage==="colagem" ? "#0080C6" : "#C98A00");
+    const retrato = orientacao==="portrait";
+    const doc = new window.jspdf.jsPDF({orientation:orientacao, unit:"mm", format:"a4"});
+    const W = doc.internal.pageSize.getWidth(), H = doc.internal.pageSize.getHeight();
+    try{ doc.addImage("data:image/png;base64,"+LOGO_LIGHT_BG_B64, "PNG", 10, 8, 34, 7.9); }catch(err){}
+    doc.setFont("helvetica","bold"); doc.setFontSize(14); doc.setTextColor(20,25,31);
+    doc.text(limpa("Pedidos do dia - "+c.etapaLabel), 50, 12.5);
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); doc.setTextColor(95,105,118);
+    doc.text(limpa(weekdayFromDateStr(c.iso)+", "+fmtDateBR(c.iso)+(c.feriado?" ("+c.feriado.nome+")":"")), 50, 17.5);
+    doc.text(limpa("Base: "+c.baseLabel+"   |   Maquina: "+c.maqLabel), W-10, 12.5, {align:"right"});
+    doc.setDrawColor(corEtapa[0],corEtapa[1],corEtapa[2]); doc.setLineWidth(0.8); doc.line(10, 21, W-10, 21);
+    /* Caixas de resumo */
+    const caixas = [["Pedidos", String(c.linhas.length)], [c.comFator?"Metragem real":"Metragem", fmtNum(c.totalM)+" m"]];
+    if(c.comFator) caixas.push(["Com fator", fmtNum(c.totalF)+" m"]);
+    caixas.push(["Meta do dia", c.meta>0 ? fmtNum(c.meta)+" m" : "Sem meta"], ["% da meta", c.pct===null ? "-" : c.pct+"%"]);
+    const gap = 3, bw = (W-20-gap*(caixas.length-1))/caixas.length;
+    caixas.forEach(function(cx,i){
+      const x = 10+i*(bw+gap), y = 24;
+      doc.setFillColor(243,245,247); doc.setDrawColor(215,222,229); doc.setLineWidth(0.2);
+      doc.roundedRect(x, y, bw, 13, 1.5, 1.5, "FD");
+      doc.setFont("helvetica","normal"); doc.setFontSize(7); doc.setTextColor(102,112,124);
+      doc.text(limpa(cx[0]).toUpperCase(), x+3, y+4.5);
+      doc.setFont("helvetica","bold"); doc.setFontSize(11); doc.setTextColor(20,25,31);
+      doc.text(limpa(cx[1]), x+3, y+10.5);
+    });
+    const cols = retrato
+      ? [["#","n"],["OP","op"],["Cliente","cli"],["Material","mat"],["Cor Sup.","cs"],["Cor Inf.","ci"],["Metragem","m"]]
+      : [["#","n"],["OP","op"],["Cliente","cli"],["Tipo","tipo"],["Material","mat"],["Cor Sup.","cs"],["Cor Inf.","ci"],["EPS","eps"],["Cidade","cid"],["Equipamento","eq"],["Etapa","et"],["Metragem","m"]];
+    if(c.comFator) cols.push(["Com fator","mf"]);
+    const val = function(k, l, i){
+      const p = l.p;
+      switch(k){
+        case "n": return String(i+1);
+        case "op": return p.op||"-";
+        case "cli": return (pedidoEhRetirada(p)?"[RETIRA] ":"")+(p.cliente||"-");
+        case "tipo": return p.tipo||"-";
+        case "mat": return p.material||"-";
+        case "cs": return colNomeMaterial(p.corSupId)||"-";
+        case "ci": return colNomeMaterial(p.corInfId)||"-";
+        case "eps": return colNomeMaterial(p.epsId)||"-";
+        case "cid": { const x = STATE.cidades.find(function(z){ return z.id===p.cidadeId; }); return x?x.nome:"-"; }
+        case "eq": { const x = STATE.equipamentos.find(function(z){ return z.id===p.equipamentoId; }); return x?x.nome:"-"; }
+        case "et": return pdiaEtapaAtual(p);
+        case "m": return fmtNum(l.metros)+" m";
+        case "mf": return fmtNum(l.metrosFator)+" m";
+      }
+      return "-";
+    };
+    const body = c.linhas.map(function(l,i){ return cols.map(function(cd){ return limpa(val(cd[1], l, i)); }); });
+    const foot = [cols.map(function(cd,i){
+      if(i===0) return "";
+      if(cd[1]==="op") return "TOTAL";
+      if(cd[1]==="cli") return c.linhas.length+" pedido(s)";
+      if(cd[1]==="m") return fmtNum(c.totalM)+" m";
+      if(cd[1]==="mf") return fmtNum(c.totalF)+" m";
+      return "";
+    })];
+    const colStyles = {};
+    cols.forEach(function(cd,i){
+      if(cd[1]==="n") colStyles[i] = {cellWidth:7, halign:"center", textColor:[120,128,140]};
+      if(cd[1]==="op") colStyles[i] = {fontStyle:"bold", cellWidth:16};
+      if(cd[1]==="m" || cd[1]==="mf") colStyles[i] = {halign:"right", cellWidth:22};
+    });
+    const agora = new Date();
+    const geradoEm = fmtDateBR(todayStr())+" "+pad2(agora.getHours())+":"+pad2(agora.getMinutes());
+    doc.autoTable({
+      startY:41, head:[cols.map(function(cd){ return cd[0]; })], body:body, foot:foot, showFoot:"lastPage", theme:"grid",
+      margin:{left:10, right:10, top:14, bottom:14},
+      styles:{font:"helvetica", fontSize: retrato?7.6:7.8, cellPadding:1.7, textColor:[20,25,31], lineColor:[215,222,229], lineWidth:0.15, valign:"middle", overflow:"linebreak"},
+      headStyles:{fillColor:corEtapa, textColor:[255,255,255], fontStyle:"bold", fontSize:7.6},
+      footStyles:{fillColor:[234,239,243], textColor:[20,25,31], fontStyle:"bold"},
+      alternateRowStyles:{fillColor:[248,250,252]},
+      columnStyles:colStyles,
+    });
+    const n = doc.internal.getNumberOfPages();
+    for(let pg=1; pg<=n; pg++){
+      doc.setPage(pg);
+      doc.setFont("helvetica","normal"); doc.setFontSize(7.5); doc.setTextColor(120,128,140);
+      doc.text("ELEVE - Painel de Producao  |  Gerado em "+geradoEm, 10, H-6);
+      doc.text("Pagina "+pg+" de "+n, W-10, H-6, {align:"right"});
+    }
+    const blob = doc.output("blob");
+    if(__pdfDiaUrl){ try{ URL.revokeObjectURL(__pdfDiaUrl); }catch(err){} }
+    __pdfDiaUrl = URL.createObjectURL(blob);
+    const nome = "pedidos-"+c.etapaLabel.toLowerCase()+"-"+c.iso+"-"+(retrato?"retrato":"paisagem")+".pdf";
+    const html =
+      '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+        '<div class="modal-card" style="max-width:1100px;width:96vw">'+
+          '<div class="modal-header"><h3>PDF — Pedidos do dia '+fmtDateBR(c.iso)+' ('+c.etapaLabel+', '+(retrato?"retrato":"paisagem")+')</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+          '<iframe src="'+__pdfDiaUrl+'#view=FitH" title="Pré-visualização do PDF" style="width:100%;height:68vh;border:1px solid var(--steel-border);border-radius:8px;background:#fff"></iframe>'+
+          '<div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap;gap:10px">'+
+            '<button type="button" class="btn btn-ghost" onclick="openPedidosDiaProducaoModal(\''+sel.stage+'\','+sel.dia+')">'+icon("chevronLeft",14)+' Voltar à lista</button>'+
+            '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+              '<a class="btn" style="text-decoration:none" href="'+__pdfDiaUrl+'" target="_blank" rel="noopener">'+icon("fileText",14)+' Abrir em nova aba</a>'+
+              '<a class="btn btn-primary" style="text-decoration:none" href="'+__pdfDiaUrl+'" download="'+escapeAttr(nome)+'">'+icon("printer",14)+' Baixar PDF</a>'+
+            '</div>'+
+          '</div>'+
+        '</div>'+
+      '</div>';
+    document.getElementById("modal-root").innerHTML = html;
+    showToast("success","PDF gerado.");
+  }catch(err){
+    console.error("[PDF pedidos do dia]", err);
+    showToast("error","Não foi possível gerar o PDF: "+(err && err.message ? err.message : err));
+  }
 }
 function producaoChartHtml(stage, titulo, iconName, cor){
   const f = STATE.acompFiltro;
@@ -11161,8 +11404,9 @@ function producaoChartHtml(stage, titulo, iconName, cor){
     const metaTick = (!foraDoMes && metaDia>0 && escala>0)
       ? '<div style="position:absolute;left:8%;right:8%;bottom:'+Math.min(99,(metaDia/escala)*100)+'%;border-top:2px dashed '+COLORS.red+'"></div>'
       : '';
-    const tip = "Dia "+diaStr+(isHoje?" (hoje)":"")+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"");
-    return '<div class="chart-col" style="'+colStyle+'" title="'+escapeAttr(tip)+'">'+
+    const tip = "Dia "+diaStr+(isHoje?" (hoje)":"")+" — "+fmtNum(v)+" m"+(dados.pedidos[i]?(" · "+dados.pedidos[i]+" pedido(s)"):"")+(metaDia>0?(" · meta "+fmtNum(metaDia)+" m"):"")+(temObs?(" · Obs: "+obsMes[diaStr]):"")+(foraDoMes?"":" · clique para ver os pedidos do dia");
+    const clickCol = foraDoMes ? '' : ' onclick="openPedidosDiaProducaoModal(\''+stage+'\','+dia+')"';
+    return '<div class="chart-col'+(foraDoMes?'':' chart-col-click')+'" style="'+colStyle+'"'+clickCol+' title="'+escapeAttr(tip)+'">'+
       (v>0 ? '<div style="font-size:'+rf(10.5)+';font-weight:700;color:'+COLORS.text+';margin-bottom:2px;white-space:nowrap">'+Math.round(v)+'</div>' : '')+
       metaTick+
       '<div class="chart-bar" style="height:'+alturaPct+'%;background:'+corBarra+';opacity:'+(foraDoMes?0.35:1)+'"></div>'+
@@ -11180,7 +11424,7 @@ function producaoChartHtml(stage, titulo, iconName, cor){
   }).join("");
 
   const graficoHtml = modoAcumulado
-    ? cumulativeLineChartHtml(cor, maxDia, metasPorDia, dados.dias, f.ano, f.mes)
+    ? cumulativeLineChartHtml(cor, maxDia, metasPorDia, dados.dias, f.ano, f.mes, stage)
     : '<div class="chart-wrap">'+chartGridlinesHtml(escala)+barras+'</div>'+chartBarLegendHtml(cor);
 
   const diasComObs = Object.keys(obsMes).filter(function(d){ return obsMes[d] && obsMes[d].trim(); }).sort();

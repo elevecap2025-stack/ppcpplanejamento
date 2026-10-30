@@ -565,6 +565,237 @@ const SUPABASE_URL = "https://sqzabewrqhfqqwgoypyh.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNxemFiZXdycWhmcXF3Z295cHloIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODY4MDQ5MDMsImV4cCI6MjEwMjM4MDkwM30.SAxALxFj_KsterhpUb1ou6iWTPbkRbSsFg2FkARoHUo";
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+/* ============================== AUDITORIA E APROVAÇÕES (camada de dados) ==============================
+   1) Toda gravação feita no Supabase (inclusão, alteração, exclusão) por qualquer usuário é
+      registrada na tabela auditoria_log, com quem fez, quando, em qual tela/ação e o "antes"
+      e "depois" dos campos que mudaram. Isso é feito uma única vez, interceptando a execução
+      das consultas do supabase-js — nenhuma tela precisou ser alterada para gerar o log.
+   2) O usuário USUARIO_RESTRITO_EMAIL só pode INCLUIR. As ações de edição/exclusão mais usadas
+      viram uma "solicitação" que fica pendente até o AUDITOR_EMAIL aprovar (ver protegerAcao).
+      Qualquer outra gravação de edição/exclusão que ele tente é bloqueada aqui e registrada
+      como "bloqueado" no log. Exige as tabelas criadas pelo arquivo auditoria.sql. */
+const AUDITOR_EMAIL = "elevecap2025@gmail.com";
+const USUARIO_RESTRITO_EMAIL = "eleveperfis@gmail.com";
+const AUD_TABELAS_IGNORADAS = ["auditoria_log","auditoria_aprovacoes","recado_leituras"];
+let __escopoInclusao = 0;          // >0 enquanto roda uma inclusão (libera os ajustes de estoque dela)
+let __executandoAprovacao = false; // true enquanto o auditor aplica uma solicitação aprovada
+let __acaoAtual = "";              // descrição da ação em andamento, gravada no log
+function emailLogado(){ try{ return (STATE.currentUserEmail||"").trim().toLowerCase(); }catch(e){ return ""; } }
+function ehAuditor(){ return emailLogado()===AUDITOR_EMAIL; }
+function usuarioRestrito(){ return emailLogado()===USUARIO_RESTRITO_EMAIL; }
+function audNomeTela(){
+  try{ const it = NAV_ITEMS.find(function(x){ return x.id===STATE.screen; }); return it ? it.label : (STATE.screen||""); }catch(e){ return ""; }
+}
+function audHeader(h, nome){
+  if(!h) return "";
+  if(typeof h.get==="function") return h.get(nome)||"";
+  return h[nome]||h[nome.toLowerCase()]||"";
+}
+function audOperacao(b){
+  const m = String(b.method||"").toUpperCase();
+  if(m==="PATCH") return "update";
+  if(m==="DELETE") return "delete";
+  if(m==="POST"){
+    if(b.url && /\/rpc\//.test(b.url.pathname||"")) return null;
+    const pref = audHeader(b.headers,"Prefer");
+    if(/resolution=/.test(pref) || (b.url && b.url.searchParams && b.url.searchParams.has("on_conflict"))) return "upsert";
+    return "insert";
+  }
+  return null;
+}
+function audTabela(b){ try{ const p = b.url.pathname.split("/"); return decodeURIComponent(p[p.length-1]||""); }catch(e){ return ""; } }
+function audEhObj(v){ return !!v && typeof v==="object" && !Array.isArray(v); }
+function audIgual(a, b){
+  if(JSON.stringify(a)===JSON.stringify(b)) return true;
+  if((a===null||a===undefined||a==="") && (b===null||b===undefined||b==="")) return true;
+  if(typeof a==="string" && typeof b==="string" && /^\d{4}-\d{2}-\d{2}T/.test(a) && /^\d{4}-\d{2}-\d{2}T/.test(b)){
+    const ta = Date.parse(a), tb = Date.parse(b); if(!isNaN(ta) && ta===tb) return true;
+  }
+  if(a!==null && b!==null && a!=="" && b!=="" && typeof a!=="object" && typeof b!=="object" && !isNaN(Number(a)) && !isNaN(Number(b)) && Number(a)===Number(b)) return true;
+  return false;
+}
+function audDiff(antes, depois){
+  if(audEhObj(antes) && audEhObj(depois)){
+    const a = {}, d = {};
+    Object.keys(Object.assign({}, antes, depois)).forEach(function(k){
+      if(!audIgual(antes[k], depois[k])){ a[k] = antes[k]===undefined?null:antes[k]; d[k] = depois[k]===undefined?null:depois[k]; }
+    });
+    return {antes:a, depois:d};
+  }
+  if(Array.isArray(antes) && Array.isArray(depois)){
+    const sa = antes.map(function(x){ return JSON.stringify(x); }), sd = depois.map(function(x){ return JSON.stringify(x); });
+    return {
+      antes:{removidos: antes.filter(function(x,i){ return sd.indexOf(sa[i])===-1; })},
+      depois:{adicionados: depois.filter(function(x,i){ return sa.indexOf(sd[i])===-1; })},
+    };
+  }
+  return {antes:antes===undefined?null:antes, depois:depois===undefined?null:depois};
+}
+function audSemMudanca(a, d){
+  const vazio = function(v){
+    if(!audEhObj(v)) return false;
+    const ks = Object.keys(v);
+    if(ks.length===0) return true;
+    return ks.every(function(k){ return (k==="removidos"||k==="adicionados") && Array.isArray(v[k]) && v[k].length===0; });
+  };
+  return vazio(a) && vazio(d);
+}
+function audCompacto(v){
+  if(v===undefined) return null;
+  try{ const s = JSON.stringify(v); if(s && s.length>30000) return {_omitido:true, tamanho:s.length}; }catch(e){ return null; }
+  return v;
+}
+function audRegistro(b, tabela, op, resData){
+  try{
+    if(tabela==="app_config"){ const body = Array.isArray(b.body)?b.body[0]:b.body; if(body && body.key) return String(body.key); }
+    const idf = b.url.searchParams.get("id");
+    if(idf) return idf.replace(/^eq\./,"").replace(/^in\./,"");
+    if(resData){
+      const r = Array.isArray(resData)?resData[0]:resData;
+      if(r && (r.id||r.key)) return String(r.id||r.key)+(Array.isArray(resData)&&resData.length>1?" (+"+(resData.length-1)+")":"");
+    }
+    const body = Array.isArray(b.body)?b.body[0]:b.body;
+    if(body && (body.id||body.key)) return String(body.id||body.key);
+    const partes = [];
+    b.url.searchParams.forEach(function(v,k){ if(["select","columns","on_conflict","limit"].indexOf(k)===-1) partes.push(k+"="+v); });
+    return partes.join("&");
+  }catch(e){ return ""; }
+}
+async function audSnapshot(b, tabela, op){
+  try{
+    if(tabela==="app_config" && op==="upsert"){
+      const body = Array.isArray(b.body)?b.body[0]:b.body;
+      if(!body || !body.key) return null;
+      const r = await sb.from("app_config").select("value").eq("key", body.key).maybeSingle();
+      return r && r.data ? r.data.value : null;
+    }
+    if(op!=="update" && op!=="delete") return null;
+    const s = sb.from(tabela).select("*");
+    let temFiltro = false;
+    b.url.searchParams.forEach(function(v,k){
+      if(["select","columns","on_conflict","limit"].indexOf(k)!==-1) return;
+      s.url.searchParams.append(k, v); temFiltro = true;
+    });
+    if(!temFiltro) return null;
+    s.url.searchParams.set("limit","50");
+    const r = await s;
+    return r && !r.error ? r.data : null;
+  }catch(e){ return null; }
+}
+function audInserirLog(entry){
+  try{
+    entry.usuario = emailLogado() || "desconhecido";
+    entry.acao = entry.acao || __acaoAtual || audNomeTela();
+    entry.tela = audNomeTela();
+    entry.dados_antes = audCompacto(entry.dados_antes);
+    entry.dados_depois = audCompacto(entry.dados_depois);
+    sb.from("auditoria_log").insert(entry).then(function(r){
+      if(r && r.error){ try{ STATE.audLogErroGravacao = r.error.message; }catch(e){} }
+    }, function(){});
+  }catch(e){ console.warn("[Auditoria]", e); }
+}
+function audRegistrar(b, tabela, op, antes, resData){
+  try{
+    let dAntes = null, dDepois = null;
+    const body = b.body;
+    if(op==="insert"){ dDepois = resData || body; }
+    else if(op==="delete"){ dAntes = (Array.isArray(antes) && antes.length===1) ? antes[0] : antes; }
+    else if(op==="update"){
+      const keys = audEhObj(body) ? Object.keys(body) : null;
+      const proj = function(r){ if(!keys || !r) return r; const o = {}; keys.forEach(function(k){ o[k] = r[k]; }); return o; };
+      if(Array.isArray(antes) && antes.length===1 && audEhObj(body)){
+        const d = audDiff(proj(antes[0]), body); dAntes = d.antes; dDepois = d.depois;
+        if(audSemMudanca(dAntes, dDepois)) return;
+      } else { dAntes = Array.isArray(antes) ? antes.map(proj) : antes; dDepois = body; }
+    } else if(op==="upsert"){
+      if(tabela==="app_config"){
+        const corpo = Array.isArray(body)?body[0]:body;
+        const d = audDiff(antes, corpo ? corpo.value : null); dAntes = d.antes; dDepois = d.depois;
+        if(audSemMudanca(dAntes, dDepois)) return;
+      } else dDepois = body;
+    }
+    audInserirLog({tabela:tabela, operacao:op, registro:audRegistro(b, tabela, op, resData), dados_antes:dAntes, dados_depois:dDepois});
+  }catch(e){ console.warn("[Auditoria]", e); }
+}
+async function audProcessar(b, op, thenOriginal){
+  const tabela = audTabela(b);
+  if(AUD_TABELAS_IGNORADAS.indexOf(tabela)!==-1) return thenOriginal.call(b);
+  if(usuarioRestrito() && !__executandoAprovacao && __escopoInclusao===0 && op!=="insert"){
+    audInserirLog({tabela:tabela, operacao:"bloqueado", registro:audRegistro(b, tabela, op, null),
+      dados_antes:null, dados_depois:{operacao_tentada:op, dados:b.body===undefined?null:b.body}});
+    return {data:null, count:null, status:403, statusText:"Forbidden",
+      error:{code:"AUD403", message:"seu usuário só pode incluir dados. Edições e exclusões dependem da aprovação de "+AUDITOR_EMAIL+"."}};
+  }
+  const antes = await audSnapshot(b, tabela, op);
+  const res = await thenOriginal.call(b);
+  if(res && !res.error) audRegistrar(b, tabela, op, antes, res.data);
+  return res;
+}
+(function instalarAuditoria(){
+  try{
+    let p = Object.getPrototypeOf(sb.from("app_config").select("key"));
+    while(p && !Object.prototype.hasOwnProperty.call(p, "then")) p = Object.getPrototypeOf(p);
+    if(!p) return;
+    const thenOriginal = p.then;
+    p.then = function(onF, onR){
+      const b = this;
+      if(b.__audOk) return thenOriginal.call(b, onF, onR);
+      const op = audOperacao(b);
+      if(!op) return thenOriginal.call(b, onF, onR);
+      b.__audOk = true;
+      return audProcessar(b, op, thenOriginal).then(onF, onR);
+    };
+  }catch(err){ console.warn("[Auditoria] não instalada", err); }
+})();
+/* ---- Ações que passam por aprovação ----
+   protegerAcao embrulha uma função: para o usuário restrito, em vez de executar, grava uma
+   solicitação com os argumentos (todos serializáveis). Quando o auditor aprova, a função
+   original roda com esses mesmos argumentos, com toda a lógica (estoque etc.). ehInclusao,
+   quando informado, diz se aquela chamada específica é uma inclusão (aí roda direto). */
+const ACOES_PROTEGIDAS = {};
+async function audExecutarComo(desc, inclusao, fn){
+  const anterior = __acaoAtual;
+  __acaoAtual = desc || anterior;
+  if(inclusao) __escopoInclusao++;
+  try{ return await fn(); }
+  finally{ if(inclusao) __escopoInclusao--; __acaoAtual = anterior; }
+}
+function protegerAcao(chave, fn, descrever, ehInclusao){
+  ACOES_PROTEGIDAS[chave] = {fn:fn, descrever:descrever};
+  return async function(){
+    const args = Array.prototype.slice.call(arguments);
+    let desc = chave;
+    try{ if(descrever) desc = descrever.apply(null, args); }catch(e){}
+    let inclusao = false;
+    try{ inclusao = !!(ehInclusao && ehInclusao.apply(null, args)); }catch(e){}
+    if(usuarioRestrito() && !__executandoAprovacao && !inclusao){
+      await solicitarAprovacao(chave, args, desc);
+      return false;
+    }
+    return audExecutarComo(desc, inclusao, function(){ return fn.apply(null, args); });
+  };
+}
+function comoInclusao(desc, fn){
+  return function(){
+    const self = this, args = arguments;
+    let d = desc;
+    try{ if(typeof desc==="function") d = desc.apply(null, args); }catch(e){ d = ""; }
+    return audExecutarComo(d, true, function(){ return fn.apply(self, args); });
+  };
+}
+async function solicitarAprovacao(chave, args, desc){
+  let argsSer;
+  try{ argsSer = JSON.parse(JSON.stringify(args)); }
+  catch(e){ showToast("error","Não foi possível registrar a solicitação de aprovação."); return; }
+  const { error } = await sb.from("auditoria_aprovacoes").insert({
+    solicitante: emailLogado(), acao_chave: chave, args: argsSer, descricao: desc||chave, tela: audNomeTela(), status:"pendente",
+  });
+  closeModal();
+  renderScreen();
+  if(error){ showToast("error","Seu usuário não pode editar/excluir e a solicitação não pôde ser enviada: "+error.message); return; }
+  showToast("info","Alteração enviada para aprovação de "+AUDITOR_EMAIL+". Ela só será aplicada depois de aprovada.");
+}
+
 /* ============================== SUPABASE DATA LAYER (mapeamento + CRUD) ============================== */
 function sbErrorToast(action, error){
   console.error(action, error);
@@ -2443,6 +2674,11 @@ async function devolverBaixaRow(materialId){
   const qtd = Number((qtdInput&&qtdInput.value)||0);
   const obs = (obsInput&&obsInput.value)||"";
   if(!(qtd>0)) return;
+  await registrarDevolucaoEstoque(materialId, qtd, obs);
+}
+async function registrarDevolucaoEstoque(materialId, qtd, obs){
+  const m = STATE.materiais.find(x=>x.id===materialId);
+  if(!m) return false;
   const novoEstoque = Math.round((m.estoque + qtd)*100)/100;
   const { data:row, error:insErr } = await sb.from("baixas_manual").insert({
     material_id:materialId, quantidade:-qtd, motivo:"Devolução (baixa duplicada)", observacao:obs, data:todayStr(),
@@ -2646,6 +2882,14 @@ function openAvulsoModal(editId){
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
+async function salvarEdicaoAvulso(editId, payload){
+  const item = STATE.materiaisAvulsos.find(function(a){ return a.id===editId; });
+  if(!item) return false;
+  const { data:row, error } = await sb.from("materiais_avulsos").update(payload).eq("id", editId).select().single();
+  if(error){ sbErrorToast("atualizar registro avulso", error); return false; }
+  Object.assign(item, mapMaterialAvulsoFromRow(row));
+  return true;
+}
 async function submitAvulsoForm(event, editId){
   event.preventDefault();
   const fd = new FormData(event.target);
@@ -2663,9 +2907,8 @@ async function submitAvulsoForm(event, editId){
       payload.material_id = materialId;
       payload.quantidade = qtd;
     }
-    const { data:row, error } = await sb.from("materiais_avulsos").update(payload).eq("id", editId).select().single();
-    if(error){ sbErrorToast("atualizar registro avulso", error); return false; }
-    Object.assign(item, mapMaterialAvulsoFromRow(row));
+    const okEd = await salvarEdicaoAvulso(editId, payload);
+    if(okEd===false) return false;
     closeModal();
     renderScreen();
     showToast("success","Registro atualizado.");
@@ -4827,20 +5070,32 @@ async function submitPedidoForm(event, mode, id){
      consumo é baixado do estoque real duas vezes, mesmo aparecendo só um lançamento. */
   const submitBtn = event.target.querySelector('button[type="submit"]');
   if(submitBtn) submitBtn.disabled = true;
-  const salvo = await savePedido(mode==="edit"?id:null, data);
+  const extras = {retirada:retiradaMarcada, dataVenda:dataVendaValor, equipamentoInf:equipamentoInfValor,
+    observacoes:observacoesValor, regional:regionalValor, conclusao:valoresConclusao};
+  const salvo = mode==="edit"
+    ? await salvarEdicaoPedidoCompleta(id, data, extras)
+    : await comoInclusao("Novo pedido — "+(data.cliente||""), salvarPedidoComExtras)(null, data, extras);
   if(submitBtn) submitBtn.disabled = false;
   if(salvo===false) return false;
-  if(salvo && salvo.id){
-    await syncRetiradaAposSalvar(salvo.id, retiradaMarcada);
-    await syncDataVendaAposSalvar(salvo.id, dataVendaValor);
-    await syncEquipamentoInfAposSalvar(salvo.id, equipamentoInfValor);
-    await syncObservacaoAposSalvar(salvo.id, observacoesValor);
-    await syncRegionalAposSalvar(salvo.id, regionalValor);
-    if(Object.keys(valoresConclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, valoresConclusao);
-  }
   closeModal();
   renderScreen();
   return false;
+}
+/* Salva o pedido e, em seguida, os campos que moram em app_config. Usada tanto na inclusão
+   quanto na edição (a edição passa pela aprovação quando o usuário é restrito). */
+async function salvarPedidoComExtras(id, data, extras){
+  extras = extras || {};
+  const salvo = await savePedido(id, data);
+  if(salvo===false) return false;
+  if(salvo && salvo.id){
+    await syncRetiradaAposSalvar(salvo.id, !!extras.retirada);
+    await syncDataVendaAposSalvar(salvo.id, extras.dataVenda||"");
+    await syncEquipamentoInfAposSalvar(salvo.id, extras.equipamentoInf||"");
+    await syncObservacaoAposSalvar(salvo.id, extras.observacoes||"");
+    await syncRegionalAposSalvar(salvo.id, extras.regional||"");
+    if(extras.conclusao && Object.keys(extras.conclusao).length) await syncDatasConclusaoAposSalvar(salvo.id, extras.conclusao);
+  }
+  return salvo;
 }
 /* "Cliente retira" mora em app_config (não na tabela pedidos), então depois de salvar o
    pedido em si é preciso, à parte, incluir/remover o id dele na lista — só se o valor do
@@ -6746,6 +7001,11 @@ async function confirmarCancelamentoPedido(pedidoId){
   if(!motivo){ showToast("error","Escolha o motivo do cancelamento."); return; }
   const obsEl = document.getElementById("cancel-observacao");
   const observacao = obsEl ? obsEl.value.trim() : "";
+  await cancelarPedidoComMotivo(pedidoId, motivo, observacao);
+}
+async function cancelarPedidoComMotivo(pedidoId, motivo, observacao){
+  const p = STATE.pedidos.find(function(x){ return x.id===pedidoId; });
+  if(!p) return false;
   const btn = document.getElementById("cancel-confirm-btn");
   if(btn){ btn.disabled = true; btn.textContent = "Cancelando…"; }
   const pre = isPedidoPreProducao(p);
@@ -7274,6 +7534,10 @@ async function saveMetas(stage){
   const s = STATE.stageState[stage];
   const novasMetas = [];
   for(let i=0;i<6;i++){ novasMetas.push(Number(document.getElementById("meta-input-"+i).value||0)); }
+  await gravarMetas(stage, novasMetas);
+}
+async function gravarMetas(stage, novasMetas){
+  const s = STATE.stageState[stage];
   const ok = await configSet("metas_"+stage, novasMetas);
   if(!ok) return;
   s.metas = novasMetas;
@@ -7617,6 +7881,9 @@ async function confirmarFaltaMaterial(pedidoId, editId){
   if(!v.pessoa){ showToast("error","Escolha a pessoa que errou."); return; }
   if(!v.solucao){ showToast("error","Informe o login (e-mail) do responsável por solucionar."); return; }
   if(!emailValido(v.solucao)){ showToast("error","Login do responsável inválido — informe o e-mail completo."); return; }
+  await registrarFaltaMaterial(pedidoId, editId, v);
+}
+async function registrarFaltaMaterial(pedidoId, editId, v){
   const btn = document.getElementById("falta-confirmar");
   if(btn) btn.disabled = true;
   if(editId){
@@ -7673,6 +7940,9 @@ function openDataPrevistaModal(id){
 async function salvarDataPrevista(id){
   const val = ((document.getElementById("pend-data-prevista")||{}).value||"").trim();
   if(!val){ showToast("error","Informe a data prevista."); return; }
+  await definirDataPrevista(id, val);
+}
+async function definirDataPrevista(id, val){
   const ok = await salvarPendencias(function(lista){
     const x = lista.find(function(i){ return i.id===id; });
     if(x) x.dataPrevista = val;
@@ -9062,6 +9332,9 @@ async function salvarFatoresKg(){
     const v = Number(el.value);
     novos[el.getAttribute("data-classe")] = (v>0 ? v : 0);
   });
+  await gravarFatoresKg(novos);
+}
+async function gravarFatoresKg(novos){
   const ok = await configSet("fatores_kg_telha", novos);
   if(!ok) return;
   STATE.fatoresKgTelha = novos;
@@ -10996,11 +11269,15 @@ async function saveObsDia(stage, dia){
   const textarea = document.getElementById("obs-dia-textarea");
   const texto = (textarea ? textarea.value : "").trim();
   const f = STATE.acompFiltro;
-  const cacheKey = obsCacheKey(stage, f.ano, f.mes);
-  const obsMes = Object.assign({}, STATE.obsProducao[cacheKey]||{});
+  await gravarObsDia(stage, f.ano, f.mes, dia, texto);
+}
+async function gravarObsDia(stage, ano, mes, dia, texto){
+  const cacheKey = obsCacheKey(stage, ano, mes);
+  const atual = await configGet(obsConfigKey(stage, ano, mes));
+  const obsMes = Object.assign({}, (atual && typeof atual==="object") ? atual : (STATE.obsProducao[cacheKey]||{}));
   const diaStr = pad2(dia);
   if(texto) obsMes[diaStr] = texto; else delete obsMes[diaStr];
-  const ok = await configSet(obsConfigKey(stage, f.ano, f.mes), obsMes);
+  const ok = await configSet(obsConfigKey(stage, ano, mes), obsMes);
   if(!ok) return;
   STATE.obsProducao[cacheKey] = obsMes;
   closeModal();
@@ -12060,6 +12337,8 @@ const NAV_GROUPS = [
     {id:"permissoesUsuarios", label:"Permissões de Usuário", icon:"users"},
     {id:"gerenciarRecados", label:"Gerenciar Recados", icon:"message"},
     {id:"backup", label:"Backup dos Dados", icon:"arrowDownCircle"},
+    {id:"auditoria", label:"Auditoria", icon:"eye"},
+    {id:"auditoriaPerfis", label:"Auditoria — eleveperfis", icon:"eye"},
   ]},
 ];
 const NAV_ITEMS = NAV_GROUPS.reduce((acc,g)=>acc.concat(g.items), []);
@@ -12092,8 +12371,10 @@ function isSuperAdminEmail(email){
    o dono do recado: quem não é admin só enxerga e mexe no que ele mesmo enviou. */
 const TELAS_SEMPRE_ADMIN = ["permissoesUsuarios"];
 const TELAS_SEMPRE_LIVRES = ["recados", "gerenciarRecados"];
+/* Telas de auditoria: só o auditor (AUDITOR_EMAIL) acessa, independente de outras permissões. */
+const TELAS_SOMENTE_AUDITOR = ["auditoria", "auditoriaPerfis"];
 function permTelasConfiguraveis(){
-  const fixas = TELAS_SEMPRE_ADMIN.concat(TELAS_SEMPRE_LIVRES);
+  const fixas = TELAS_SEMPRE_ADMIN.concat(TELAS_SEMPRE_LIVRES).concat(TELAS_SOMENTE_AUDITOR);
   return NAV_GROUPS
     .map(function(g){ return Object.assign({}, g, { items: g.items.filter(function(it){ return fixas.indexOf(it.id)===-1; }) }); })
     .filter(function(g){ return g.items.length>0; });
@@ -12105,6 +12386,7 @@ function permsForCurrentUser(){
 }
 function isCurrentUserAdmin(){
   if(isSuperAdminEmail(STATE.currentUserEmail)) return true;
+  if(usuarioRestrito()) return false;   // usuário restrito nunca é administrador
   const cfg = permsForCurrentUser();
   if(cfg) return !!cfg.admin;
   const todas = STATE.permissoesUsuarios||{};
@@ -12112,6 +12394,7 @@ function isCurrentUserAdmin(){
   return !existeAdmin; // bootstrap: sem nenhum admin configurado, qualquer usuário logado pode configurar
 }
 function telaPermitida(screenId){
+  if(TELAS_SOMENTE_AUDITOR.indexOf(screenId)!==-1) return ehAuditor();
   if(TELAS_SEMPRE_LIVRES.indexOf(screenId)!==-1) return true;
   if(isSuperAdminEmail(STATE.currentUserEmail)) return true;
   if(TELAS_SEMPRE_ADMIN.indexOf(screenId)!==-1) return isCurrentUserAdmin();
@@ -12192,7 +12475,7 @@ async function marcarTodasTelasUsuario(email, marcar){
   if(isSuperAdminEmail(email)) return;
   const atual = Object.assign({}, STATE.permissoesUsuarios);
   const cfg = Object.assign({admin:false, screens:[]}, atual[email]);
-  cfg.screens = marcar ? NAV_ITEMS.filter(function(it){ return it.id!=="dashboard" && it.id!=="permissoesUsuarios"; }).map(function(it){ return it.id; }) : [];
+  cfg.screens = marcar ? NAV_ITEMS.filter(function(it){ return it.id!=="dashboard" && it.id!=="permissoesUsuarios" && TELAS_SOMENTE_AUDITOR.indexOf(it.id)===-1; }).map(function(it){ return it.id; }) : [];
   atual[email] = cfg;
   STATE.permissoesUsuarios = atual;
   await savePermissoesUsuarios();
@@ -12810,6 +13093,10 @@ function renderSidebar(){
         const n = recadosNaoLidos(STATE.currentUserEmail).length;
         if(n>0) badge = '<span style="margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:'+COLORS.red+';border-radius:9px;padding:1px 6px;min-width:17px;text-align:center">'+n+'</span>';
       }
+      if(it.id==="auditoriaPerfis"){
+        const n = audAprovacoesPendentes().length;
+        if(n>0) badge = '<span title="Solicitações aguardando aprovação" style="margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:'+COLORS.red+';border-radius:9px;padding:1px 6px;min-width:17px;text-align:center">'+n+'</span>';
+      }
       return '<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+badge+'</button>';
     }).join("");
     if(g.id==="_top") return itemsHtml;
@@ -12876,6 +13163,8 @@ function renderScreen(){
   else if(STATE.screen==="recados") renderRecadosScreen();
   else if(STATE.screen==="gerenciarRecados") renderGerenciarRecadosScreen();
   else if(STATE.screen==="backup") renderBackupScreen();
+  else if(STATE.screen==="auditoria") renderAuditoriaScreen("geral");
+  else if(STATE.screen==="auditoriaPerfis") renderAuditoriaScreen("perfis");
   iniciarObservadorFiltros();
   aprimorarFiltrosDaTela(false);
   aprimorarSelectsProduto();
@@ -12908,6 +13197,7 @@ async function enterApp(userName){
   mostrarPopupRecados();
   mostrarAvisoPendenciasEntrega();
   iniciarRealtimeRecados();
+  if(ehAuditor()){ carregarAprovacoes(); iniciarRealtimeAprovacoes(); }
   executarBackupAutomaticoSeNecessario();
 }
 async function handleLogin(event){
@@ -12937,6 +13227,8 @@ async function handleLogout(){
   fecharAvisoPendenciasEntrega();
   { const hb = document.getElementById("hscroll-float"); if(hb) hb.style.display = "none"; }
   pararRealtimeRecados();
+  pararRealtimeAprovacoes();
+  STATE.aud = {}; STATE.audAprovacoes = undefined;
   await sb.auth.signOut();
   STATE.loggedIn = false;
   const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
@@ -12950,6 +13242,8 @@ async function handleLogout(){
 sb.auth.onAuthStateChange((event, session)=>{
   if(event==="SIGNED_OUT" && STATE.loggedIn){
     pararRealtimeRecados();
+    pararRealtimeAprovacoes();
+    STATE.aud = {}; STATE.audAprovacoes = undefined;
     STATE.loggedIn = false;
     const fb = document.getElementById("sidebar-float-btn"); if(fb) fb.style.display = "none";
     STATE.dataLoaded = false;
@@ -12969,6 +13263,530 @@ async function restoreSession(){
 }
 
 /* ============================== INIT ============================== */
+/* ============================== AUDITORIA — PROTEÇÃO DAS AÇÕES ============================== */
+function audDescPedido(id){ const p = (STATE.pedidos||[]).find(function(x){ return x.id===id; }); return p ? "OP "+(p.op||"—")+" · "+(p.cliente||"—") : "pedido "+id; }
+function audDescMaterial(id){ const m = (STATE.materiais||[]).find(function(x){ return x.id===id; }); return m ? m.nome : "material "+id; }
+function audDescAvulso(id){ const a = (STATE.materiaisAvulsos||[]).find(function(x){ return x.id===id; }); return a ? "OP "+(a.op||"—")+" · "+audDescMaterial(a.materialId) : "registro "+id; }
+function audDescPend(id){ const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; }); return x ? "OP "+(x.op||"—")+" · "+(x.cliente||"—") : "pendência "+id; }
+function audDescCanc(id){ const c = (STATE.pedidosCancelados||[]).find(function(x){ return x.id===id; }); const p = c&&c.pedido||{}; return c ? "OP "+(p.op||"—")+" · "+(p.cliente||"—") : "cancelamento "+id; }
+function audNomeLista(lista, id){ const x = (lista||[]).find(function(i){ return i.id===id; }); return x ? x.nome : (id||"nenhum"); }
+(function protegerAcoesDoSistema(){
+  /* Pedidos */
+  window.salvarEdicaoPedidoCompleta = protegerAcao("pedido.editar", salvarPedidoComExtras, function(id){ return "Editar pedido "+audDescPedido(id); });
+  deletePedido = protegerAcao("pedido.excluir", deletePedido, function(id){ return "Excluir pedido "+audDescPedido(id); });
+  reschedulePedido = protegerAcao("pedido.reprogramar", reschedulePedido, function(id,d){ return "Reprogramar "+audDescPedido(id)+" para "+fmtDateBR(d); });
+  reschedulePedidos = protegerAcao("pedido.reprogramarVarios", reschedulePedidos, function(ids,d){ return "Reprogramar "+(ids||[]).length+" pedido(s) para "+fmtDateBR(d); });
+  updatePedidoSituacao = protegerAcao("pedido.situacao", updatePedidoSituacao, function(id,sit){ return "Alterar situação de "+audDescPedido(id)+" para "+audNomeLista(STATE.statusOptions, sit); });
+  updatePedidoMotorista = protegerAcao("pedido.motorista", updatePedidoMotorista, function(id,m){ return "Alterar motorista de "+audDescPedido(id)+" para "+audNomeLista(STATE.motoristas, m); });
+  toggleRetiradaPedido = protegerAcao("pedido.retirada", toggleRetiradaPedido, function(id){ return "Marcar/desmarcar retirada — "+audDescPedido(id); });
+  toggleOpImpressaPedido = protegerAcao("pedido.opImpressa", toggleOpImpressaPedido, function(id){ return "Marcar/desmarcar OP impressa — "+audDescPedido(id); });
+  startTimer = protegerAcao("pedido.iniciarProducao", startTimer, function(id){ return "Iniciar/retomar produção — "+audDescPedido(id); });
+  pauseTimer = protegerAcao("pedido.pausarProducao", pauseTimer, function(id){ return "Pausar produção — "+audDescPedido(id); });
+  concludeTimer = protegerAcao("pedido.concluirEtapa", concludeTimer, function(id){ return "Concluir etapa — "+audDescPedido(id); });
+  startTimerInf = protegerAcao("pedido.iniciarProducaoInf", startTimerInf, function(id){ return "Iniciar produção Cor Inf. — "+audDescPedido(id); });
+  pauseTimerInf = protegerAcao("pedido.pausarProducaoInf", pauseTimerInf, function(id){ return "Pausar produção Cor Inf. — "+audDescPedido(id); });
+  voltarEtapaAnterior = protegerAcao("pedido.voltarEtapa", voltarEtapaAnterior, function(id){ return "Retornar etapa — "+audDescPedido(id); });
+  voltarDeEntregue = protegerAcao("pedido.voltarEntregue", voltarDeEntregue, function(id){ return "Desfazer entrega — "+audDescPedido(id); });
+  window.cancelarPedidoComMotivo = protegerAcao("pedido.cancelar", cancelarPedidoComMotivo, function(id,motivo){ return "Cancelar pedido "+audDescPedido(id)+" — motivo: "+motivo; });
+  doReverterCancelamento = protegerAcao("cancelado.reverter", doReverterCancelamento, function(id){ return "Reverter cancelamento — "+audDescCanc(id); });
+  doExcluirCancelado = protegerAcao("cancelado.excluir", doExcluirCancelado, function(id){ return "Excluir cancelamento do histórico — "+audDescCanc(id); });
+  salvarColaKgPedido = protegerAcao("pedido.cola", salvarColaKgPedido,
+    function(id,v){ return "Cola usada ("+(v===""?"limpar":v+" kg")+") — "+audDescPedido(id); },
+    function(id){ const p = STATE.pedidos.find(function(x){ return x.id===id; }); return !!p && colaKgDoPedido(p)===null; });
+  /* Cadastros (cidade, equipamento, matéria-prima, motorista) */
+  Object.keys(ENTITY_CONFIGS).forEach(function(tipo){
+    const cfg = ENTITY_CONFIGS[tipo];
+    const rot = {cidade:"cidade", equipamento:"equipamento", material:"matéria-prima", motorista:"motorista"}[tipo] || tipo;
+    const nomeDe = function(id){ const it = cfg.items().find(function(x){ return x.id===id; }); return it ? it.nome : id; };
+    cfg.onAdd = comoInclusao(function(data){ return "Cadastrar "+rot+": "+((data&&data.nome)||""); }, cfg.onAdd);
+    cfg.onUpdate = protegerAcao("entidade."+tipo+".editar", cfg.onUpdate, function(id){ return "Editar "+rot+": "+nomeDe(id); });
+    cfg.onDelete = protegerAcao("entidade."+tipo+".excluir", cfg.onDelete, function(id){ return "Excluir "+rot+": "+nomeDe(id); });
+  });
+  toggleMaterialAtencao = protegerAcao("material.atencao", toggleMaterialAtencao, function(id){ return "Marcar/desmarcar atenção — "+audDescMaterial(id); });
+  toggleMaterialAtivo = protegerAcao("material.ativo", toggleMaterialAtivo, function(id){ return "Ativar/inativar — "+audDescMaterial(id); });
+  /* Estoque */
+  doDeleteBaixaManual = protegerAcao("baixa.excluir", doDeleteBaixaManual, function(id){ const b = STATE.baixasManual.find(function(x){ return x.id===id; }); return "Estornar baixa — "+(b?audDescMaterial(b.materialId)+" "+fmtNum(b.quantidade):id); });
+  window.registrarDevolucaoEstoque = protegerAcao("baixa.devolucao", registrarDevolucaoEstoque, function(mid,q){ return "Devolver ao estoque "+fmtNum(q)+" — "+audDescMaterial(mid); });
+  doDeleteTransferencia = protegerAcao("transferencia.excluir", doDeleteTransferencia, function(id){ const t = STATE.transferencias.find(function(x){ return x.id===id; }); return "Estornar transferência"+(t?" — "+audDescMaterial(t.materialOrigemId)+" → "+audDescMaterial(t.materialDestinoId)+" ("+fmtNum(t.quantidade)+")":""); });
+  updateNota = protegerAcao("nota.editar", updateNota, function(id,n){ return "Editar nota fiscal Nº "+((n&&n.numeroNota)||"—")+((n&&n.fornecedor)?" — "+n.fornecedor:""); });
+  doDeleteNota = protegerAcao("nota.excluir", doDeleteNota, function(id){ const n = STATE.notas.find(function(x){ return x.id===id; }); return "Excluir nota fiscal Nº "+(n?(n.numeroNota||"—")+" de "+fmtDateBR(n.data):id); });
+  addNota = comoInclusao(function(n){ return "Lançar nota fiscal Nº "+((n&&n.numeroNota)||"—"); }, addNota);
+  submitBaixaManualForm = comoInclusao("Nova baixa de estoque", submitBaixaManualForm);
+  submitTransferenciaForm = comoInclusao("Nova transferência de estoque", submitTransferenciaForm);
+  salvarNovoMaterialTransf = comoInclusao("Cadastrar matéria-prima (transferência)", salvarNovoMaterialTransf);
+  /* Separação avulsa */
+  submitAvulsoForm = comoInclusao("Novo registro de material avulso", submitAvulsoForm);
+  window.salvarEdicaoAvulso = protegerAcao("avulso.editar", salvarEdicaoAvulso, function(id){ return "Editar separação avulsa — "+audDescAvulso(id); });
+  doDeleteAvulso = protegerAcao("avulso.excluir", doDeleteAvulso, function(id){ return "Excluir separação avulsa — "+audDescAvulso(id); });
+  updateAvulsoStatus = protegerAcao("avulso.status", updateAvulsoStatus, function(id,st){ return "Status \""+statusAvulsoLabel(st)+"\" — "+audDescAvulso(id); });
+  rescheduleAvulso = protegerAcao("avulso.reprogramar", rescheduleAvulso, function(id,d){ return "Reprogramar separação avulsa para "+fmtDateBR(d)+" — "+audDescAvulso(id); });
+  /* Pendências de entrega */
+  window.registrarFaltaMaterial = protegerAcao("pendencia.registrar", registrarFaltaMaterial,
+    function(pid,editId,v){ return (editId?"Editar pendência — "+audDescPend(editId):"Registrar falta de material — "+audDescPedido(pid))+" ("+((v&&v.motivo)||"")+")"; },
+    function(pid,editId){ return !editId; });
+  window.definirDataPrevista = protegerAcao("pendencia.dataPrevista", definirDataPrevista,
+    function(id,val){ return "Data prevista "+fmtDateBR(val)+" — "+audDescPend(id); },
+    function(id){ const x = (STATE.pendenciasEntrega||[]).find(function(i){ return i.id===id; }); return !!x && !x.dataPrevista; });
+  concluirPendencia = protegerAcao("pendencia.concluir", concluirPendencia, function(id){ return "Concluir entrega pendente — "+audDescPend(id); });
+  excluirPendencia = protegerAcao("pendencia.excluir", excluirPendencia, function(id){ return "Excluir pendência — "+audDescPend(id); });
+  /* Metas, fatores, feriados, observações */
+  window.gravarMetas = protegerAcao("metas.semana", gravarMetas, function(stage){ return "Alterar metas por dia da semana — "+stage; });
+  saveMetaDiaOverride = protegerAcao("metas.dia", saveMetaDiaOverride, function(stage,d,v){ return "Meta do dia "+fmtDateBR(d)+" ("+stage+") = "+(v===""||v==null?"padrão":v); });
+  clearMetaDiaOverride = protegerAcao("metas.diaPadrao", clearMetaDiaOverride, function(stage,d){ return "Voltar meta do dia "+fmtDateBR(d)+" ao padrão ("+stage+")"; });
+  removerFeriado = protegerAcao("feriado.remover", removerFeriado, function(d){ return "Remover feriado "+fmtDateBR(d); });
+  submitNovoFeriado = comoInclusao("Novo feriado", submitNovoFeriado);
+  saveFatorProducaoPerfilar = protegerAcao("fator.producao", saveFatorProducaoPerfilar,
+    function(t,v){ return "Fator Produção Perfilar \""+t+"\" = "+v; },
+    function(t){ return !Object.keys(STATE.fatoresProducaoPerfilar||{}).some(function(k){ return normTipoStr(k)===normTipoStr(t); }); });
+  saveFatorConsumoCola = protegerAcao("fator.cola", saveFatorConsumoCola,
+    function(t,v){ return "Fator de cola \""+t+"\" = "+v; },
+    function(t){ return fatorConsumoColaPara(t)<=0; });
+  window.gravarFatoresKg = protegerAcao("fator.kg", gravarFatoresKg, function(){ return "Alterar fatores kg por metro (telhas)"; });
+  deleteVigenciaFator = protegerAcao("fator.vigenciaExcluir", deleteVigenciaFator, function(id,mid){ return "Excluir vigência do fator de conversão — "+audDescMaterial(mid); });
+  submitNovoTipoProducao = comoInclusao("Novo tipo de produto (Fator Produção)", submitNovoTipoProducao);
+  submitNovoTipoCola = comoInclusao("Novo tipo de produto (Fator de Cola)", submitNovoTipoCola);
+  window.gravarObsDia = protegerAcao("obs.dia", gravarObsDia,
+    function(stage,ano,mes,dia){ return "Observação de produção "+pad2(dia)+"/"+mes+"/"+ano+" ("+stage+")"; },
+    function(stage,ano,mes,dia){ const o = STATE.obsProducao[obsCacheKey(stage,ano,mes)]||{}; const t = o[pad2(dia)]; return !(t && String(t).trim()); });
+  /* Recados */
+  deleteRecado = protegerAcao("recado.excluir", deleteRecado, function(id){ const r = (STATE.recados||[]).find(function(x){ return x.id===id; }); return "Excluir recado \""+(r?r.titulo:id)+"\""; });
+  toggleRecadoAtivo = protegerAcao("recado.ativo", toggleRecadoAtivo, function(id){ const r = (STATE.recados||[]).find(function(x){ return x.id===id; }); return "Ativar/desativar recado \""+(r?r.titulo:id)+"\""; });
+  /* Inclusões de itens em listas de cadastro (precisam gravar a configuração) */
+  submitQuickAdd = comoInclusao("Cadastro rápido", submitQuickAdd);
+  addMaterialTipo = comoInclusao("Novo tipo de matéria-prima", addMaterialTipo);
+  addMotivoPerda = comoInclusao("Novo motivo de perda", addMotivoPerda);
+  addMotivoCancelamento = comoInclusao("Novo motivo de cancelamento", addMotivoCancelamento);
+  addMotivoCancelamentoInline = comoInclusao("Novo motivo de cancelamento", addMotivoCancelamentoInline);
+  addMotivoFaltaInline = comoInclusao("Novo motivo de falta de material", addMotivoFaltaInline);
+  addPessoaErroInline = comoInclusao("Nova pessoa (pendências)", addPessoaErroInline);
+  adicionarItemListaPend = comoInclusao("Novo item de cadastro (pendências)", adicionarItemListaPend);
+})();
+
+/* ============================== AUDITORIA — APROVAÇÕES ============================== */
+function audAprovacoesPendentes(){ return (STATE.audAprovacoes||[]).filter(function(s){ return s.status==="pendente"; }); }
+async function carregarAprovacoes(){
+  if(!ehAuditor()) return;
+  STATE.audAprovCarregando = true;
+  const r = await sb.from("auditoria_aprovacoes").select("*").order("criado_em",{ascending:false}).limit(500);
+  STATE.audAprovCarregando = false;
+  if(r.error){ STATE.audAprovacoesErro = r.error.message; STATE.audAprovacoes = []; }
+  else { STATE.audAprovacoesErro = ""; STATE.audAprovacoes = r.data||[]; }
+  renderSidebar();
+  if(STATE.screen==="auditoriaPerfis") renderScreen();
+}
+let _audChannel = null;
+function iniciarRealtimeAprovacoes(){
+  if(_audChannel || !ehAuditor()) return;
+  _audChannel = sb.channel("auditoria-aprovacoes")
+    .on("postgres_changes", {event:"INSERT", schema:"public", table:"auditoria_aprovacoes"}, function(payload){
+      const s = payload.new;
+      STATE.audAprovacoes = [s].concat((STATE.audAprovacoes||[]).filter(function(x){ return x.id!==s.id; }));
+      renderSidebar();
+      if(STATE.screen==="auditoriaPerfis") renderScreen();
+      showToast("info","Nova solicitação de "+s.solicitante+": "+s.descricao);
+    }).subscribe();
+}
+function pararRealtimeAprovacoes(){ if(_audChannel){ sb.removeChannel(_audChannel); _audChannel = null; } }
+async function aprovarSolicitacao(id){
+  if(!ehAuditor()) return;
+  const s = (STATE.audAprovacoes||[]).find(function(x){ return x.id===id; });
+  if(!s || s.status!=="pendente") return;
+  const acao = ACOES_PROTEGIDAS[s.acao_chave];
+  if(!acao){ showToast("error","Ação desconhecida: "+s.acao_chave); return; }
+  let resultado;
+  __executandoAprovacao = true;
+  try{
+    resultado = await audExecutarComo("Aprovação ("+s.solicitante+"): "+s.descricao, false, function(){ return acao.fn.apply(null, s.args||[]); });
+  }catch(err){ console.error(err); resultado = false; }
+  finally{ __executandoAprovacao = false; }
+  if(resultado===false){
+    renderScreen();
+    showToast("error","A alteração não pôde ser aplicada (o registro pode ter sido alterado ou removido). A solicitação continua pendente.");
+    return;
+  }
+  const agora = new Date().toISOString();
+  const r = await sb.from("auditoria_aprovacoes").update({status:"aprovada", decidido_por:emailLogado(), decidido_em:agora}).eq("id", id);
+  if(r.error){ sbErrorToast("marcar solicitação como aprovada", r.error); return; }
+  s.status = "aprovada"; s.decidido_por = emailLogado(); s.decidido_em = agora;
+  closeModal(); renderSidebar(); renderScreen();
+  showToast("success","Solicitação aprovada e aplicada.");
+}
+function openRejeitarSolicitacaoModal(id){
+  const s = (STATE.audAprovacoes||[]).find(function(x){ return x.id===id; });
+  if(!s) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Rejeitar solicitação</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:13px;line-height:1.5;margin:0 0 10px">'+escapeHtml(s.descricao||"")+'</p>'+
+        '<label class="field-label">Motivo (opcional)</label>'+
+        '<textarea class="field-input" id="aud-motivo-rejeicao" rows="3" style="resize:vertical;font-family:inherit"></textarea>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-danger" onclick="rejeitarSolicitacao(\''+id+'\')">Rejeitar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function rejeitarSolicitacao(id){
+  if(!ehAuditor()) return;
+  const s = (STATE.audAprovacoes||[]).find(function(x){ return x.id===id; });
+  if(!s) return;
+  const motivo = ((document.getElementById("aud-motivo-rejeicao")||{}).value||"").trim();
+  const agora = new Date().toISOString();
+  const r = await sb.from("auditoria_aprovacoes").update({status:"rejeitada", decidido_por:emailLogado(), decidido_em:agora, motivo:motivo}).eq("id", id);
+  if(r.error){ sbErrorToast("rejeitar solicitação", r.error); return; }
+  s.status = "rejeitada"; s.decidido_por = emailLogado(); s.decidido_em = agora; s.motivo = motivo;
+  closeModal(); renderSidebar(); renderScreen();
+  showToast("info","Solicitação rejeitada — nada foi alterado.");
+}
+async function excluirSolicitacao(id){
+  if(!ehAuditor()) return;
+  if(!confirm("Excluir esta solicitação do histórico?")) return;
+  const r = await sb.from("auditoria_aprovacoes").delete().eq("id", id);
+  if(r.error){ sbErrorToast("excluir solicitação", r.error); return; }
+  STATE.audAprovacoes = (STATE.audAprovacoes||[]).filter(function(x){ return x.id!==id; });
+  renderSidebar(); renderScreen();
+  showToast("info","Solicitação excluída.");
+}
+
+/* ============================== AUDITORIA — TELAS ============================== */
+const AUD_TABELA_LABELS = {pedidos:"Pedidos", materiais:"Matéria-Prima", notas:"Notas Fiscais", baixas_manual:"Baixas de estoque",
+  transferencias:"Transferências", movimentacoes_estoque:"Movimentações de estoque", materiais_avulsos:"Separação avulsa",
+  fator_conversao_historico:"Fator de conversão", cidades:"Cidades", equipamentos:"Equipamentos", motoristas:"Motoristas",
+  status_options:"Situações", app_config:"Configuração", recados:"Recados"};
+const AUD_CONFIG_LABELS = {pedidos_retirada:"Cliente retira", pedidos_op_impressa:"OP impressa", pedidos_data_venda:"Data da venda",
+  pedidos_datas_conclusao:"Datas de conclusão das etapas", pedidos_equipamento_inf:"Máquina da Cor Inf.", pedidos_producao_inf:"Cronômetro Cor Inf.",
+  pedidos_observacoes:"Observações do pedido", pedidos_regional:"Regional", pedidos_cancelados:"Pedidos cancelados", pedidos_cola:"Cola por pedido",
+  materiais_inativos:"Matérias-primas inativas", pendencias_entrega:"Pendências de entrega", motivos_perda:"Motivos de perda",
+  motivos_cancelamento:"Motivos de cancelamento", motivos_falta_material:"Motivos de falta de material", pessoas_erro_entrega:"Pessoas (pendências)",
+  material_tipos:"Tipos de matéria-prima", tipo_options:"Tipos de produto", cumeeira_options:"Cumeeira/acabamento",
+  metas_perfilar:"Metas Perfilar", metas_pintura:"Metas Pintura", metas_colagem:"Metas Colagem", metas_entrega:"Metas Entrega",
+  metas_dia_perfilar:"Metas por dia — Perfilar", metas_dia_colagem:"Metas por dia — Colagem", feriados_custom:"Feriados",
+  feriados_removidos:"Feriados removidos", fatores_producao_perfilar:"Fator Produção Perfilar", fatores_consumo_cola:"Fator de cola",
+  fatores_kg_telha:"Fator kg por metro", permissoes_usuarios:"Permissões de usuário", lancamentos_cores_dia:"Cores dos dias (Lançamentos)"};
+const AUD_CAMPO_LABELS = {data_prog:"Data Prog.", data_entrega:"Data de entrega", data_entregue:"Entregue em", situacao_id:"Situação",
+  etapa_atual:"Etapa", metragem:"Metragem", cliente:"Cliente", op:"OP", tipo:"Tipo", material:"Material", cumeeira:"Cumeeira",
+  cor_sup_id:"Cor Sup.", cor_inf_id:"Cor Inf.", eps_id:"EPS", cidade_id:"Cidade", equipamento_id:"Equipamento", motorista_id:"Motorista",
+  tem_pintura:"Pintura", tem_colagem:"Colagem", producao_status:"Status produção", producao_elapsed_ms:"Tempo produção (ms)",
+  producao_started_at:"Produção iniciada em", ligacao:"Ligação", estoque:"Estoque", estoque_inicial:"Saldo inicial",
+  estoque_minimo:"Estoque mínimo", lote_minimo:"Lote mínimo", valor_unitario:"Valor unitário", fator:"Fator", nome:"Nome",
+  unidade:"Unidade", atencao:"Atenção", quantidade:"Quantidade", motivo:"Motivo", observacao:"Observação", status:"Status",
+  data_prevista:"Data prevista", material_id:"Matéria-prima", titulo:"Título", mensagem:"Mensagem", ativo:"Ativo", numero_nota:"Nº nota",
+  fornecedor:"Fornecedor", itens:"Itens", data:"Data"};
+function audResolverValor(campo, v){
+  if(v===null || v===undefined || v==="") return "vazio";
+  if(typeof v==="boolean") return v ? "Sim" : "Não";
+  if(typeof v==="string"){
+    if(campo==="situacao_id") return audNomeLista(STATE.statusOptions, v);
+    if(campo==="motorista_id") return audNomeLista(STATE.motoristas, v);
+    if(campo==="cidade_id") return audNomeLista(STATE.cidades, v);
+    if(campo==="equipamento_id") return audNomeLista(STATE.equipamentos, v);
+    if(["cor_sup_id","cor_inf_id","eps_id","material_id","material_origem_id","material_destino_id"].indexOf(campo)!==-1) return audDescMaterial(v);
+    if(/^\d{4}-\d{2}-\d{2}$/.test(v)) return fmtDateBR(v);
+    if(/^\d{4}-\d{2}-\d{2}T/.test(v)) return fmtDataHora(v);
+    return v.length>70 ? v.slice(0,70)+"…" : v;
+  }
+  if(typeof v==="number") return Number.isInteger(v) ? String(v) : fmtNum(v);
+  let t = ""; try{ t = JSON.stringify(v); }catch(e){}
+  return t.length>70 ? t.slice(0,70)+"…" : t;
+}
+function audRotuloCampo(e, k){
+  if(e.tabela==="app_config"){
+    const p = (STATE.pedidos||[]).find(function(x){ return x.id===k; });
+    if(p) return "OP "+(p.op||"—");
+  }
+  return AUD_CAMPO_LABELS[k] || k;
+}
+function audRotuloRegistro(e){
+  const r = e.registro||"";
+  if(e.tabela==="app_config") return AUD_CONFIG_LABELS[r] || (/^obs_producao_/.test(r) ? "Observações de produção" : r);
+  const ref = audEhObj(e.dados_depois) ? e.dados_depois : (audEhObj(e.dados_antes) ? e.dados_antes : {});
+  if(e.tabela==="pedidos"){
+    const p = (STATE.pedidos||[]).find(function(x){ return x.id===r; });
+    if(p) return "OP "+(p.op||"—")+" · "+(p.cliente||"—");
+    if(ref.op || ref.cliente) return "OP "+(ref.op||"—")+" · "+(ref.cliente||"—");
+  }
+  if(e.tabela==="materiais"){ const m = (STATE.materiais||[]).find(function(x){ return x.id===r; }); if(m) return m.nome; }
+  if(ref.nome) return ref.nome;
+  if(ref.titulo) return ref.titulo;
+  if(e.tabela==="movimentacoes_estoque" && ref.material_id) return audDescMaterial(ref.material_id);
+  if(ref.material_id) return audDescMaterial(ref.material_id);
+  return r ? (r.length>24 ? r.slice(0,8)+"…" : r) : "—";
+}
+function audResumoHtml(e){
+  const linhas = [];
+  const a = e.dados_antes, d = e.dados_depois;
+  if(e.operacao==="bloqueado"){
+    linhas.push('<span style="color:#C98A00">Tentativa de '+escapeHtml(((d&&d.operacao_tentada)==="delete")?"exclusão":"alteração")+' bloqueada</span>');
+  } else if(audEhObj(d) && (Array.isArray(d.adicionados) || (audEhObj(a) && Array.isArray(a.removidos)))){
+    ((a&&a.removidos)||[]).forEach(function(x){ linhas.push('<span style="color:'+COLORS.red+'">− '+escapeHtml(audResolverValor("", x))+'</span>'); });
+    (d.adicionados||[]).forEach(function(x){ linhas.push('<span style="color:'+COLORS.green+'">+ '+escapeHtml(audResolverValor("", x))+'</span>'); });
+  } else if(e.operacao==="update" || e.operacao==="upsert"){
+    if(audEhObj(d)){
+      Object.keys(d).forEach(function(k){
+        const antes = audEhObj(a) ? a[k] : undefined;
+        linhas.push('<strong>'+escapeHtml(audRotuloCampo(e,k))+'</strong>: '+
+          (audEhObj(a) ? '<span style="color:'+COLORS.textMuted+'">'+escapeHtml(audResolverValor(k, antes))+'</span> → ' : '')+
+          escapeHtml(audResolverValor(k, d[k])));
+      });
+    } else if(Array.isArray(a) && a.length>1){ linhas.push(a.length+" registro(s) alterado(s)"); }
+  } else {
+    const ref = e.operacao==="delete" ? a : d;
+    const obj = Array.isArray(ref) ? ref[0] : ref;
+    if(Array.isArray(ref) && ref.length>1) linhas.push(ref.length+" registro(s)");
+    if(audEhObj(obj)){
+      ["op","cliente","nome","titulo","tipo","material_id","quantidade","metragem","motivo","origem","referencia","data","data_prog"].forEach(function(k){
+        if(obj[k]!==undefined && obj[k]!==null && obj[k]!=="") linhas.push('<strong>'+escapeHtml(AUD_CAMPO_LABELS[k]||k)+'</strong>: '+escapeHtml(audResolverValor(k, obj[k])));
+      });
+    }
+  }
+  if(!linhas.length) return '<span style="color:'+COLORS.textMuted+'">—</span>';
+  const extra = linhas.length>4 ? '<div style="color:'+COLORS.textMuted+'">+'+(linhas.length-4)+' item(ns) — ver detalhes</div>' : '';
+  return '<div style="font-size:11.5px;line-height:1.45;max-width:360px">'+linhas.slice(0,4).map(function(l){ return '<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+l+'</div>'; }).join("")+extra+'</div>';
+}
+function audOpBadge(op){
+  const m = {insert:["INCLUSÃO",COLORS.green], update:["ALTERAÇÃO",COLORS.brand], upsert:["ALTERAÇÃO",COLORS.brand],
+    delete:["EXCLUSÃO",COLORS.red], bloqueado:["BLOQUEADO","#C98A00"]}[op] || [String(op||"—").toUpperCase(), COLORS.textMuted];
+  return '<span style="font-size:9.5px;font-weight:700;color:'+m[1]+';background:'+m[1]+'18;border:1px solid '+m[1]+'55;border-radius:10px;padding:2px 8px;white-space:nowrap">'+m[0]+'</span>';
+}
+function audStatusBadge(st){
+  const m = {pendente:["PENDENTE","#C98A00"], aprovada:["APROVADA",COLORS.green], rejeitada:["REJEITADA",COLORS.red]}[st] || [String(st||"").toUpperCase(), COLORS.textMuted];
+  return '<span style="font-size:9.5px;font-weight:700;color:'+m[1]+';background:'+m[1]+'18;border:1px solid '+m[1]+'55;border-radius:10px;padding:2px 8px;white-space:nowrap">'+m[0]+'</span>';
+}
+function audEstado(modo){
+  if(!STATE.aud) STATE.aud = {};
+  if(!STATE.aud[modo]){
+    STATE.aud[modo] = {filtro:{usuario:"", tabela:"", operacao:"", dIni:toISO(addDays(new Date(), -30)), dFim:todayStr(), texto:""},
+      log:null, carregando:false, erro:"", chave:""};
+  }
+  return STATE.aud[modo];
+}
+async function carregarAuditoria(modo){
+  if(!ehAuditor()) return;
+  const st = audEstado(modo), f = st.filtro;
+  const chave = f.dIni+"|"+f.dFim+"|"+Date.now();
+  st.carregando = true; st.chave = chave;
+  let q = sb.from("auditoria_log").select("*").order("criado_em",{ascending:false}).limit(3000);
+  if(f.dIni) q = q.gte("criado_em", new Date(f.dIni+"T00:00:00").toISOString());
+  if(f.dFim) q = q.lte("criado_em", new Date(f.dFim+"T23:59:59").toISOString());
+  if(modo==="perfis") q = q.eq("usuario", USUARIO_RESTRITO_EMAIL);
+  const r = await q;
+  if(st.chave!==chave) return;
+  st.carregando = false;
+  if(r.error){ st.erro = r.error.message; st.log = []; } else { st.erro = ""; st.log = r.data||[]; }
+  if(STATE.screen===(modo==="perfis"?"auditoriaPerfis":"auditoria")) renderScreen();
+}
+function updateAudFiltro(modo, key, val){
+  const st = audEstado(modo);
+  st.filtro[key] = val;
+  if(key==="dIni" || key==="dFim") st.log = null;
+  renderScreen();
+}
+function atualizarAuditoria(modo){
+  audEstado(modo).log = null;
+  if(modo==="perfis") carregarAprovacoes();
+  renderScreen();
+}
+function audLogFiltrado(modo){
+  const st = audEstado(modo), f = st.filtro;
+  const txt = normBusca(f.texto||"").trim();
+  return (st.log||[]).filter(function(e){
+    if(f.usuario && e.usuario!==f.usuario) return false;
+    if(f.tabela && e.tabela!==f.tabela) return false;
+    if(f.operacao){ const op = e.operacao==="upsert" ? "update" : e.operacao; if(op!==f.operacao) return false; }
+    if(txt){
+      let alvo = [e.usuario, e.acao, e.tela, e.registro, audRotuloRegistro(e), e.observacao].join(" ");
+      try{ alvo += " "+JSON.stringify(e.dados_antes||"")+" "+JSON.stringify(e.dados_depois||""); }catch(err){}
+      if(normBusca(alvo).indexOf(txt)===-1) return false;
+    }
+    return true;
+  });
+}
+function audAcharEntrada(id){
+  let achado = null;
+  Object.keys(STATE.aud||{}).forEach(function(m){ (STATE.aud[m].log||[]).forEach(function(e){ if(e.id===id) achado = e; }); });
+  return achado;
+}
+function openDetalheAudModal(id){
+  const e = audAcharEntrada(id); if(!e) return;
+  const pre = function(v){ let t = ""; try{ t = JSON.stringify(v, null, 2); }catch(err){} return '<pre style="font-size:11.5px;background:var(--panel-alt);border:1px solid var(--steel-border);border-radius:6px;padding:10px;max-height:34vh;overflow:auto;white-space:pre-wrap;word-break:break-word;margin:4px 0 0">'+escapeHtml(t||"—")+'</pre>'; };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:820px">'+
+        '<div class="modal-header"><h3>Detalhe da auditoria</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="font-size:12.5px;line-height:1.7">'+
+          '<div><strong>Quando:</strong> '+escapeHtml(fmtDataHora(e.criado_em))+' · <strong>Usuário:</strong> '+escapeHtml(e.usuario||"")+'</div>'+
+          '<div><strong>Ação:</strong> '+escapeHtml(e.acao||"—")+' · <strong>Tela:</strong> '+escapeHtml(e.tela||"—")+'</div>'+
+          '<div><strong>Operação:</strong> '+audOpBadge(e.operacao)+' · <strong>Tabela:</strong> '+escapeHtml(AUD_TABELA_LABELS[e.tabela]||e.tabela||"")+' · <strong>Registro:</strong> '+escapeHtml(audRotuloRegistro(e))+' <span style="color:'+COLORS.textMuted+'">('+escapeHtml(e.registro||"")+')</span></div>'+
+          (e.observacao ? '<div><strong>Observação:</strong> '+escapeHtml(e.observacao)+'</div>' : '')+
+          (e.editado_em ? '<div style="color:'+COLORS.textMuted+'">Registro editado em '+escapeHtml(fmtDataHora(e.editado_em))+' por '+escapeHtml(e.editado_por||"")+'</div>' : '')+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:12px;margin-top:12px">'+
+          '<div><div class="field-label">Antes</div>'+pre(e.dados_antes)+'</div>'+
+          '<div><div class="field-label">Depois</div>'+pre(e.dados_depois)+'</div>'+
+        '</div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function openEditarAudModal(id){
+  if(!ehAuditor()) return;
+  const e = audAcharEntrada(id); if(!e) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:480px">'+
+        '<div class="modal-header"><h3>Editar registro de auditoria</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div style="font-size:12px;color:'+COLORS.textMuted+';margin-bottom:10px">'+escapeHtml(fmtDataHora(e.criado_em))+' · '+escapeHtml(e.usuario||"")+'</div>'+
+        '<label class="field-label">Ação (descrição)</label>'+
+        '<input class="field-input" id="aud-edit-acao" value="'+escapeAttr(e.acao||"")+'"/>'+
+        '<div style="margin-top:12px"><label class="field-label">Observação</label>'+
+        '<textarea class="field-input" id="aud-edit-obs" rows="4" style="resize:vertical;font-family:inherit">'+escapeHtml(e.observacao||"")+'</textarea></div>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-primary" onclick="salvarEdicaoAud(\''+id+'\')">Salvar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function salvarEdicaoAud(id){
+  if(!ehAuditor()) return;
+  const acao = ((document.getElementById("aud-edit-acao")||{}).value||"").trim();
+  const obs = ((document.getElementById("aud-edit-obs")||{}).value||"").trim();
+  const patch = {acao:acao, observacao:obs, editado_em:new Date().toISOString(), editado_por:emailLogado()};
+  const r = await sb.from("auditoria_log").update(patch).eq("id", id);
+  if(r.error){ sbErrorToast("editar registro de auditoria", r.error); return; }
+  Object.keys(STATE.aud||{}).forEach(function(m){ (STATE.aud[m].log||[]).forEach(function(e){ if(e.id===id) Object.assign(e, patch); }); });
+  closeModal(); renderScreen();
+  showToast("success","Registro de auditoria atualizado.");
+}
+function confirmExcluirAud(id){
+  if(!ehAuditor()) return;
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:400px">'+
+        '<div class="modal-header"><h3>Excluir registro de auditoria</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">Excluir este registro do histórico de auditoria? Os dados do sistema não são alterados — só o registro some.</p>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+        '<button type="button" class="btn btn-danger" onclick="excluirAud(\''+id+'\')">Excluir</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+async function excluirAud(id){
+  if(!ehAuditor()) return;
+  const r = await sb.from("auditoria_log").delete().eq("id", id);
+  if(r.error){ sbErrorToast("excluir registro de auditoria", r.error); return; }
+  Object.keys(STATE.aud||{}).forEach(function(m){ if(STATE.aud[m].log) STATE.aud[m].log = STATE.aud[m].log.filter(function(e){ return e.id!==id; }); });
+  closeModal(); renderScreen();
+  showToast("info","Registro de auditoria excluído.");
+}
+function audAprovacoesHtml(){
+  if(STATE.audAprovacoesErro) return '<div class="pcp-card" style="margin-bottom:16px;color:'+COLORS.red+';font-size:12.5px">Não foi possível carregar as solicitações: '+escapeHtml(STATE.audAprovacoesErro)+'. Verifique se o SQL de auditoria (auditoria.sql) foi executado no Supabase.</div>';
+  const lista = STATE.audAprovacoes || [];
+  const pend = lista.filter(function(s){ return s.status==="pendente"; });
+  const hist = lista.filter(function(s){ return s.status!=="pendente"; }).slice(0,60);
+  const pendHtml = pend.length===0 ? emptyStateHtml("Nenhuma solicitação aguardando aprovação.") :
+    '<table class="pcp-table"><thead><tr><th>Solicitado em</th><th>Alteração pedida</th><th>Tela</th><th class="no-print" style="width:230px">Decisão</th></tr></thead><tbody>'+
+    pend.map(function(s){
+      return '<tr><td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(s.criado_em))+'</td>'+
+        '<td>'+escapeHtml(s.descricao||s.acao_chave)+'</td><td style="font-size:12px">'+escapeHtml(s.tela||"—")+'</td>'+
+        '<td class="no-print"><div style="display:flex;gap:6px;flex-wrap:wrap">'+
+          '<button class="btn btn-primary" style="padding:5px 10px;font-size:12px" onclick="aprovarSolicitacao(\''+s.id+'\')">'+icon("check",12)+' Aprovar</button>'+
+          '<button class="btn btn-danger" style="padding:5px 10px;font-size:12px" onclick="openRejeitarSolicitacaoModal(\''+s.id+'\')">Rejeitar</button>'+
+          '<button class="icon-btn" title="Excluir solicitação" onclick="excluirSolicitacao(\''+s.id+'\')">'+icon("trash",13)+'</button>'+
+        '</div></td></tr>';
+    }).join("")+'</tbody></table>';
+  const histHtml = hist.length===0 ? '' :
+    '<div class="preview-title" style="margin:16px 0 8px">Histórico de decisões</div>'+
+    '<table class="pcp-table"><thead><tr><th>Solicitado em</th><th>Alteração pedida</th><th>Status</th><th>Decidido em</th><th>Motivo</th><th class="no-print"></th></tr></thead><tbody>'+
+    hist.map(function(s){
+      return '<tr><td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(s.criado_em))+'</td>'+
+        '<td>'+escapeHtml(s.descricao||s.acao_chave)+'</td><td>'+audStatusBadge(s.status)+'</td>'+
+        '<td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(s.decidido_em))+'</td>'+
+        '<td style="font-size:12px">'+escapeHtml(s.motivo||"—")+'</td>'+
+        '<td class="no-print"><button class="icon-btn" title="Excluir do histórico" onclick="excluirSolicitacao(\''+s.id+'\')">'+icon("trash",13)+'</button></td></tr>';
+    }).join("")+'</tbody></table>';
+  return '<div class="pcp-card" style="margin-bottom:16px">'+
+    '<div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">'+icon("clock",15,"#C98A00")+
+      '<div class="preview-title" style="margin:0">Solicitações de edição/exclusão — aguardando aprovação ('+pend.length+')</div></div>'+
+    '<div style="overflow:auto">'+pendHtml+'</div>'+
+    '<div style="overflow:auto">'+histHtml+'</div>'+
+  '</div>';
+}
+function renderAuditoriaScreen(modo){
+  const perfis = modo==="perfis";
+  const titulo = perfis ? "Auditoria — "+USUARIO_RESTRITO_EMAIL : "Auditoria";
+  const subtitulo = perfis
+    ? "Tudo o que esse usuário incluiu, as tentativas bloqueadas e as solicitações de edição/exclusão que dependem da sua aprovação"
+    : "Todas as inclusões, alterações e exclusões feitas pelos usuários, com o antes e o depois";
+  if(!ehAuditor()){
+    document.getElementById("content").innerHTML = screenHeaderHtml("eye", titulo, "Acesso restrito")+
+      '<div class="pcp-card" style="padding:40px;text-align:center;color:'+COLORS.textMuted+'">Somente '+escapeHtml(AUDITOR_EMAIL)+' acessa esta tela.</div>';
+    return;
+  }
+  const st = audEstado(modo), f = st.filtro;
+  if(st.log===null && !st.carregando) carregarAuditoria(modo);
+  if(perfis && STATE.audAprovacoes===undefined && !STATE.audAprovCarregando) carregarAprovacoes();
+  const acoes = '<div class="no-print"><button class="btn" onclick="atualizarAuditoria(\''+modo+'\')">'+icon("repeat",14)+' Atualizar</button></div>';
+  let corpo;
+  if(st.log===null || st.carregando){
+    corpo = '<div class="pcp-card" style="padding:40px;text-align:center;color:'+COLORS.textMuted+'">Carregando auditoria…</div>';
+  } else if(st.erro){
+    corpo = '<div class="pcp-card" style="padding:24px;color:'+COLORS.red+';font-size:13px;line-height:1.6">Não foi possível ler a auditoria: '+escapeHtml(st.erro)+
+      '<br><span style="color:'+COLORS.textMuted+'">Se a tabela ainda não existe, rode o arquivo <strong>auditoria.sql</strong> no SQL Editor do Supabase.</span></div>';
+  } else {
+    const lista = audLogFiltrado(modo);
+    const conta = function(op){ return lista.filter(function(e){ return (e.operacao==="upsert"?"update":e.operacao)===op; }).length; };
+    const usuarios = Array.from(new Set((st.log||[]).map(function(e){ return e.usuario; }).filter(Boolean))).sort();
+    const tabelas = Array.from(new Set((st.log||[]).map(function(e){ return e.tabela; }).filter(Boolean))).sort();
+    const mostrar = lista.slice(0,500);
+    const linhas = mostrar.map(function(e){
+      return '<tr>'+
+        '<td style="white-space:nowrap;font-size:12px">'+escapeHtml(fmtDataHora(e.criado_em))+'</td>'+
+        (perfis ? '' : '<td style="font-size:12px">'+escapeHtml(e.usuario||"")+'</td>')+
+        '<td style="max-width:260px"><div style="font-size:12.5px">'+escapeHtml(e.acao||"—")+'</div><div style="font-size:10.5px;color:'+COLORS.textMuted+'">'+escapeHtml(e.tela||"")+'</div></td>'+
+        '<td>'+audOpBadge(e.operacao)+'</td>'+
+        '<td style="font-size:12px;white-space:nowrap">'+escapeHtml(AUD_TABELA_LABELS[e.tabela]||e.tabela||"")+'</td>'+
+        '<td style="font-size:12px;max-width:180px">'+escapeHtml(audRotuloRegistro(e))+'</td>'+
+        '<td>'+audResumoHtml(e)+'</td>'+
+        '<td style="font-size:12px;max-width:180px">'+(e.observacao?escapeHtml(e.observacao):'<span style="color:'+COLORS.textMuted+'">—</span>')+(e.editado_em?'<div style="font-size:10px;color:'+COLORS.textMuted+'">editado</div>':'')+'</td>'+
+        '<td class="no-print"><div style="display:flex;gap:6px">'+
+          '<button class="icon-btn" title="Ver detalhes (antes e depois)" onclick="openDetalheAudModal(\''+e.id+'\')">'+icon("eye",13)+'</button>'+
+          '<button class="icon-btn" title="Editar" onclick="openEditarAudModal(\''+e.id+'\')">'+icon("edit",13)+'</button>'+
+          '<button class="icon-btn" title="Excluir" onclick="confirmExcluirAud(\''+e.id+'\')">'+icon("trash",13)+'</button>'+
+        '</div></td>'+
+      '</tr>';
+    }).join("");
+    const tabela = lista.length===0 ? emptyStateHtml("Nenhum registro de auditoria com os filtros atuais.") :
+      '<table class="pcp-table"><thead><tr><th>Data/hora</th>'+(perfis?'':'<th>Usuário</th>')+'<th>Ação</th><th>Operação</th><th>Tabela</th><th>Registro</th><th>Alterações</th><th>Observação</th><th class="no-print" style="width:110px">Ações</th></tr></thead><tbody>'+linhas+'</tbody></table>';
+    corpo =
+      '<div class="stat-row">'+
+        statCardHtml("Registros", lista.length, "eye")+
+        statCardHtml("Inclusões", conta("insert"), "plus", COLORS.green)+
+        statCardHtml("Alterações", conta("update"), "edit", COLORS.brand)+
+        statCardHtml("Exclusões", conta("delete"), "trash", COLORS.red)+
+        statCardHtml("Bloqueados", conta("bloqueado"), "alert", "#C98A00")+
+      '</div>'+
+      '<div class="pcp-card filter-bar">'+
+        '<div class="fc-data" data-filtro-base="1" style="min-width:150px"><label class="field-label">De</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateAudFiltro(\''+modo+'\',\'dIni\', this.value)"/></div>'+
+        '<div class="fc-data" data-filtro-base="1" style="min-width:150px"><label class="field-label">Até</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateAudFiltro(\''+modo+'\',\'dFim\', this.value)"/></div>'+
+        (perfis ? '' : '<div style="min-width:200px"><label class="field-label">Usuário</label><select class="field-select" onchange="updateAudFiltro(\''+modo+'\',\'usuario\', this.value)"><option value="">Todos</option>'+
+          usuarios.map(function(u){ return '<option value="'+escapeAttr(u)+'" '+(f.usuario===u?"selected":"")+'>'+escapeHtml(u)+'</option>'; }).join("")+'</select></div>')+
+        '<div style="min-width:160px"><label class="field-label">Operação</label><select class="field-select" onchange="updateAudFiltro(\''+modo+'\',\'operacao\', this.value)"><option value="">Todas</option>'+
+          [["insert","Inclusão"],["update","Alteração"],["delete","Exclusão"],["bloqueado","Bloqueado"]].map(function(o){ return '<option value="'+o[0]+'" '+(f.operacao===o[0]?"selected":"")+'>'+o[1]+'</option>'; }).join("")+'</select></div>'+
+        '<div style="min-width:170px"><label class="field-label">Tabela</label><select class="field-select" onchange="updateAudFiltro(\''+modo+'\',\'tabela\', this.value)"><option value="">Todas</option>'+
+          tabelas.map(function(t){ return '<option value="'+escapeAttr(t)+'" '+(f.tabela===t?"selected":"")+'>'+escapeHtml(AUD_TABELA_LABELS[t]||t)+'</option>'; }).join("")+'</select></div>'+
+        '<div style="min-width:200px"><label class="field-label">Buscar</label><input class="field-input" value="'+escapeAttr(f.texto)+'" placeholder="OP, cliente, ação…" onchange="updateAudFiltro(\''+modo+'\',\'texto\', this.value)"/></div>'+
+      '</div>'+
+      (lista.length>500 ? '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:0 0 8px">Mostrando os 500 mais recentes de '+lista.length+'. Use os filtros para refinar.</p>' : '')+
+      '<div class="pcp-card" style="padding:0;overflow:auto">'+tabela+'</div>';
+  }
+  document.getElementById("content").innerHTML =
+    screenHeaderHtml("eye", titulo, subtitulo, acoes)+
+    (perfis ? audAprovacoesHtml() : '')+
+    corpo;
+}
+
 initLocalDefaults();
 document.documentElement.setAttribute("data-theme", STATE.theme);
 Object.assign(COLORS, THEMES[STATE.theme]);

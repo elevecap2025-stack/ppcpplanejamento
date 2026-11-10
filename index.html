@@ -29,8 +29,9 @@ button,input,select{font-family:'Inter',sans-serif;}
 .pcp-sidebar-btn:hover{background:var(--row-hover);color:var(--text);}
 .pcp-sidebar-btn.active{background:var(--row-hover);color:var(--brand);}
 .pcp-sidebar-btn.active::before{content:'';position:absolute;left:-12px;top:8px;bottom:8px;width:3px;background:var(--brand);border-radius:0 3px 3px 0;}
-.pcp-sidebar-group-header{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:14px 12px 6px;border:none;background:transparent;color:var(--text-muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;cursor:pointer;width:100%;text-align:left;}
-.pcp-sidebar-group-header:hover{color:var(--text);}
+.pcp-sidebar-group-header{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:16px 12px 7px;border:none;background:transparent;color:var(--brand);font-size:12px;text-transform:uppercase;letter-spacing:.06em;font-weight:700;cursor:pointer;width:100%;text-align:left;}
+.pcp-sidebar-group-header:hover{color:var(--brand-dim);}
+.pcp-sidebar-label{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .pcp-sidebar-group-chevron{display:inline-flex;transition:transform .15s;flex-shrink:0;}
 .pcp-sidebar-group-items{display:flex;flex-direction:column;gap:3px;}
 .pcp-content{flex:1;min-width:0;padding:30px 34px;overflow-x:auto;}
@@ -2017,7 +2018,7 @@ const STATE = {
   materiaisFiltro:{tipo:"",produto:"",mes:"",ano:"",somentePreProducao:false,preSemanaLimite:"",ordenarPor:""},
   materiaisPdfColunas:{},
   fatorConversaoFiltro:{tipo:"",produto:""},
-  notasFiltro:{produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""},
+  notasFiltro:{produto:"",tipo:"",numeroNota:"",fornecedor:"",dIni:"",dFim:"",mes:"",ano:""},
   precoFiltro:{materialId:"",tipo:"",dIni:"",dFim:""},
   sidebarHidden:false,
   acompFiltro:{mes:pad2(new Date().getMonth()+1), ano:String(new Date().getFullYear()), maquinaId:"", base:"concl", modo:"dia", anoAcum:String(new Date().getFullYear())},
@@ -10506,8 +10507,10 @@ async function submitNotaForm(event, editId){
   return false;
 }
 function updateNotasFiltro(key, val){ STATE.notasFiltro[key]=val; renderScreen(); }
-function clearNotasFiltro(){ STATE.notasFiltro = {produto:"",tipo:"",dIni:"",dFim:"",mes:"",ano:""}; renderScreen(); }
+function clearNotasFiltro(){ STATE.notasFiltro = {produto:"",tipo:"",numeroNota:"",fornecedor:"",dIni:"",dFim:"",mes:"",ano:""}; renderScreen(); }
 function notaMatchesFiltro(n, f){
+  if(f.numeroNota && !String(n.numeroNota||"").toLowerCase().includes(String(f.numeroNota).trim().toLowerCase())) return false;
+  if(f.fornecedor && !normBusca(n.fornecedor||"").includes(normBusca(f.fornecedor).trim())) return false;
   if(f.dIni && n.data<f.dIni) return false;
   if(f.dFim && n.data>f.dFim) return false;
   if(f.mes && n.data.slice(5,7)!==f.mes) return false;
@@ -10550,6 +10553,9 @@ function renderNotasScreen(){
   '</div>';
   const filterBar = '<div class="pcp-card filter-bar no-print">'+
     '<div style="min-width:190px"><label class="field-label">Produto</label><input class="field-input" value="'+escapeAttr(f.produto)+'" placeholder="Buscar produto…" onchange="updateNotasFiltro(\'produto\', this.value)"/></div>'+
+    '<div style="width:130px"><label class="field-label">Nº Nota</label><input class="field-input" value="'+escapeAttr(f.numeroNota||"")+'" placeholder="Nº da nota" onchange="updateNotasFiltro(\'numeroNota\', this.value)"/></div>'+
+    '<div style="min-width:180px"><label class="field-label">Fornecedor</label><input class="field-input" list="notas-fornecedor-datalist" value="'+escapeAttr(f.fornecedor||"")+'" placeholder="Buscar fornecedor…" onchange="updateNotasFiltro(\'fornecedor\', this.value)"/>'+
+      '<datalist id="notas-fornecedor-datalist">'+Array.from(new Set(STATE.notas.map(function(n){ return (n.fornecedor||"").trim(); }).filter(Boolean))).sort().map(function(x){ return '<option value="'+escapeAttr(x)+'">'; }).join("")+'</datalist></div>'+
     '<div style="min-width:160px"><label class="field-label">Tipo de Material</label><select class="field-select" onchange="updateNotasFiltro(\'tipo\', this.value)"><option value="">Todos</option>'+
       uniqueMaterialTipos().map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
       '</select></div>'+
@@ -12300,12 +12306,12 @@ const NAV_GROUPS = [
     {id:"prog-pintura", label:"Prog. Pintura", icon:"droplet"},
     {id:"prog-colagem", label:"Prog. Coladeira", icon:"layers"},
     {id:"prog-entrega", label:"Prog. Entregas", icon:"truck"},
-    {id:"pendenciasEntrega", label:"Pendências de Entrega", icon:"alert"},
+    {id:"pendenciasEntrega", label:"Pendências de Entrega", menuLabel:"Pendências Entrega", cor:"#E67E22", icon:"alert"},
     {id:"entregues", label:"Pedidos Entregues", icon:"checkCircle"},
-    {id:"pedidosCancelados", label:"Pedidos Cancelados", icon:"xCircle"},
+    {id:"pedidosCancelados", label:"Pedidos Cancelados", cor:"#D1493E", icon:"xCircle"},
     {id:"calendario", label:"Calendário", icon:"calendar"},
     {id:"mapa", label:"Mapa de Pedidos", icon:"mapPin"},
-    {id:"acompanhamento", label:"Acompanhamento da Produção", icon:"activity"},
+    {id:"acompanhamento", label:"Acompanhamento da Produção", menuLabel:"Acomp. Produção", icon:"activity"},
     {id:"metasCalendario", label:"Metas por Dia", icon:"target"},
   ]},
   /* Os ids internos (avulsoLancamento/avulsoSeparacao/avulsoConcluidos) ficaram fixos desde a
@@ -12318,27 +12324,27 @@ const NAV_GROUPS = [
   ]},
   { id:"baixaManual", title:"Baixa Manual", items:[
     {id:"baixas", label:"Baixa de Materiais", icon:"arrowDownCircle"},
-    {id:"baixaEstoque", label:"Baixa de Estoque (Perda)", icon:"trash"},
-    {id:"transferencia", label:"Transferência de Estoque", icon:"repeat"},
-    {id:"movimentacao", label:"Movimentação de Estoque", icon:"trendingUp"},
+    {id:"baixaEstoque", label:"Baixa de Estoque (Perda)", menuLabel:"Baixa Estoque (Perda)", icon:"trash"},
+    {id:"transferencia", label:"Transferência de Estoque", menuLabel:"Transf. de Estoque", icon:"repeat"},
+    {id:"movimentacao", label:"Movimentação de Estoque", menuLabel:"Mov. de Estoque", icon:"trendingUp"},
     {id:"notas", label:"Notas Fiscais", icon:"package"},
-    {id:"precoProduto", label:"Acompanhamento de Preço", icon:"trendingUp"},
+    {id:"precoProduto", label:"Acompanhamento de Preço", menuLabel:"Acomp. de Preço", icon:"trendingUp"},
   ]},
   { id:"cadastros", title:"Cadastros", items:[
     {id:"materiais", label:"Matéria-Prima", icon:"boxes"},
     {id:"fatorConversao", label:"Fator de Conversão", icon:"repeat"},
-    {id:"fatorProducaoPerfilar", label:"Fator Produção Perfilar", icon:"sliders"},
-    {id:"fatorConsumoCola", label:"Fator Consumo de Cola", icon:"droplet"},
+    {id:"fatorProducaoPerfilar", label:"Fator Produção Perfilar", menuLabel:"Fator Prod. Perfilar", icon:"sliders"},
+    {id:"fatorConsumoCola", label:"Fator Consumo de Cola", menuLabel:"Fator Cons. Cola", icon:"droplet"},
     {id:"motoristas", label:"Motoristas", icon:"truck"},
     {id:"cidades", label:"Cidades", icon:"mapPin"},
     {id:"equipamentos", label:"Equipamentos", icon:"wrench"},
   ]},
   { id:"administracao", title:"Administração", items:[
-    {id:"permissoesUsuarios", label:"Permissões de Usuário", icon:"users"},
+    {id:"permissoesUsuarios", label:"Permissões de Usuário", menuLabel:"Permissões Usuário", icon:"users"},
     {id:"gerenciarRecados", label:"Gerenciar Recados", icon:"message"},
     {id:"backup", label:"Backup dos Dados", icon:"arrowDownCircle"},
     {id:"auditoria", label:"Auditoria", icon:"eye"},
-    {id:"auditoriaPerfis", label:"Auditoria — eleveperfis", icon:"eye"},
+    {id:"auditoriaPerfis", label:"Auditoria — eleveperfis", menuLabel:"Auditoria Perfis", icon:"eye"},
   ]},
 ];
 const NAV_ITEMS = NAV_GROUPS.reduce((acc,g)=>acc.concat(g.items), []);
@@ -13097,7 +13103,8 @@ function renderSidebar(){
         const n = audAprovacoesPendentes().length;
         if(n>0) badge = '<span title="Solicitações aguardando aprovação" style="margin-left:auto;font-size:10px;font-weight:700;color:#fff;background:'+COLORS.red+';border-radius:9px;padding:1px 6px;min-width:17px;text-align:center">'+n+'</span>';
       }
-      return '<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+' '+it.label+badge+'</button>';
+      const corItem = it.cor ? ' style="color:'+it.cor+';font-weight:700"' : '';
+      return '<button class="pcp-sidebar-btn '+(STATE.screen===it.id?"active":"")+'"'+corItem+' title="'+escapeAttr(it.label)+'" onclick="setScreen(\''+it.id+'\')">'+icon(it.icon,16)+'<span class="pcp-sidebar-label">'+(it.menuLabel||it.label)+'</span>'+badge+'</button>';
     }).join("");
     if(g.id==="_top") return itemsHtml;
     const collapsed = !!STATE.sidebarCollapsedGroups[g.id];

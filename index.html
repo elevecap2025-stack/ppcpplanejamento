@@ -69,6 +69,41 @@ button,input,select{font-family:'Inter',sans-serif;}
 .chart-day-obs-dot{display:block;width:4px;height:4px;border-radius:50%;margin:2px auto 0;}
 .chart-obs-item:hover{background:var(--row-hover);}
 .chart-col-click{cursor:pointer;}
+/* ---- Baixa de Estoque (Perda) ---- */
+.baixa-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px;}
+@media (max-width:1100px){.baixa-kpis{grid-template-columns:repeat(2,minmax(0,1fr));}}
+@media (max-width:560px){.baixa-kpis{grid-template-columns:1fr;}}
+.baixa-kpi{min-width:0;}
+.baixa-kpi .stat-value{font-size:22px;}
+.baixa-kpi-ico{width:28px;height:28px;border-radius:7px;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+.baixa-kpi-sub{font-size:11.5px;color:var(--text-muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.baixa-chart-wrap{height:240px;margin-top:30px;margin-left:66px;}
+.baixa-chart-wrap + .chart-days{margin-left:66px;}
+.baixa-tabela-scroll{max-height:640px;overflow:auto;}
+.baixa-tabela-scroll thead th{position:sticky;top:0;z-index:2;background:var(--panel);box-shadow:inset 0 -1px 0 var(--steel-border);}
+.baixa-tabela-scroll tfoot td{position:sticky;bottom:0;z-index:2;}
+@media print{.baixa-tabela-scroll{max-height:none;overflow:visible;}}
+.baixa-grid-line{position:absolute;left:0;right:0;border-top:1px dashed var(--steel-border);pointer-events:none;}
+.baixa-grid-line span{position:absolute;left:-66px;width:60px;text-align:right;bottom:-7px;font-size:10px;color:var(--text-muted);padding:0;white-space:nowrap;line-height:1.4;font-family:'IBM Plex Mono',monospace;}
+.baixa-mes-col{border-radius:6px 6px 0 0;}
+.baixa-mes-barras{position:relative;width:100%;display:flex;align-items:flex-end;justify-content:center;gap:3px;}
+.baixa-mes-barras .chart-bar{border-radius:4px 4px 0 0;}
+.baixa-mes-label{position:absolute;left:-10px;right:-10px;bottom:100%;margin-bottom:3px;text-align:center;font-size:11.5px;font-weight:700;white-space:nowrap;}
+.baixa-mes-atual{background:rgba(0,128,198,.08);}
+.baixa-mes-sel{background:rgba(0,128,198,.16);box-shadow:inset 0 0 0 1px rgba(0,128,198,.45);}
+.baixa-dupla{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px;}
+@media (max-width:1000px){.baixa-dupla{grid-template-columns:1fr;}}
+.baixa-rank-item{margin-bottom:12px;}
+.baixa-rank-item:last-child{margin-bottom:0;}
+.baixa-rank-top{display:flex;align-items:center;gap:8px;font-size:12.5px;margin-bottom:5px;}
+.baixa-rank-pos{width:20px;height:20px;border-radius:50%;background:var(--panel-alt);color:var(--text-muted);font-size:10.5px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;flex-shrink:0;}
+.baixa-rank-nome{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.baixa-rank-val{font-family:'IBM Plex Mono',monospace;font-weight:600;white-space:nowrap;}
+.baixa-rank-pct{font-size:11px;color:var(--text-muted);min-width:34px;text-align:right;}
+.baixa-rank-trilho{height:7px;background:var(--panel-alt);border-radius:4px;overflow:hidden;margin-left:28px;}
+.baixa-rank-trilho div{height:100%;border-radius:4px;}
+.baixa-total-row td{background:var(--panel-alt);font-weight:700;border-bottom:none;}
+
 .chart-col-click:hover .chart-bar{filter:brightness(1.12);box-shadow:0 0 0 2px var(--brand) inset;}
 .pdia-row{cursor:pointer;}
 .pdia-row:hover td{background:var(--row-hover);}
@@ -1994,7 +2029,7 @@ const STATE = {
   pedidosSort:{campo:"dataProg", direcao:"asc"},
   entreguesFiltro:{cliente:"",op:"",motoristaId:"",dIni:"",dFim:""},
   baixasFiltro:{materialId:"",tipo:"",op:"",ano:"",mes:"",dia:"",dIni:"",dFim:"",situacao:"efetivas"},
-  baixaManualFiltro:{materialId:"",motivo:"",dIni:"",dFim:""},
+  baixaManualFiltro:{materialId:"",motivo:"",dIni:"",dFim:"",anoGraf:""},
   transferenciaFiltro:{materialOrigemId:"",materialDestinoId:"",dIni:"",dFim:""},
   movFiltro:{materialId:"", tipo:"", ano:String(new Date().getFullYear())},
   /* Dashboard: por padrão sempre mostra o mês/ano atual (nunca "todos"), igual ao
@@ -2699,56 +2734,236 @@ async function registrarDevolucaoEstoque(materialId, qtd, obs){
   showToast("success", fmtNum(qtd)+" "+m.unidade+" devolvidos ao estoque de "+m.nome+".");
 }
 function updateBaixaManualFiltro(key, val){ STATE.baixaManualFiltro[key]=val; renderScreen(); }
-function clearBaixaManualFiltro(){ STATE.baixaManualFiltro = {materialId:"",motivo:"",dIni:"",dFim:""}; renderScreen(); }
+function clearBaixaManualFiltro(){
+  const anoGraf = STATE.baixaManualFiltro.anoGraf || "";
+  STATE.baixaManualFiltro = {materialId:"",motivo:"",dIni:"",dFim:"",anoGraf:anoGraf};
+  renderScreen();
+}
+/* ---- Cálculos da Baixa de Estoque (usados pela tela e pela apresentação .pptx) ----
+   Valor = quantidade × valor unitário da matéria-prima. Quantidade positiva é perda;
+   negativa é devolução ao estoque (estorno de baixa duplicada). */
+function fmtBRLCurto(n){
+  const v = Number(n||0), a = Math.abs(v);
+  const nf = function(x, d){ return x.toLocaleString("pt-BR",{minimumFractionDigits:d, maximumFractionDigits:d}); };
+  if(a>=1e6) return "R$ "+nf(v/1e6,1)+" mi";
+  if(a>=1e4) return "R$ "+nf(v/1e3,1)+" mil";
+  return "R$ "+nf(v,0);
+}
+function valorBaixaManual(b){
+  const m = STATE.materiais.find(function(x){ return x.id===b.materialId; });
+  return Number(b.quantidade||0)*(m ? Number(m.valorUnitario||0) : 0);
+}
+function resumoBaixas(lista){
+  let valorPerdas=0, valorDevol=0, qtdPerdas=0, qtdDevol=0;
+  const mot={}, mat={};
+  lista.forEach(function(b){
+    const v = valorBaixaManual(b);
+    if(Number(b.quantidade)>=0){
+      valorPerdas += v; qtdPerdas++;
+      const k = b.motivo || "Sem motivo";
+      mot[k] = (mot[k]||0) + v;
+      mat[b.materialId] = (mat[b.materialId]||0) + v;
+    } else { valorDevol += Math.abs(v); qtdDevol++; }
+  });
+  const porMotivo = Object.keys(mot).map(function(k){ return {nome:k, valor:mot[k]}; }).sort(function(a,b){ return b.valor-a.valor; });
+  const porMaterial = Object.keys(mat).map(function(id){
+    const m = STATE.materiais.find(function(x){ return x.id===id; });
+    return {id:id, nome:m ? m.nome : "?", tipo:m ? m.tipo : "", valor:mat[id]};
+  }).sort(function(a,b){ return b.valor-a.valor; });
+  return {valorPerdas:valorPerdas, valorDevol:valorDevol, liquido:valorPerdas-valorDevol, qtdPerdas:qtdPerdas, qtdDevol:qtdDevol, porMotivo:porMotivo, porMaterial:porMaterial};
+}
+/* Perdas e devoluções de janeiro a dezembro de um ano. Respeita só os filtros de Material e
+   Motivo (o período é o próprio ano). */
+function baixasMensais(ano, f){
+  const perdas = new Array(12).fill(0), devol = new Array(12).fill(0), qtd = new Array(12).fill(0);
+  STATE.baixasManual.forEach(function(b){
+    if(!b.data || b.data.slice(0,4)!==String(ano)) return;
+    if(f && f.materialId && b.materialId!==f.materialId) return;
+    if(f && f.motivo && b.motivo!==f.motivo) return;
+    const i = Number(b.data.slice(5,7))-1;
+    if(!(i>=0 && i<12)) return;
+    const v = valorBaixaManual(b);
+    if(Number(b.quantidade)>=0){ perdas[i] += v; qtd[i]++; } else devol[i] += Math.abs(v);
+  });
+  return {perdas:perdas, devol:devol, qtd:qtd};
+}
+function anoBaixaGrafico(){ return STATE.baixaManualFiltro.anoGraf || String(new Date().getFullYear()); }
+function filtrarBaixaPorMes(ano, mesIdx){
+  const f = STATE.baixaManualFiltro;
+  const mm = pad2(mesIdx+1);
+  const ini = ano+"-"+mm+"-01", fim = ano+"-"+mm+"-"+pad2(diasNoMes(ano, mesIdx+1));
+  if(f.dIni===ini && f.dFim===fim){ f.dIni=""; f.dFim=""; }
+  else { f.dIni=ini; f.dFim=fim; }
+  renderScreen();
+}
+function baixaKpiHtml(rotulo, valor, sub, iconName, cor){
+  return '<div class="pcp-card stat-card baixa-kpi">'+
+    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><span class="stat-label">'+rotulo+'</span>'+
+      '<span class="baixa-kpi-ico" style="background:'+cor+'1A">'+icon(iconName,15,cor)+'</span></div>'+
+    '<div class="stat-value" style="color:'+cor+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="'+escapeAttr(String(valor).replace(/<[^>]+>/g,""))+'">'+valor+'</div>'+
+    (sub ? '<div class="baixa-kpi-sub">'+sub+'</div>' : '')+
+  '</div>';
+}
+function baixaRankingHtml(itens, total, cor, vazio){
+  if(!itens.length) return '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:8px 0 0">'+vazio+'</p>';
+  const max = Math.max.apply(null, itens.map(function(i){ return i.valor; }).concat([1]));
+  return itens.map(function(i, n){
+    const pct = total>0 ? Math.round(i.valor/total*100) : 0;
+    const larg = Math.max(3, Math.round(i.valor/max*100));
+    return '<div class="baixa-rank-item">'+
+      '<div class="baixa-rank-top">'+
+        '<span class="baixa-rank-pos">'+(n+1)+'</span>'+
+        '<span class="baixa-rank-nome" title="'+escapeAttr(i.nome)+'">'+(i.labelHtml||escapeHtml(i.nome))+'</span>'+
+        '<span class="baixa-rank-val">'+fmtBRL(i.valor)+'</span>'+
+        '<span class="baixa-rank-pct">'+pct+'%</span>'+
+      '</div>'+
+      '<div class="baixa-rank-trilho"><div style="width:'+larg+'%;background:'+cor+'"></div></div>'+
+    '</div>';
+  }).join("");
+}
+function baixaGraficoAnualHtml(ano, f){
+  const d = baixasMensais(ano, f);
+  const total = d.perdas.reduce(function(a,b){ return a+b; },0);
+  const totalDev = d.devol.reduce(function(a,b){ return a+b; },0);
+  const qtdAno = d.qtd.reduce(function(a,b){ return a+b; },0);
+  const mesesCom = d.perdas.filter(function(v){ return v>0; }).length;
+  const piorV = Math.max.apply(null, d.perdas.concat([0]));
+  const piorIdx = piorV>0 ? d.perdas.indexOf(piorV) : -1;
+  const maxV = Math.max.apply(null, d.perdas.concat(d.devol).concat([1]));
+  const escala = maxV*1.18;
+  const hoje = new Date();
+  const mesHoje = Number(ano)===hoje.getFullYear() ? hoje.getMonth()+1 : 0;
+  const temDev = totalDev>0;
+  const grid = [0.25,0.5,0.75,1].map(function(fr){
+    return '<div class="baixa-grid-line" style="bottom:'+(fr*100)+'%"><span>'+fmtBRLCurto(escala*fr)+'</span></div>';
+  }).join("");
+  const colunas = d.perdas.map(function(v, i){
+    const dv = d.devol[i];
+    const mm = pad2(i+1);
+    const selecionado = f.dIni===(ano+"-"+mm+"-01") && f.dFim===(ano+"-"+mm+"-"+pad2(diasNoMes(ano, i+1)));
+    const futuro = mesHoje>0 && (i+1)>mesHoje;
+    const isAtual = (i+1)===mesHoje;
+    const hP = Math.min(100, v/escala*100), hD = Math.min(100, dv/escala*100);
+    const tip = MESES[i]+"/"+ano+" — perdas "+fmtBRL(v)+" ("+d.qtd[i]+" baixa(s))"+(dv>0?(" · devoluções "+fmtBRL(dv)):"")+" · clique para filtrar a lista por este mês";
+    const corP = i===piorIdx ? COLORS.red : rgbaDe(COLORS.red, 0.78);
+    return '<div class="chart-col chart-col-click baixa-mes-col'+(selecionado?' baixa-mes-sel':'')+(isAtual?' baixa-mes-atual':'')+'" onclick="filtrarBaixaPorMes(\''+ano+'\','+i+')" title="'+escapeAttr(tip)+'">'+
+      '<div class="baixa-mes-barras" style="height:'+Math.max(hP,hD)+'%">'+
+        (v>0 ? '<div class="baixa-mes-label" style="color:'+(i===piorIdx?COLORS.red:COLORS.text)+'">'+fmtBRLCurto(v)+'</div>' : '')+
+        '<div class="chart-bar" style="width:'+(temDev?'46%':'62%')+';height:'+(Math.max(hP,hD)>0?(hP/Math.max(hP,hD)*100):0)+'%;background:'+(v>0?corP:'var(--steel-border)')+';opacity:'+(futuro?0.35:1)+'"></div>'+
+        (temDev ? (dv>0 ? '<div class="chart-bar" style="width:26%;height:'+(hD/Math.max(hP,hD)*100)+'%;background:'+COLORS.green+'"></div>' : '<div style="width:26%"></div>') : '')+
+      '</div>'+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(nome, i){
+    const futuro = mesHoje>0 && (i+1)>mesHoje;
+    return '<div class="chart-day" style="opacity:'+(futuro?0.45:1)+';'+((i+1)===mesHoje?'font-weight:700;color:'+COLORS.brand:'')+'">'+nome.slice(0,3)+'</div>';
+  }).join("");
+  const stat = function(rot, val, cor){
+    return '<div class="chart-stat"><div class="stat-label">'+rot+'</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;color:'+(cor||COLORS.text)+'">'+val+'</div></div>';
+  };
+  return '<div class="chart-stats-row" style="display:flex;gap:26px;flex-wrap:wrap;margin-bottom:16px">'+
+      stat("Perdas no ano", fmtBRL(total), COLORS.red)+
+      stat("Média por mês com perda", fmtBRL(mesesCom?total/mesesCom:0))+
+      stat("Pior mês", piorIdx>=0 ? MESES[piorIdx]+" · "+fmtBRLCurto(piorV) : "—", piorIdx>=0?COLORS.red:COLORS.textMuted)+
+      stat("Baixas no ano", qtdAno)+
+      (temDev ? stat("Devoluções no ano", fmtBRL(totalDev), COLORS.green) : '')+
+    '</div>'+
+    '<div class="chart-wrap baixa-chart-wrap">'+grid+colunas+'</div>'+
+    '<div class="chart-days">'+rotulos+'</div>'+
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
+      '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+COLORS.red+'"></span> Perdas (R$)</span>'+
+      (temDev ? '<span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:10px;border-radius:2px;background:'+COLORS.green+'"></span> Devoluções (R$)</span>' : '')+
+      '<span style="margin-left:auto">Clique num mês para filtrar a lista. Respeita os filtros de Material e Motivo.</span>'+
+    '</div>';
+}
 function renderBaixaEstoqueScreen(){
   const f = STATE.baixaManualFiltro;
+  const ano = anoBaixaGrafico();
+  const anos = Array.from(new Set(STATE.baixasManual.map(function(b){ return b.data ? b.data.slice(0,4) : null; }).filter(Boolean).concat([String(new Date().getFullYear()), ano]))).sort().reverse();
   const filtered = STATE.baixasManual.filter(b=>{
     if(f.materialId && b.materialId!==f.materialId) return false;
     if(f.motivo && b.motivo!==f.motivo) return false;
     return matchesDateFilters(b.data, f);
   }).sort((a,b)=> b.data.localeCompare(a.data));
-  const valorTotal = filtered.reduce((s,b)=>{ const m=STATE.materiais.find(x=>x.id===b.materialId); return s+(b.quantidade*(m?Number(m.valorUnitario||0):0)); },0);
+  const R = resumoBaixas(filtered);
+  const temFiltro = !!(f.materialId || f.motivo || f.dIni || f.dFim);
+  const periodoTxt = (f.dIni||f.dFim) ? ((f.dIni?fmtDateBR(f.dIni):"início")+" a "+(f.dFim?fmtDateBR(f.dFim):"hoje")) : "todo o período";
+  const principal = R.porMotivo[0];
+
   const rows = filtered.map(b=>{
     const m = STATE.materiais.find(x=>x.id===b.materialId);
-    const valor = b.quantidade*(m?Number(m.valorUnitario||0):0);
+    const valor = valorBaixaManual(b);
     const isDevolucao = b.quantidade<0;
     const qtdColor = isDevolucao ? COLORS.green : COLORS.red;
     const qtdSign = isDevolucao ? "+" : "−";
     return '<tr>'+
-      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px">'+fmtDateBR(b.data)+'</td>'+
-      '<td>'+(m ? (m.tipo==="Bobina"?coilSwatchHtml(m.nome):escapeHtml(m.nome)) : "?")+'</td>'+
-      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+qtdColor+'">'+qtdSign+fmtNum(Math.abs(b.quantidade))+' '+(m?m.unidade:"")+'</td>'+
-      '<td><span style="font-size:11.5px;padding:3px 9px;border-radius:20px;background:'+qtdColor+'18;color:'+qtdColor+'">'+escapeHtml(b.motivo||"—")+'</span></td>'+
-      '<td style="color:'+COLORS.textMuted+'">'+escapeHtml(b.observacao||"—")+'</td>'+
-      '<td style="font-family:\'IBM Plex Mono\',monospace">'+fmtBRL(valor)+'</td>'+
-      '<td class="no-print"><button class="icon-btn" onclick="confirmDeleteBaixaManual(\''+b.id+'\')">'+icon("trash",13)+'</button></td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;font-size:12.5px;white-space:nowrap">'+fmtDateBR(b.data)+'</td>'+
+      '<td><div>'+(m ? (m.tipo==="Bobina"?coilSwatchHtml(m.nome):escapeHtml(m.nome)) : "?")+'</div>'+(m&&m.tipo?'<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:2px">'+escapeHtml(m.tipo)+'</div>':'')+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;color:'+qtdColor+';text-align:right;white-space:nowrap">'+qtdSign+fmtNum(Math.abs(b.quantidade))+' '+(m?m.unidade:"")+'</td>'+
+      '<td><span style="font-size:11.5px;padding:3px 9px;border-radius:20px;background:'+qtdColor+'18;color:'+qtdColor+';white-space:nowrap">'+escapeHtml(b.motivo||"—")+'</span></td>'+
+      '<td style="color:'+COLORS.textMuted+';max-width:280px">'+escapeHtml(b.observacao||"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;text-align:right;white-space:nowrap;font-weight:600;color:'+(isDevolucao?COLORS.green:COLORS.text)+'">'+fmtBRL(valor)+'</td>'+
+      '<td class="no-print"><button class="icon-btn" title="Estornar baixa" onclick="confirmDeleteBaixaManual(\''+b.id+'\')">'+icon("trash",13)+'</button></td>'+
     '</tr>';
   }).join("");
-  const table = filtered.length===0 ? emptyStateHtml('Nenhuma baixa lançada. Clique em "Nova Baixa" para registrar uma perda.') :
-    '<table class="pcp-table"><thead><tr><th>Data</th><th>Material</th><th>Quantidade</th><th>Motivo</th><th>Observação</th><th>Valor</th><th class="no-print">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+  const table = filtered.length===0 ? emptyStateHtml(temFiltro ? 'Nenhuma baixa encontrada com os filtros atuais.' : 'Nenhuma baixa lançada. Clique em "Nova Baixa" para registrar uma perda.') :
+    '<table class="pcp-table"><thead><tr><th>Data</th><th>Material</th><th style="text-align:right">Quantidade</th><th>Motivo</th><th>Observação</th><th style="text-align:right">Valor</th><th class="no-print">Ações</th></tr></thead><tbody>'+rows+'</tbody>'+
+    '<tfoot><tr class="baixa-total-row"><td colspan="5">Total — '+filtered.length+' lançamento(s)'+(R.qtdDevol?' · perdas '+fmtBRL(R.valorPerdas)+' − devoluções '+fmtBRL(R.valorDevol):'')+'</td>'+
+      '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;white-space:nowrap;color:'+(R.liquido>=0?COLORS.red:COLORS.green)+'">'+fmtBRL(R.liquido)+'</td><td class="no-print"></td></tr></tfoot></table>';
+
+  const cardHead = function(iconName, cor, titulo, extraHtml){
+    return '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:14px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon(iconName,17,cor)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">'+titulo+'</h3></div>'+(extraHtml||'')+
+    '</div>';
+  };
+  const chip = function(t){ return '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+t+'</span>'; };
 
   document.getElementById("content").innerHTML =
-    screenHeaderHtml("trash","Baixa de Estoque (Perda)","Registre perdas, quebras e descartes de matéria-prima",
+    screenHeaderHtml("trash","Baixa de Estoque (Perda)","Perdas, quebras e descartes de matéria-prima — valores pelo custo unitário cadastrado",
       '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
         '<button class="btn btn-ghost" onclick="openMotivosPerdaModal()">'+icon("settings",14)+' Gerenciar Motivos</button>'+
+        '<button class="btn" onclick="exportarApresentacaoPptx()" title="Gera um PowerPoint com os gráficos do Acompanhamento da Produção e da Baixa de Estoque">'+icon("fileText",14)+' Exportar PowerPoint</button>'+
         '<button class="btn btn-primary" onclick="openBaixaManualModal()">'+icon("plus",14)+' Nova Baixa</button>'+
       '</div>')+
-    '<div class="stat-row">'+
-      statCardHtml("Baixas no Filtro", filtered.length, "trash", COLORS.red)+
-      statCardHtml("Valor Líquido (Perdas − Devoluções)", fmtBRLCard(valorTotal), "trendingUp", valorTotal>=0?COLORS.red:COLORS.green)+
-    '</div>'+
-    '<div class="pcp-card filter-bar">'+
-      '<div style="min-width:200px"><label class="field-label">Material</label><select class="field-select" onchange="updateBaixaManualFiltro(\'materialId\', this.value)"><option value="">Todos</option>'+
+    '<div class="pcp-card filter-bar no-print">'+
+      '<div style="min-width:200px"><label class="field-label'+(f.materialId?' filter-label-active':'')+'">Material</label><select class="field-select" onchange="updateBaixaManualFiltro(\'materialId\', this.value)"><option value="">Todos</option>'+
         STATE.materiais.map(m=>'<option value="'+m.id+'" '+(f.materialId===m.id?"selected":"")+'>'+escapeHtml(m.nome)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:190px"><label class="field-label">Motivo</label><select class="field-select" onchange="updateBaixaManualFiltro(\'motivo\', this.value)"><option value="">Todos</option>'+
+      '<div style="min-width:190px"><label class="field-label'+(f.motivo?' filter-label-active':'')+'">Motivo</label><select class="field-select" onchange="updateBaixaManualFiltro(\'motivo\', this.value)"><option value="">Todos</option>'+
         STATE.motivosPerda.map(mo=>'<option value="'+escapeAttr(mo)+'" '+(f.motivo===mo?"selected":"")+'>'+escapeHtml(mo)+'</option>').join("")+
         '</select></div>'+
-      '<div style="min-width:150px"><label class="field-label">Data início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateBaixaManualFiltro(\'dIni\', this.value)"/></div>'+
-      '<div style="min-width:150px"><label class="field-label">Data fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateBaixaManualFiltro(\'dFim\', this.value)"/></div>'+
-      '<button class="btn btn-ghost" onclick="clearBaixaManualFiltro()">Limpar filtros</button>'+
+      '<div style="min-width:150px"><label class="field-label'+(f.dIni?' filter-label-active':'')+'">Data início</label><input class="field-input" type="date" value="'+f.dIni+'" onchange="updateBaixaManualFiltro(\'dIni\', this.value)"/></div>'+
+      '<div style="min-width:150px"><label class="field-label'+(f.dFim?' filter-label-active':'')+'">Data fim</label><input class="field-input" type="date" value="'+f.dFim+'" onchange="updateBaixaManualFiltro(\'dFim\', this.value)"/></div>'+
+      '<button class="btn btn-ghost" onclick="clearBaixaManualFiltro()"'+(temFiltro?'':' disabled')+'>Limpar filtros</button>'+
     '</div>'+
-    '<div class="pcp-card" style="padding:0;overflow:auto">'+table+'</div>';
+    '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Baixa de Estoque (Perda) — '+escapeHtml(periodoTxt)+'</div></div>'+
+    '<div class="baixa-kpis">'+
+      baixaKpiHtml("Valor perdido", fmtBRL(R.valorPerdas), R.qtdPerdas+" baixa(s) · "+escapeHtml(periodoTxt), "trendingUp", COLORS.red)+
+      baixaKpiHtml("Devoluções ao estoque", fmtBRL(R.valorDevol), R.qtdDevol+" lançamento(s) de estorno", "repeat", COLORS.green)+
+      baixaKpiHtml("Valor líquido", fmtBRL(R.liquido), "Perdas − devoluções", "barChart", R.liquido>0?COLORS.red:COLORS.green)+
+      baixaKpiHtml("Principal motivo", principal ? escapeHtml(principal.nome) : "—", principal ? (fmtBRL(principal.valor)+" · "+(R.valorPerdas>0?Math.round(principal.valor/R.valorPerdas*100):0)+"% das perdas") : "Sem perdas no filtro", "alert", principal?"#C98A00":COLORS.textMuted)+
+    '</div>'+
+    '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+      cardHead("barChart", COLORS.red, "Perdas mês a mês — janeiro a dezembro",
+        '<div style="display:flex;align-items:center;gap:10px">'+chip("Valor em R$")+
+          '<div class="no-print" style="width:110px"><select class="field-select" onchange="updateBaixaManualFiltro(\'anoGraf\', this.value)">'+
+            anos.map(function(y){ return '<option value="'+y+'" '+(y===ano?"selected":"")+'>'+y+'</option>'; }).join("")+
+          '</select></div><span class="print-only">'+ano+'</span></div>')+
+      baixaGraficoAnualHtml(ano, f)+
+    '</div>'+
+    '<div class="baixa-dupla">'+
+      '<div class="pcp-card">'+cardHead("alert", "#C98A00", "Perdas por motivo", chip(escapeHtml(periodoTxt)))+
+        baixaRankingHtml(R.porMotivo.slice(0,8), R.valorPerdas, "#C98A00", "Nenhuma perda no filtro atual.")+'</div>'+
+      '<div class="pcp-card">'+cardHead("package", COLORS.brand, "Materiais com maior perda", chip(escapeHtml(periodoTxt)))+
+        baixaRankingHtml(R.porMaterial.slice(0,8).map(function(i){ return Object.assign({}, i, {nome:i.nome, labelHtml:escapeHtml(i.nome)+(i.tipo?' <span style="color:'+COLORS.textMuted+';font-size:11px">· '+escapeHtml(i.tipo)+'</span>':'')}); }), R.valorPerdas, COLORS.brand, "Nenhuma perda no filtro atual.")+'</div>'+
+    '</div>'+
+    '<div class="pcp-card" style="padding:0;overflow:auto">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:16px 18px 6px">'+
+        '<div style="display:flex;align-items:center;gap:9px">'+icon("fileText",16,COLORS.brand)+'<h3 style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Lançamentos</h3>'+chip(filtered.length+" registro(s)")+'</div>'+
+      '</div>'+
+      '<div class="baixa-tabela-scroll">'+table+'</div>'+
+    '</div>';
 }
 
 /* ============================== SEPARAÇÃO DE MATERIAIS AVULSOS ==============================
@@ -11854,6 +12069,7 @@ function renderAcompanhamentoScreen(){
   const anosAcum = Array.from(new Set(anos.concat([anoAcum]))).sort();
   const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
     rotuloControleHtml("acompanhamento")+
+    '<button class="btn btn-primary" onclick="exportarApresentacaoPptx()" title="Gera um PowerPoint com os gráficos desta tela e da Baixa de Estoque (Perda), com a logo e as cores da ELEVE">'+icon("fileText",14)+' Exportar PowerPoint</button>'+
     '<button class="btn" onclick="printTelaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
     '<button class="btn" onclick="printTelaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
   '</div>';
@@ -11895,6 +12111,354 @@ function renderAcompanhamentoScreen(){
       acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum)+
       acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum)+
     '</div>';
+}
+
+/* ============================== APRESENTAÇÃO POWERPOINT (.pptx) ==============================
+   Gera um .pptx com as cores e a logo da ELEVE a partir dos dados que estão na tela
+   (Acompanhamento da Produção + Baixa de Estoque). Os gráficos são nativos do PowerPoint,
+   então dá para editar números, cores e rótulos depois, direto no PowerPoint.
+   construirApresentacaoEleve() é "pura": recebe a instância do PptxGenJS e um objeto de dados
+   já calculado (coletarDadosApresentacao) — não lê STATE nem o DOM. */
+function construirApresentacaoEleve(pres, D){
+  const BR = {
+    dark:"12161C", panel:"1B212B", ink:"20262E", muted:"66707C", mutedDark:"8C97A6",
+    line:"E3E8ED", soft:"F3F5F7", white:"FFFFFF",
+    brand:"0080C6", brandDim:"005788", amber:"C98A00", pintura:"2B8FC9", red:"D1493E", green:"2F9E5B",
+  };
+  const FONT = "Calibri";
+  const W = 10, H = 5.625, MX = 0.5;
+  const MESES_CURTOS = ["Jan","Fev","Mar","Abr","Mai","Jun","Jul","Ago","Set","Out","Nov","Dez"];
+  const nf = function(n, dec){ return Number(n||0).toLocaleString("pt-BR",{minimumFractionDigits:dec||0, maximumFractionDigits:dec||0}); };
+  const brl = function(n){ return "R$ "+nf(n,2); };
+  const brlCurto = function(n){
+    const v = Number(n||0), a = Math.abs(v);
+    if(a>=1e6) return "R$ "+nf(v/1e6,1)+" mi";
+    if(a>=1e4) return "R$ "+nf(v/1e3,1)+" mil";
+    return "R$ "+nf(v,0);
+  };
+  const LOGO_CLARO = "image/png;base64,"+D.logos.claro;
+  const LOGO_ESCURO = "image/png;base64,"+D.logos.escuro;
+  const MARCA = "image/png;base64,"+D.logos.marca;
+
+  pres.layout = "LAYOUT_16x9";
+  pres.author = "ELEVE";
+  pres.company = "ELEVE";
+  pres.title = "Acompanhamento da Produção — "+D.periodoLabel;
+  pres.theme = {headFontFace:FONT, bodyFontFace:FONT};
+
+  /* ---- Layouts ---- */
+  pres.defineSlideMaster({
+    title:"ELEVE_CONTEUDO",
+    background:{color:BR.white},
+    objects:[
+      {image:{x:W-MX-1.55, y:0.36, w:1.55, h:0.358, data:LOGO_CLARO}},
+      {text:{text:"ELEVE · Painel de Produção  |  "+D.geradoEm, options:{x:MX, y:H-0.42, w:6, h:0.26, fontFace:FONT, fontSize:9, color:BR.muted, margin:0}}},
+      {placeholder:{options:{name:"titulo", type:"title", x:MX, y:0.3, w:7.2, h:0.5, fontFace:FONT, fontSize:26, bold:true, color:BR.ink, margin:0, valign:"middle", align:"left"}, text:""}},
+      {placeholder:{options:{name:"subtitulo", type:"body", x:MX, y:0.8, w:7.2, h:0.3, fontFace:FONT, fontSize:12, color:BR.muted, margin:0, valign:"top", align:"left"}, text:""}},
+    ],
+    slideNumber:{x:W-MX-0.6, y:H-0.42, w:0.6, h:0.26, fontFace:FONT, fontSize:9, color:BR.muted, align:"right"},
+  });
+  pres.defineSlideMaster({
+    title:"ELEVE_ESCURO",
+    background:{color:BR.dark},
+    objects:[
+      {image:{x:6.55, y:1.05, w:3.05, h:3.4, data:MARCA, transparency:82}},
+    ],
+  });
+
+  const tituloSlide = function(s, titulo, subtitulo){
+    s.addText(titulo, {placeholder:"titulo"});
+    if(subtitulo) s.addText(subtitulo, {placeholder:"subtitulo"});
+  };
+  const eixoBase = function(extra){
+    const o = {
+      catAxisLabelColor:BR.muted, valAxisLabelColor:BR.muted,
+      catAxisLabelFontFace:FONT, valAxisLabelFontFace:FONT,
+      catAxisLabelFontSize:9, valAxisLabelFontSize:9,
+      catAxisLineShow:true, catAxisLineColor:BR.line,
+      valAxisLineShow:false,
+      valGridLine:{color:BR.line, size:0.75},
+      catGridLine:{style:"none"},
+      dataLabelColor:BR.ink, dataLabelFontFace:FONT, dataLabelFontSize:9,
+      legendFontFace:FONT, legendFontSize:10, legendColor:BR.muted,
+    };
+    Object.keys(extra||{}).forEach(function(k){ o[k] = extra[k]; });
+    return o;
+  };
+  /* Cartão de indicador: fundo suave, rótulo pequeno em cima e número grande embaixo. */
+  const kpi = function(s, x, y, w, h, rotulo, valor, cor, nota){
+    s.addShape(pres.ShapeType.roundRect, {x:x, y:y, w:w, h:h, fill:{color:BR.soft}, line:{color:BR.soft}, rectRadius:0.08});
+    s.addText(rotulo.toUpperCase(), {x:x+0.15, y:y+0.1, w:w-0.3, h:0.24, fontFace:FONT, fontSize:10, bold:true, color:BR.muted, margin:0, charSpacing:0.5, isTextBox:true});
+    s.addText(valor, {x:x+0.15, y:y+0.34, w:w-0.3, h:Math.max(0.36, h-(nota?0.62:0.44)), fontFace:FONT, fontSize:20, bold:true, color:cor||BR.ink, margin:0, valign:"middle", fit:"shrink", isTextBox:true});
+    if(nota) s.addText(nota, {x:x+0.15, y:y+h-0.3, w:w-0.3, h:0.22, fontFace:FONT, fontSize:10, color:BR.muted, margin:0, isTextBox:true});
+  };
+  const corPct = function(p){ return p>=100 ? BR.green : (p>=60 ? BR.brand : BR.red); };
+
+  /* ============ 1. CAPA ============ */
+  pres.addSection({title:"Capa"});
+  {
+    const s = pres.addSlide({masterName:"ELEVE_ESCURO", sectionTitle:"Capa"});
+    s.addImage({x:MX+0.1, y:0.65, w:3.2, h:0.74, data:LOGO_ESCURO});
+    s.addText("Acompanhamento da Produção", {x:MX+0.1, y:1.85, w:6.2, h:1.2, fontFace:FONT, fontSize:40, bold:true, color:BR.white, margin:0, valign:"top", isTextBox:true});
+    s.addText(D.periodoLabel, {x:MX+0.1, y:3.1, w:6, h:0.5, fontFace:FONT, fontSize:22, color:"4FB3E8", margin:0, isTextBox:true});
+    s.addText("Colagem · Perfilar · Pintura · Baixa de Estoque (Perda)", {x:MX+0.1, y:3.6, w:6, h:0.35, fontFace:FONT, fontSize:14, color:BR.mutedDark, margin:0, isTextBox:true});
+    s.addText("Máquina: "+D.maquinaLabel+"   ·   Base: "+D.baseLabel+"\nGerado em "+D.geradoEm, {x:MX+0.1, y:4.55, w:6.5, h:0.55, fontFace:FONT, fontSize:11, color:BR.mutedDark, margin:0, valign:"bottom", isTextBox:true});
+  }
+
+  /* ============ 2. RESUMO DO MÊS ============ */
+  pres.addSection({title:"Acompanhamento da Produção"});
+  {
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Acompanhamento da Produção"});
+    tituloSlide(s, "Resumo do mês", D.periodoLabel+" · máquina: "+D.maquinaLabel+" · base: "+D.baseLabel);
+    const linhas = [["Colagem", D.colagem, BR.brand], ["Perfilar", D.perfilar, BR.amber]];
+    const x0 = MX+1.35, gap = 0.18, cw = (W-MX-x0-gap*3)/4, ch = 1.25;
+    linhas.forEach(function(l, i){
+      const r = l[1], cor = l[2], y = 1.45 + i*(ch+0.3);
+      s.addShape(pres.ShapeType.ellipse, {x:MX, y:y+ch/2-0.11, w:0.22, h:0.22, fill:{color:cor}, line:{color:cor}});
+      s.addText(l[0], {x:MX+0.32, y:y+ch/2-0.2, w:1, h:0.4, fontFace:FONT, fontSize:16, bold:true, color:BR.ink, margin:0, valign:"middle", isTextBox:true});
+      kpi(s, x0, y, cw, ch, "Total no mês", nf(r.total)+" m", cor, r.pedidos+" pedido(s)");
+      kpi(s, x0+(cw+gap), y, cw, ch, "Média por dia", nf(r.media)+" m", null, r.diasComProd+" dia(s) com produção");
+      kpi(s, x0+(cw+gap)*2, y, cw, ch, "Dias na meta", r.temMeta ? String(r.diasNaMeta) : "—", r.temMeta?BR.green:BR.muted, r.temMeta ? ("Meta do mês: "+nf(r.metaMes)+" m") : "Sem meta cadastrada");
+      kpi(s, x0+(cw+gap)*3, y, cw, ch, "% da meta do mês", r.temMeta ? r.pctMeta+"%" : "—", r.temMeta?corPct(r.pctMeta):BR.muted, (r.temMeta && r.diaRefHoje>0) ? ("Até o dia "+r.diaRefHoje+": "+r.pctAteHoje+"%") : "");
+    });
+  }
+
+  /* ============ 3-4. PRODUÇÃO POR DIA ============ */
+  const slideDiario = function(nome, r, cor){
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Acompanhamento da Produção"});
+    tituloSlide(s, nome+" — produção por dia", D.periodoLabel+" · metros"+(r.comFator?" (com Fator Produção Perfilar)":"")+" · verde = meta do dia batida");
+    const labels = r.dias.map(function(_, i){ return String(i+1); });
+    const cores = r.dias.map(function(v, i){ return (r.metas[i]>0 && v>=r.metas[i]) ? BR.green : cor; });
+    const pos = {x:MX-0.05, y:1.25, w:6.85, h:3.85};
+    const barOpts = {barGapWidthPct:35, chartColors:cores};
+    if(r.temMeta){
+      s.addChart([
+        {type:pres.ChartType.bar, data:[{name:"Produção do dia (m)", labels:labels, values:r.dias}], options:barOpts},
+        {type:pres.ChartType.line, data:[{name:"Meta do dia (m)", labels:labels, values:r.metas}], options:{chartColors:[BR.red], lineSize:1.5, lineDash:"dash", lineDataSymbol:"none"}},
+      ], eixoBase(Object.assign({}, pos, {showLegend:true, legendPos:"b", valAxisLabelFormatCode:"#,##0"})));
+    } else {
+      s.addChart(pres.ChartType.bar, [{name:"Produção do dia (m)", labels:labels, values:r.dias}],
+        eixoBase(Object.assign({}, pos, barOpts, {showLegend:false, valAxisLabelFormatCode:"#,##0"})));
+    }
+    const kx = 7.5, kw = W-MX-kx, kh = 0.86, kg = 0.12;
+    kpi(s, kx, 1.3, kw, kh, "Total no mês", nf(r.total)+" m", cor);
+    kpi(s, kx, 1.3+(kh+kg), kw, kh, "Média por dia", nf(r.media)+" m");
+    kpi(s, kx, 1.3+(kh+kg)*2, kw, kh, "Dias com produção", String(r.diasComProd));
+    kpi(s, kx, 1.3+(kh+kg)*3, kw, kh, r.temMeta?"% da meta do mês":"Dias na meta", r.temMeta ? r.pctMeta+"%" : "Sem meta", r.temMeta?corPct(r.pctMeta):BR.muted);
+    const notas = (r.obs||[]).map(function(o){ return "Dia "+o.dia+": "+o.texto; });
+    s.addNotes(nome+" — "+D.periodoLabel+". Total "+nf(r.total)+" m em "+r.diasComProd+" dia(s)."+(notas.length ? "\n\nObservações do mês:\n"+notas.join("\n") : ""));
+  };
+  slideDiario("Colagem", D.colagem, BR.brand);
+  slideDiario("Perfilar", D.perfilar, BR.amber);
+
+  /* ============ 5. PRODUÇÃO MÊS A MÊS ============ */
+  {
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Acompanhamento da Produção"});
+    const a = D.anual;
+    tituloSlide(s, "Produção mês a mês — "+a.ano, "Janeiro a dezembro · metros produzidos em cada mês (não acumulado)");
+    s.addChart(pres.ChartType.bar, [
+      {name:"Colagem", labels:MESES_CURTOS, values:a.colagem},
+      {name:"Perfilar", labels:MESES_CURTOS, values:a.perfilar},
+      {name:"Pintura", labels:MESES_CURTOS, values:a.pintura},
+    ], eixoBase({x:MX-0.05, y:1.25, w:6.85, h:3.85, barGrouping:"clustered", barGapWidthPct:55, chartColors:[BR.brand, BR.amber, BR.pintura], showLegend:true, legendPos:"b", valAxisLabelFormatCode:"#,##0"}));
+    const soma = function(arr){ return arr.reduce(function(x,y){ return x+y; },0); };
+    const melhor = function(arr){ const mx = Math.max.apply(null, arr.concat([0])); return mx>0 ? MESES_CURTOS[arr.indexOf(mx)] : "—"; };
+    const kx = 7.5, kw = W-MX-kx, kh = 1.17, kg = 0.13;
+    [["Colagem", a.colagem, BR.brand], ["Perfilar", a.perfilar, BR.amber], ["Pintura", a.pintura, BR.pintura]].forEach(function(e, i){
+      kpi(s, kx, 1.3+i*(kh+kg), kw, kh, e[0]+" no ano", nf(soma(e[1]))+" m", e[2], "Melhor mês: "+melhor(e[1]));
+    });
+  }
+
+  /* ============ 6. DIVISOR — BAIXA DE ESTOQUE ============ */
+  const B = D.baixas;
+  pres.addSection({title:"Baixa de Estoque (Perda)"});
+  {
+    const s = pres.addSlide({masterName:"ELEVE_ESCURO", sectionTitle:"Baixa de Estoque (Perda)"});
+    s.addImage({x:MX+0.1, y:0.65, w:2.2, h:0.51, data:LOGO_ESCURO});
+    s.addText("Baixa de Estoque (Perda)", {x:MX+0.1, y:1.9, w:6.2, h:1.1, fontFace:FONT, fontSize:38, bold:true, color:BR.white, margin:0, valign:"top", isTextBox:true});
+    s.addText("Perdas, quebras e descartes de matéria-prima · "+B.ano, {x:MX+0.1, y:3.05, w:6.2, h:0.4, fontFace:FONT, fontSize:16, color:BR.mutedDark, margin:0, isTextBox:true});
+    s.addText([
+      {text:brl(B.valorPerdas), options:{fontSize:30, bold:true, color:"F07368", breakLine:true}},
+      {text:"perdidos no ano, em "+B.qtdPerdas+" baixa(s)", options:{fontSize:13, color:BR.mutedDark}},
+    ], {x:MX+0.1, y:3.85, w:6.2, h:1.05, fontFace:FONT, margin:0, valign:"top", isTextBox:true});
+  }
+
+  /* ============ 7. PERDAS MÊS A MÊS ============ */
+  {
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Baixa de Estoque (Perda)"});
+    tituloSlide(s, "Perdas mês a mês — "+B.ano, "Janeiro a dezembro · valor em R$ (quantidade × valor unitário da matéria-prima)");
+    const series = [{name:"Perdas (R$)", labels:MESES_CURTOS, values:B.perdasMes}];
+    const temDev = B.devolMes.some(function(v){ return v>0; });
+    if(temDev) series.push({name:"Devoluções (R$)", labels:MESES_CURTOS, values:B.devolMes});
+    s.addChart(pres.ChartType.bar, series, eixoBase({x:MX-0.05, y:1.25, w:6.85, h:3.85, barGrouping:"clustered", barGapWidthPct:temDev?60:40,
+      chartColors:temDev?[BR.red, BR.green]:[BR.red], showLegend:temDev, legendPos:"b",
+      showValue:!temDev, dataLabelPosition:"outEnd", dataLabelFormatCode:"#,##0", valAxisLabelFormatCode:"#,##0"}));
+    const mesesCom = B.perdasMes.filter(function(v){ return v>0; }).length;
+    const piorV = Math.max.apply(null, B.perdasMes.concat([0]));
+    const kx = 7.5, kw = W-MX-kx, kh = 0.86, kg = 0.12;
+    kpi(s, kx, 1.3, kw, kh, "Perdas no ano", brlCurto(B.valorPerdas), BR.red);
+    kpi(s, kx, 1.3+(kh+kg), kw, kh, "Média por mês", brlCurto(mesesCom ? B.valorPerdas/mesesCom : 0));
+    kpi(s, kx, 1.3+(kh+kg)*2, kw, kh, "Pior mês", piorV>0 ? MESES_CURTOS[B.perdasMes.indexOf(piorV)]+" · "+brlCurto(piorV) : "—", piorV>0?BR.red:BR.muted);
+    kpi(s, kx, 1.3+(kh+kg)*3, kw, kh, "Valor líquido", brlCurto(B.valorPerdas-B.valorDevol), null);
+    s.addNotes("Perdas no ano "+B.ano+": "+brl(B.valorPerdas)+" em "+B.qtdPerdas+" baixa(s). Devoluções: "+brl(B.valorDevol)+".");
+  }
+
+  /* ============ 8. MOTIVOS E MATERIAIS ============ */
+  {
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Baixa de Estoque (Perda)"});
+    tituloSlide(s, "Onde estão as perdas", B.ano+" · perdas por motivo e matérias-primas com maior perda (R$)");
+    const topo = function(lista, n){
+      const l = lista.slice(0, n);
+      if(lista.length>n){ l.push({nome:"Outros", valor:lista.slice(n).reduce(function(x,y){ return x+y.valor; },0)}); }
+      return l.reverse();
+    };
+    const grafico = function(lista, x, titulo, cor){
+      s.addText(titulo, {x:x, y:1.3, w:4.3, h:0.3, fontFace:FONT, fontSize:14, bold:true, color:BR.ink, margin:0, isTextBox:true});
+      if(!lista.length){
+        s.addText("Nenhuma perda registrada no ano.", {x:x, y:2.6, w:4.3, h:0.4, fontFace:FONT, fontSize:12, color:BR.muted, margin:0, isTextBox:true});
+        return;
+      }
+      const t = topo(lista, 6);
+      s.addChart(pres.ChartType.bar, [{name:titulo, labels:t.map(function(i){ return i.nome.length>28 ? i.nome.slice(0,27)+"…" : i.nome; }), values:t.map(function(i){ return Math.round(i.valor*100)/100; })}],
+        eixoBase({x:x-0.05, y:1.65, w:4.35, h:3.45, barDir:"bar", barGapWidthPct:45, chartColors:[cor], showLegend:false,
+          showValue:true, dataLabelPosition:"outEnd", dataLabelFormatCode:"\"R$\" #,##0", valAxisHidden:true, valGridLine:{style:"none"}, catAxisLabelFontSize:10}));
+    };
+    grafico(B.porMotivo, MX, "Perdas por motivo", BR.red);
+    grafico(B.porMaterial, MX+4.65, "Materiais com maior perda", BR.brandDim);
+  }
+
+  /* ============ 9. MAIORES BAIXAS ============ */
+  {
+    const s = pres.addSlide({masterName:"ELEVE_CONTEUDO", sectionTitle:"Baixa de Estoque (Perda)"});
+    tituloSlide(s, "Maiores baixas do ano", B.ano+" · os "+Math.min(10, B.maiores.length)+" lançamentos de maior valor");
+    if(!B.maiores.length){
+      s.addText("Nenhuma baixa registrada no ano.", {x:MX, y:2.5, w:9, h:0.4, fontFace:FONT, fontSize:14, color:BR.muted, margin:0, isTextBox:true});
+    } else {
+      const cab = ["Data","Material","Quantidade","Motivo","Valor"].map(function(t, i){
+        return {text:t, options:{bold:true, color:BR.white, fill:{color:BR.ink}, align:(i===2||i===4)?"right":"left"}};
+      });
+      const linhas = B.maiores.slice(0,10).map(function(b, i){
+        const fundo = i%2 ? BR.soft : BR.white;
+        return [
+          {text:b.data, options:{fill:{color:fundo}}},
+          {text:b.material, options:{fill:{color:fundo}}},
+          {text:nf(b.quantidade,2)+" "+b.unidade, options:{fill:{color:fundo}, align:"right"}},
+          {text:b.motivo||"—", options:{fill:{color:fundo}}},
+          {text:brl(b.valor), options:{fill:{color:fundo}, align:"right", bold:true, color:BR.red}},
+        ];
+      });
+      s.addTable([cab].concat(linhas), {x:MX, y:1.3, w:W-2*MX, colW:[1.0, 3.2, 1.45, 1.9, 1.45], fontFace:FONT, fontSize:11, color:BR.ink,
+        border:{type:"solid", pt:0.5, color:BR.line}, rowH:0.3, valign:"middle", margin:[0.03,0.08,0.03,0.08]});
+    }
+  }
+  return pres;
+}
+
+/* Carrega o PptxGenJS sob demanda (só quando alguém clica em "Exportar PowerPoint"). */
+async function garantirBibliotecaPptx(){
+  if(window.PptxGenJS) return true;
+  const fontes = [
+    "https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js",
+    "https://unpkg.com/pptxgenjs@4.0.1/dist/pptxgen.bundle.js",
+  ];
+  for(let i=0;i<fontes.length && !window.PptxGenJS;i++){
+    try{ await carregarScriptPdf(fontes[i]); }catch(err){ console.warn("[PowerPoint]", err); }
+  }
+  return !!window.PptxGenJS;
+}
+/* Resumo do mês de uma etapa — mesma conta dos cartões do gráfico diário da tela. */
+function resumoProducaoMes(stage){
+  const f = STATE.acompFiltro;
+  const dados = producaoDiariaPorEtapa(stage);
+  const maxDia = diasNoMes(f.ano, f.mes);
+  const dias = dados.dias.slice(0, maxDia).map(function(v){ return Math.round(v*100)/100; });
+  const metas = [];
+  for(let d=1; d<=maxDia; d++) metas.push(Number(metaDoDia(stage, f.ano, f.mes, d))||0);
+  const total = dias.reduce(function(a,b){ return a+b; },0);
+  const diasComProd = dias.filter(function(v){ return v>0; }).length;
+  const metaMes = metas.reduce(function(a,b){ return a+b; },0);
+  const diaRefHoje = diaReferenciaAteHoje(f.ano, f.mes, maxDia);
+  const metaAteHoje = metas.slice(0, diaRefHoje).reduce(function(a,b){ return a+b; },0);
+  const totalAteHoje = dias.slice(0, diaRefHoje).reduce(function(a,b){ return a+b; },0);
+  const obsMes = (STATE.obsProducao||{})[obsCacheKey(stage, f.ano, f.mes)] || {};
+  return {
+    dias:dias, metas:metas, total:total, diasComProd:diasComProd,
+    pedidos:dados.pedidos.slice(0, maxDia).reduce(function(a,b){ return a+b; },0),
+    media: diasComProd ? total/diasComProd : 0,
+    diasNaMeta: metas.filter(function(mv,i){ return mv>0 && dias[i]>=mv; }).length,
+    metaMes:metaMes, temMeta: metaMes>0,
+    pctMeta: metaMes>0 ? Math.round(total/metaMes*100) : 0,
+    diaRefHoje:diaRefHoje, pctAteHoje: metaAteHoje>0 ? Math.round(totalAteHoje/metaAteHoje*100) : 0,
+    comFator: stage==="perfilar" && Object.keys(STATE.fatoresProducaoPerfilar||{}).length>0,
+    obs: Object.keys(obsMes).filter(function(d){ return obsMes[d] && String(obsMes[d]).trim(); }).sort().map(function(d){ return {dia:d, texto:String(obsMes[d]).trim()}; }),
+  };
+}
+/* Junta tudo o que a apresentação precisa, a partir dos filtros atuais do Acompanhamento
+   (mês, ano, máquina, base) e do ano escolhido no gráfico da Baixa de Estoque. */
+function coletarDadosApresentacao(){
+  const f = STATE.acompFiltro;
+  const anoAcum = f.anoAcum || String(new Date().getFullYear());
+  const anoBaixa = (STATE.baixaManualFiltro && STATE.baixaManualFiltro.anoGraf) || anoAcum;
+  const maq = STATE.equipamentos.find(function(e){ return e.id===f.maquinaId; });
+  const agora = new Date();
+  const listaAno = STATE.baixasManual.filter(function(b){ return b.data && b.data.slice(0,4)===String(anoBaixa); });
+  const R = resumoBaixas(listaAno);
+  const M = baixasMensais(anoBaixa, null);
+  const arred = function(v){ return Math.round(v*100)/100; };
+  const maiores = listaAno.filter(function(b){ return Number(b.quantidade)>0; })
+    .map(function(b){
+      const m = STATE.materiais.find(function(x){ return x.id===b.materialId; });
+      return {data:fmtDateBR(b.data), material:m ? ((m.tipo?m.tipo+" — ":"")+m.nome) : "?", quantidade:Number(b.quantidade), unidade:m?m.unidade:"", motivo:b.motivo||"", valor:valorBaixaManual(b)};
+    })
+    .sort(function(a,b){ return b.valor-a.valor; }).slice(0,10);
+  const anual = function(stage){ return producaoMensalPorEtapa(stage, anoAcum).meses.map(arred); };
+  return {
+    periodoLabel: MESES[Number(f.mes)-1]+"/"+f.ano,
+    maquinaLabel: maq ? maq.nome : "Todas as máquinas",
+    baseLabel: f.base==="concl" ? "Somente etapas concluídas" : "Programado (data de prog.)",
+    geradoEm: fmtDateBR(todayStr())+" "+pad2(agora.getHours())+":"+pad2(agora.getMinutes()),
+    logos:{claro:LOGO_LIGHT_BG_B64, escuro:LOGO_DARK_BG_B64, marca:MARK_B64},
+    colagem: resumoProducaoMes("colagem"),
+    perfilar: resumoProducaoMes("perfilar"),
+    anual: {ano:anoAcum, colagem:anual("colagem"), perfilar:anual("perfilar"), pintura:anual("pintura")},
+    baixas: {
+      ano:String(anoBaixa), valorPerdas:R.valorPerdas, valorDevol:R.valorDevol, qtdPerdas:R.qtdPerdas,
+      perdasMes:M.perdas.map(arred), devolMes:M.devol.map(arred),
+      porMotivo:R.porMotivo, porMaterial:R.porMaterial, maiores:maiores,
+    },
+  };
+}
+async function exportarApresentacaoPptx(){
+  showToast("info","Gerando apresentação PowerPoint…");
+  try{
+    if(!(await garantirBibliotecaPptx())){ showToast("error","A biblioteca do PowerPoint não carregou. Verifique a internet e tente de novo."); return; }
+    /* Garante que as observações do mês estejam carregadas para irem nas anotações dos slides. */
+    try{ ensureObsProducaoLoaded("colagem", STATE.acompFiltro.ano, STATE.acompFiltro.mes); ensureObsProducaoLoaded("perfilar", STATE.acompFiltro.ano, STATE.acompFiltro.mes); }catch(err){}
+    const dados = coletarDadosApresentacao();
+    const pres = new window.PptxGenJS();
+    construirApresentacaoEleve(pres, dados);
+    const nome = "ELEVE-Acompanhamento-"+STATE.acompFiltro.ano+"-"+STATE.acompFiltro.mes+".pptx";
+    let blob = await pres.write({outputType:"blob"});
+    /* Remove as entradas de pasta do ZIP: o OneDrive/SharePoint às vezes recusa abrir com elas. */
+    if(window.JSZip){
+      try{
+        const zip = await window.JSZip.loadAsync(blob);
+        const limpo = new window.JSZip();
+        const nomes = Object.keys(zip.files).filter(function(k){ return !zip.files[k].dir; });
+        for(let i=0;i<nomes.length;i++){ limpo.file(nomes[i], await zip.files[nomes[i]].async("uint8array"), {createFolders:false}); }
+        blob = await limpo.generateAsync({type:"blob", compression:"DEFLATE", mimeType:"application/vnd.openxmlformats-officedocument.presentationml.presentation"});
+      }catch(err){ console.warn("[PowerPoint] limpeza do zip", err); }
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = nome;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 4000);
+    showToast("success","Apresentação gerada: "+nome);
+  }catch(err){
+    console.error("[PowerPoint]", err);
+    showToast("error","Não foi possível gerar o PowerPoint: "+(err && err.message ? err.message : err));
+  }
 }
 
 /* ============================== RECADOS ==============================

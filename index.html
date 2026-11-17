@@ -2194,22 +2194,43 @@ function initLocalDefaults(){
   STATE.materiaisPdfColunas = defaultMateriaisPdfColunas();
   try{ STATE.sidebarHidden = window.localStorage.getItem("eleve_sidebar_hidden")==="1"; } catch(err){}
 }
+/* ---- Carrega TODAS as linhas de uma tabela, em páginas de 1000. ----
+   O Supabase (PostgREST) devolve no máximo 1000 linhas por consulta. Sem paginar, quando uma
+   tabela passa de 1000 registros o sistema carrega só os 1000 primeiros da ordenação e o resto
+   some das telas e dos gráficos (ex.: pedidos mais antigos sumindo do Acompanhamento). Ordena
+   também por id para a paginação não pular nem repetir linhas com o mesmo valor. */
+async function selectTodos(tabela, colunaOrdem, asc){
+  const TAM = 1000;
+  let todas = [], de = 0;
+  for(let volta=0; volta<200; volta++){
+    let q = sb.from(tabela).select("*");
+    if(colunaOrdem) q = q.order(colunaOrdem, {ascending:!!asc});
+    q = q.order("id", {ascending:true}).range(de, de+TAM-1);
+    const r = await q;
+    if(r.error) return {data:todas.length?todas:null, error:r.error};
+    const lote = r.data || [];
+    todas = todas.concat(lote);
+    if(lote.length < TAM) break;
+    de += TAM;
+  }
+  return {data:todas, error:null};
+}
 async function loadAllData(){
   const content = document.getElementById("content");
   if(content) content.innerHTML = '<div style="padding:60px;text-align:center;color:'+COLORS.textMuted+'">Carregando dados do Supabase…</div>';
   const [cidadesR, equipamentosR, motoristasR, statusR, materiaisR, pedidosR, notasR, baixasR, transfR, fatorHistR, avulsosR, movimentacoesR] = await Promise.all([
-    sb.from("cidades").select("*").order("nome"),
-    sb.from("equipamentos").select("*").order("nome"),
-    sb.from("motoristas").select("*").order("nome"),
-    sb.from("status_options").select("*").order("created_at"),
-    sb.from("materiais").select("*").order("nome"),
-    sb.from("pedidos").select("*").order("created_at", {ascending:false}),
-    sb.from("notas").select("*").order("data", {ascending:false}),
-    sb.from("baixas_manual").select("*").order("data", {ascending:false}),
-    sb.from("transferencias").select("*").order("data", {ascending:false}),
-    sb.from("fator_conversao_historico").select("*").order("vigencia_desde", {ascending:false}),
-    sb.from("materiais_avulsos").select("*").order("created_at", {ascending:false}),
-    sb.from("movimentacoes_estoque").select("*").order("data", {ascending:false}),
+    selectTodos("cidades","nome",true),
+    selectTodos("equipamentos","nome",true),
+    selectTodos("motoristas","nome",true),
+    selectTodos("status_options","created_at",true),
+    selectTodos("materiais","nome",true),
+    selectTodos("pedidos","created_at",false),
+    selectTodos("notas","data",false),
+    selectTodos("baixas_manual","data",false),
+    selectTodos("transferencias","data",false),
+    selectTodos("fator_conversao_historico","vigencia_desde",false),
+    selectTodos("materiais_avulsos","created_at",false),
+    selectTodos("movimentacoes_estoque","data",false),
   ]);
   [["cidades",cidadesR],["equipamentos",equipamentosR],["motoristas",motoristasR],["situações",statusR],["matéria-prima",materiaisR],["pedidos",pedidosR],["notas",notasR],["baixas de estoque",baixasR],["transferências",transfR],["histórico de fator de conversão",fatorHistR],["separação de materiais avulsos",avulsosR],["movimentações de estoque",movimentacoesR]].forEach(function(pair){
     if(pair[1].error) sbErrorToast("carregar "+pair[0], pair[1].error);
@@ -2302,7 +2323,7 @@ function applyTheme(theme){
 function toggleTheme(){ applyTheme(STATE.theme==="dark" ? "light" : "dark"); }
 
 /* ============================== MODAL / TOAST ============================== */
-function closeModal(){ document.getElementById("modal-root").innerHTML=""; if(typeof voltarColagemDrillSePreciso==="function") voltarColagemDrillSePreciso(); }
+function closeModal(){ document.getElementById("modal-root").innerHTML=""; if(typeof voltarColagemDrillSePreciso==="function") voltarColagemDrillSePreciso(); if(typeof voltarConferenciaSePreciso==="function") voltarConferenciaSePreciso(); }
 function showToast(type, text){
   const root = document.getElementById("toast-root");
   const color = type==="success" ? COLORS.green : (type==="error" ? COLORS.red : COLORS.brand);
@@ -12290,6 +12311,7 @@ function producaoChartHtml(stage, titulo, iconName, cor){
       '<div class="no-print" style="display:flex;gap:8px;flex-wrap:wrap">'+
         '<button class="btn" onclick="openMetasModal(\''+stage+'\')">'+icon("target",14)+' '+(temMetaConfigurada?"Editar metas (por dia útil)":"Adicionar metas (por dia útil)")+'</button>'+
         '<button class="btn btn-ghost" onclick="STATE.metasCalStage=\''+stage+'\';setScreen(\'metasCalendario\')">'+icon("calendar",14)+' Feriados e exceções</button>'+
+        '<button class="btn btn-ghost" onclick="openConferenciaMes(\''+stage+'\')" title="Lista todos os pedidos do mês e mostra por que cada um entra ou não neste gráfico">'+icon("filter",14)+' Conferir lançamentos</button>'+
       '</div>'+
     '</div>'+
     fatorNotaHtml+
@@ -13143,6 +13165,134 @@ function gerarCapRelatorio(){
   setTimeout(function(){ window.print(); }, 50);
 }
 
+/* ============================== CONFERÊNCIA DO MÊS (POR QUE ENTRA / NÃO ENTRA NO GRÁFICO) ==============================
+   Lista os pedidos ligados ao mês do filtro — Data Prog. no mês OU etapa concluída no mês — e,
+   para cada um, aplica exatamente a regra de producaoDiariaPorEtapa() mostrando o resultado:
+   "Conta no dia X" ou o motivo de não contar. O total dos que contam = total do gráfico. */
+let __conf = null, __confVoltar = null;
+function etapaAtualLabel(p){
+  if(p.etapaAtual==="entregue") return "Entregue";
+  return (STAGE_DEFS[p.etapaAtual] && STAGE_DEFS[p.etapaAtual].short) || p.etapaAtual || "—";
+}
+function conferenciaPedidosMes(stage, incluirSemEtapa){
+  const f = STATE.acompFiltro;
+  const prefixo = f.ano+"-"+f.mes;
+  const out = [];
+  STATE.pedidos.forEach(function(p){
+    const conc = dataConclusaoEtapa(p, stage);
+    const prog = p.dataProg||"";
+    const ligado = prog.slice(0,7)===prefixo || conc.slice(0,7)===prefixo;
+    if(!ligado) return;
+    const temEtapa = stage!=="colagem" || p.temColagem;
+    if(!temEtapa && !incluirSemEtapa) return;
+    const fator = stage==="perfilar" ? fatorProducaoPerfilarPara(p.tipo) : 1;
+    const metros = Number(p.metragem||0)*fator;
+    let conta = false, motivo = "", dia = 0, origemData = "";
+    const concluido = stageConcluido(p, stage);
+    const dataRef = dataBaseProducao(p, stage, f.base);
+    if(!temEtapa) motivo = "Pedido sem a etapa Colagem marcada";
+    else if(f.base==="concl" && !concluido) motivo = STAGE_DEFS[stage].short+" ainda não concluída (etapa atual: "+etapaAtualLabel(p)+")";
+    else if(!dataRef) motivo = "Sem Data Prog. e sem data de conclusão";
+    else if(dataRef.slice(0,7)!==prefixo) motivo = (f.base==="concl" && conc ? "Concluída em "+fmtDateBR(conc)+" — conta em "+MESES[Number(conc.slice(5,7))-1]+"/"+conc.slice(0,4) : "Data Prog. em "+fmtDateBR(dataRef)+" — conta em outro mês");
+    else if(f.maquinaId && p.equipamentoId!==f.maquinaId) motivo = "Outra máquina ("+(nomeEquip(p.equipamentoId)||"sem máquina")+") — filtro de Máquina";
+    else {
+      conta = true; dia = Number(dataRef.slice(8,10));
+      origemData = f.base==="prog" ? "pela Data Prog." : (conc ? "pela data de conclusão" : "pela Data Prog. (sem data de conclusão registrada)");
+    }
+    out.push({p:p, conta:conta, motivo:motivo, dia:dia, origemData:origemData, metros:metros, conc:conc, prog:prog, temEtapa:temEtapa});
+  });
+  return out;
+}
+function openConferenciaMes(stage){
+  __confVoltar = null;
+  __conf = Object.assign({filtro:"todos", busca:"", semEtapa:false}, (__conf && __conf.stage===stage) ? __conf : {}, {stage:stage});
+  renderConferenciaMes();
+}
+function setConf(k, v){ if(!__conf) return; __conf[k] = v; renderConferenciaMes(k==="busca"); }
+function editarPedidoDaConf(id){ __confVoltar = Object.assign({}, __conf); openPedidoModal("edit", id); }
+function voltarConferenciaSePreciso(){
+  if(!__confVoltar || STATE.screen!=="acompanhamento"){ __confVoltar = null; return; }
+  const d = __confVoltar;
+  setTimeout(function(){
+    if(document.getElementById("modal-root").innerHTML) return;
+    __conf = d; __confVoltar = null; renderConferenciaMes();
+  }, 60);
+}
+function renderConferenciaMes(manterFoco){
+  const C = __conf; if(!C) return;
+  const f = STATE.acompFiltro;
+  const nomeEt = STAGE_DEFS[C.stage].short;
+  const todos = conferenciaPedidosMes(C.stage, C.semEtapa);
+  const entram = todos.filter(function(x){ return x.conta; });
+  const naoEntram = todos.filter(function(x){ return !x.conta; });
+  const totEntram = entram.reduce(function(a,x){ return a+x.metros; },0);
+  const totNao = naoEntram.reduce(function(a,x){ return a+x.metros; },0);
+  /* resumo dos motivos */
+  const porMotivo = {};
+  naoEntram.forEach(function(x){
+    const chave = x.motivo.indexOf("Concluída em")===0 ? "Concluída em outro mês" : (x.motivo.indexOf("ainda não concluída")!==-1 ? nomeEt+" ainda não concluída" : (x.motivo.indexOf("Outra máquina")===0 ? "Outra máquina (filtro)" : (x.motivo.indexOf("Data Prog. em")===0 ? "Data Prog. em outro mês" : x.motivo)));
+    porMotivo[chave] = porMotivo[chave] || {n:0, m:0}; porMotivo[chave].n++; porMotivo[chave].m += x.metros;
+  });
+  let lista = C.filtro==="entram" ? entram : (C.filtro==="nao" ? naoEntram : todos);
+  const busca = (C.busca||"").trim().toLowerCase();
+  if(busca) lista = lista.filter(function(x){ return [x.p.op, x.p.cliente, x.p.tipo, x.motivo].join(" ").toLowerCase().indexOf(busca)!==-1; });
+  lista = lista.slice().sort(function(a,b){ return (b.conta-a.conta) || (a.dia-b.dia) || (a.prog||"").localeCompare(b.prog||""); });
+  const linhas = lista.map(function(x){
+    const p = x.p;
+    const st = x.conta
+      ? '<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:'+COLORS.green+'22;color:'+COLORS.green+';white-space:nowrap">Conta no dia '+x.dia+'</span><div style="font-size:10px;color:'+COLORS.textMuted+';margin-top:2px">'+x.origemData+'</div>'
+      : '<span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:'+COLORS.red+'1A;color:'+COLORS.red+';white-space:nowrap">Não conta</span><div style="font-size:10.5px;color:var(--text);margin-top:3px;max-width:300px;white-space:normal">'+escapeHtml(x.motivo)+'</div>';
+    return '<tr>'+
+      '<td style="font-weight:700">'+escapeHtml(p.op||"—")+'</td>'+
+      '<td>'+escapeHtml(p.cliente||"—")+'</td>'+
+      '<td>'+escapeHtml(p.tipo||"—")+'</td>'+
+      '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace">'+fmtNum(x.metros)+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+(x.prog?fmtDateBR(x.prog):"—")+'</td>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+(x.conc?fmtDateBR(x.conc):'<span style="color:'+COLORS.textMuted+'">—</span>')+'</td>'+
+      '<td>'+escapeHtml(etapaAtualLabel(p))+'</td>'+
+      '<td>'+st+'</td>'+
+      '<td class="no-print"><button class="icon-btn" title="Abrir / editar pedido" onclick="editarPedidoDaConf(\''+p.id+'\')">'+icon("edit",13)+'</button></td>'+
+    '</tr>';
+  }).join("");
+  const kpi = function(label, valor, sub, c){ return '<div style="flex:1;min-width:150px;background:var(--panel-alt);border-radius:8px;padding:9px 12px;border-left:3px solid '+(c||COLORS.brand)+'"><div class="stat-label" style="font-size:10px">'+label+'</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700;color:'+(c||"var(--text)")+'">'+valor+'</div>'+(sub?'<div style="font-size:10.5px;color:'+COLORS.textMuted+'">'+sub+'</div>':'')+'</div>'; };
+  const motivosHtml = Object.keys(porMotivo).length
+    ? '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">'+Object.keys(porMotivo).sort(function(a,b){ return porMotivo[b].m-porMotivo[a].m; }).map(function(k){
+        return '<span style="font-size:11.5px;background:'+COLORS.red+'12;border:1px solid '+COLORS.red+'44;border-radius:14px;padding:3px 10px">'+escapeHtml(k)+': <strong>'+porMotivo[k].n+'</strong> ped. · '+fmtNum(porMotivo[k].m)+' m</span>';
+      }).join("")+'</div>'
+    : '';
+  const chip = function(v, label){ const on = C.filtro===v; return '<button type="button" class="btn '+(on?"btn-primary":"btn-ghost")+'" style="padding:5px 11px;font-size:12px" onclick="setConf(\'filtro\',\''+v+'\')">'+label+'</button>'; };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:1180px;padding:0;overflow:hidden;display:flex;flex-direction:column">'+
+        '<div style="padding:18px 22px 14px;border-bottom:1px solid var(--steel-border);border-top:4px solid '+COLORS.brand+'">'+
+          '<div class="modal-header" style="margin-bottom:4px"><h3>Conferência — '+nomeEt+' · '+MESES[Number(f.mes)-1]+'/'+f.ano+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+          '<div style="font-size:12px;color:'+COLORS.textMuted+';margin-bottom:12px">Pedidos com Data Prog. ou '+nomeEt+' concluída neste mês. Base do cálculo: <strong>'+(f.base==="concl"?"Somente etapas concluídas (pela data real de conclusão)":"Programado (pela Data Prog.)")+'</strong>'+(f.maquinaId?' · Máquina: <strong>'+escapeHtml(nomeEquip(f.maquinaId))+'</strong>':'')+(C.stage==="perfilar"?' · metragem com Fator Produção Perfilar':'')+'</div>'+
+          '<div style="display:flex;gap:10px;flex-wrap:wrap">'+
+            kpi("Entram no gráfico", fmtNum(totEntram)+" m", entram.length+" pedido(s) — igual ao Total no mês", COLORS.green)+
+            kpi("Não entram", fmtNum(totNao)+" m", naoEntram.length+" pedido(s)", COLORS.red)+
+            kpi("Total ligado ao mês", fmtNum(totEntram+totNao)+" m", todos.length+" pedido(s)")+
+          '</div>'+
+          motivosHtml+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-top:12px">'+
+            chip("todos","Todos")+chip("entram","Entram")+chip("nao","Não entram")+
+            (C.stage==="colagem" ? '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;margin-left:6px"><input type="checkbox" '+(C.semEtapa?"checked":"")+' onchange="setConf(\'semEtapa\', this.checked)"/> Mostrar também pedidos sem Colagem</label>' : '')+
+            '<div style="margin-left:auto;width:240px"><label class="field-label" style="font-size:10px">Buscar</label><input class="field-input" id="conf-busca" placeholder="OP, cliente, tipo, motivo…" value="'+escapeAttr(C.busca||"")+'" oninput="setConf(\'busca\', this.value)"/></div>'+
+          '</div>'+
+        '</div>'+
+        '<div style="overflow:auto;max-height:50vh;padding:0 22px">'+
+          (lista.length===0 ? '<div style="padding:30px 0">'+emptyStateHtml("Nenhum pedido para este filtro.")+'</div>' :
+          '<table class="pcp-table" style="width:100%"><thead><tr><th>OP</th><th>Cliente</th><th>Tipo</th><th style="text-align:right">Metragem (m)</th><th>Data Prog.</th><th>'+nomeEt+' concluída em</th><th>Etapa atual</th><th>No gráfico do mês</th><th class="no-print"></th></tr></thead><tbody>'+linhas+'</tbody></table>')+
+        '</div>'+
+        '<div style="padding:12px 22px;border-top:1px solid var(--steel-border);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
+          '<span style="font-size:11.5px;color:'+COLORS.textMuted+';max-width:820px">Se um pedido foi produzido neste mês mas aparece com a conclusão em outro mês, corrija o campo "'+nomeEt+' concluída em" no formulário do pedido (lápis). Ao fechar o formulário, você volta para esta lista.</span>'+
+          '<button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+  if(manterFoco){ const el = document.getElementById("conf-busca"); if(el){ el.focus(); const v=el.value; el.setSelectionRange(v.length,v.length); } }
+}
+
 function renderAcompanhamentoScreen(){
   const f = STATE.acompFiltro;
   const anosPedidos = STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean);
@@ -13615,7 +13765,7 @@ function mapRecadoFromRow(r, leiturasPorRecado){
 }
 async function carregarRecados(){
   const [recadosR, leiturasR] = await Promise.all([
-    sb.from("recados").select("*").order("criado_em", {ascending:false}),
+    selectTodos("recados","criado_em",false),
     sb.from("recado_leituras").select("*"),
   ]);
   if(recadosR.error){

@@ -163,9 +163,11 @@ button,input,select{font-family:'Inter',sans-serif;}
 #hscroll-float::-webkit-scrollbar-thumb{background:var(--brand);border-radius:7px;border:3px solid var(--panel);}
 @media print{ #hscroll-float{display:none !important;} }
 .pcp-table tr.pend-destaque td{background:rgba(0,128,198,.18) !important;transition:background .4s;}
-.inativo-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.04em;background:rgba(140,151,166,.18);color:#8C97A6;border:1px solid rgba(140,151,166,.55);white-space:nowrap;margin-left:6px;vertical-align:middle;}
-.row-inativo td{opacity:.55;}
-.row-inativo td.no-print{opacity:1;}
+.inativo-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.04em;background:rgba(209,73,62,.14);color:#D1493E;border:1px solid rgba(209,73,62,.55);white-space:nowrap;margin-left:6px;vertical-align:middle;cursor:help;}
+/* Linha de matéria-prima inativa: fundo avermelhado + faixa à esquerda, pra destacar do resto. */
+.row-inativo td{background:rgba(209,73,62,.09) !important;color:#9A5A55;}
+.row-inativo td:first-child{box-shadow:inset 4px 0 0 #D1493E;}
+.inativo-info{display:block;font-size:10.5px;color:#D1493E;margin-top:3px;line-height:1.35;white-space:normal;}
 .icon-btn.ativar-btn{color:#2F9E5B;border-color:#2F9E5B88;}
 /* Combo com busca por digitação nos filtros de produto (ver aprimorarSelectsProduto) */
 .sp-wrap{position:relative;}
@@ -892,6 +894,9 @@ const DEFAULT_CONFIG_VALUES = {
   /* Matérias-primas inativadas — lista de ids. Item inativo não pode ser usado no sistema
      até ser ativado de novo na tela Matéria-Prima. */
   materiais_inativos: [],
+  /* Dados da inativação por matéria-prima: {id: {data, motivo, responsavel, registradoPor, registradoEm,
+     historico:[{acao:"inativado"|"reativado", data, motivo, responsavel, registradoPor, registradoEm}]}} */
+  materiais_inativos_info: {},
   /* Pendências de Entrega (falta de material na entrega): motivos, pessoas responsáveis e
      o histórico das pendências — tudo em app_config, mesmo padrão dos cancelamentos. */
   motivos_falta_material: ["Faltou parafuso","Faltou telha","Faltou cumeeira","Faltou acabamento","Outro"],
@@ -2091,7 +2096,7 @@ const STATE = {
   dashColaAno:String(new Date().getFullYear()),
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   /* Matérias-primas inativas (ids) — ver materialInativo(). */
-  materiaisInativosIds:[],
+  materiaisInativosIds:[], materiaisInativosInfo:{},
   /* Pendências de Entrega — ver seção PENDÊNCIAS DE ENTREGA. */
   pendenciasEntrega:[], motivosFaltaMaterial:[], pessoasErroEntrega:[],
   pendenciasFiltro:{mes:"",ano:String(new Date().getFullYear()),motivo:"",responsavel:"",status:"",cliente:"",op:""},
@@ -2195,10 +2200,12 @@ async function loadAllData(){
   const [fatoresConsumoCola, pedidosColaCfg] = await Promise.all([configGet("fatores_consumo_cola"), configGet("pedidos_cola")]);
   STATE.fatoresConsumoCola = (fatoresConsumoCola && typeof fatoresConsumoCola==="object") ? fatoresConsumoCola : {};
   STATE.pedidosCola = (pedidosColaCfg && typeof pedidosColaCfg==="object") ? pedidosColaCfg : {};
-  const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega] = await Promise.all([
+  const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega, materiaisInativosInfo] = await Promise.all([
     configGet("materiais_inativos"), configGet("pendencias_entrega"), configGet("motivos_falta_material"), configGet("pessoas_erro_entrega"),
+    configGet("materiais_inativos_info"),
   ]);
   STATE.materiaisInativosIds = Array.isArray(materiaisInativos) ? materiaisInativos : [];
+  STATE.materiaisInativosInfo = (materiaisInativosInfo && typeof materiaisInativosInfo==="object") ? materiaisInativosInfo : {};
   STATE.pendenciasEntrega = Array.isArray(pendenciasEntrega) ? pendenciasEntrega : [];
   STATE.motivosFaltaMaterial = Array.isArray(motivosFaltaMaterial) && motivosFaltaMaterial.length ? motivosFaltaMaterial : DEFAULT_CONFIG_VALUES.motivos_falta_material.slice();
   STATE.pessoasErroEntrega = Array.isArray(pessoasErroEntrega) ? pessoasErroEntrega : [];
@@ -3907,7 +3914,8 @@ const ENTITY_CONFIGS = {
     columns: [
       {key:"atencao", label:"Atenção", render:(it)=>'<button type="button" class="icon-btn'+(it.atencao?" atencao-on":"")+'" title="'+(it.atencao?"Remover destaque de atenção":"Marcar como produto de atenção")+'" onclick="toggleMaterialAtencao(\''+it.id+'\')">'+icon("star",14)+'</button>'},      {key:"tipo", label:"Tipo"},
       {key:"nome", label:"Material", render:(it)=> (it.tipo==="Bobina" ? coilSwatchHtml(it.nome) : escapeHtml(it.nome))+
-        (materialInativo(it.id) ? ' <span class="inativo-badge" title="Item inativo — bloqueado para uso. Ative para voltar a usar.">INATIVO</span>' : '')},
+        (materialInativo(it.id) ? ' <span class="inativo-badge" title="'+escapeAttr(textoInativacao(it.id) || "Item inativo — bloqueado para uso. Ative para voltar a usar.")+'">INATIVO</span>'+
+          (textoInativacao(it.id) ? '<span class="inativo-info">'+escapeHtml(textoInativacao(it.id))+'</span>' : '') : '')},
       {key:"cor", label:"É Cor?", render:(it)=> it.cor==="S" ? "Sim" : "Não"},
       {key:"estoqueInicial", label:"Saldo Inicial", render:(it)=>{
         const div = divergenciaDoMaterial(it);
@@ -4212,37 +4220,92 @@ function checarMateriaisAtivos(ids, idsJaUsados){
   }
   return true;
 }
+/* Texto curto da inativação vigente (data · motivo · responsável) — usado no badge e na linha. */
+function textoInativacao(id){
+  const info = (STATE.materiaisInativosInfo||{})[id];
+  if(!info || !materialInativo(id) || !info.data) return "";
+  return "Inativado em "+fmtDateBR(info.data)+" · Motivo: "+(info.motivo||"—")+" · Resp.: "+(info.responsavel||"—");
+}
+function historicoInativacaoHtml(id){
+  const info = (STATE.materiaisInativosInfo||{})[id];
+  const hist = (info && Array.isArray(info.historico)) ? info.historico.slice().reverse() : [];
+  if(!hist.length) return "";
+  return '<div style="margin-top:14px"><div class="field-label" style="margin-bottom:6px">Histórico</div>'+
+    '<div style="max-height:150px;overflow:auto;border:1px solid var(--steel-border);border-radius:6px">'+
+    hist.map(function(h){
+      const cor = h.acao==="inativado" ? COLORS.red : COLORS.green;
+      return '<div style="padding:6px 9px;border-bottom:1px solid var(--steel-border);font-size:11.5px;line-height:1.4">'+
+        '<strong style="color:'+cor+'">'+(h.acao==="inativado"?"Inativado":"Reativado")+'</strong> em '+fmtDateBR(h.data)+
+        (h.responsavel?' · Resp.: '+escapeHtml(h.responsavel):'')+
+        (h.motivo?'<br><span style="color:'+COLORS.textMuted+'">Motivo: '+escapeHtml(h.motivo)+'</span>':'')+
+        (h.registradoPor?'<br><span style="color:'+COLORS.textMuted+';font-size:10.5px">Lançado por '+escapeHtml(h.registradoPor)+'</span>':'')+
+      '</div>';
+    }).join("")+'</div></div>';
+}
 function confirmToggleMaterialAtivo(id){
   const m = STATE.materiais.find(x=>x.id===id);
   if(!m) return;
   const inativo = materialInativo(id);
+  const atual = textoInativacao(id);
+  const campos = inativo
+    ? (atual ? '<div style="font-size:12px;background:rgba(209,73,62,.09);color:#D1493E;padding:8px 10px;border-radius:6px;margin-top:12px;line-height:1.45">'+escapeHtml(atual)+'</div>' : '')+
+      '<div class="grid-2" style="margin-top:12px">'+
+        '<div><label class="field-label">Data da reativação *</label><input class="field-input" type="date" id="inat-data" value="'+todayStr()+'"/></div>'+
+        '<div><label class="field-label">Responsável *</label><input class="field-input" id="inat-resp" placeholder="Nome do responsável"/></div>'+
+        '<div style="grid-column:1/-1"><label class="field-label">Observação</label><input class="field-input" id="inat-motivo" placeholder="Opcional"/></div>'+
+      '</div>'
+    : '<div class="grid-2" style="margin-top:12px">'+
+        '<div><label class="field-label">Data da inativação *</label><input class="field-input" type="date" id="inat-data" value="'+todayStr()+'"/></div>'+
+        '<div><label class="field-label">Responsável *</label><input class="field-input" id="inat-resp" placeholder="Nome do responsável"/></div>'+
+        '<div style="grid-column:1/-1"><label class="field-label">Motivo da inativação *</label><textarea class="field-input" id="inat-motivo" rows="2" placeholder="Ex.: produto descontinuado pelo fornecedor"></textarea></div>'+
+      '</div>';
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:420px">'+
-        '<div class="modal-header"><h3>'+(inativo?"Ativar":"Inativar")+' matéria-prima</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+      '<div class="modal-card" style="max-width:480px">'+
+        '<div class="modal-header"><h3>'+(inativo?"Reativar":"Inativar")+' matéria-prima</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
         '<p style="color:'+COLORS.textMuted+';font-size:13.5px;line-height:1.5;margin:0">'+
           (inativo
-            ? 'Ativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item volta a poder ser usado em pedidos, baixas, transferências e notas.'
-            : 'Inativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item fica bloqueado: não poderá ser usado no sistema até ser ativado novamente. O histórico é mantido.')+
+            ? 'Reativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item volta a poder ser usado em pedidos, baixas, transferências e notas.'
+            : 'Inativar "<strong>'+escapeHtml(m.nome)+'</strong>"? O item fica bloqueado: não poderá ser usado no sistema até ser reativado. O histórico é mantido.')+
         '</p>'+
+        campos+
+        historicoInativacaoHtml(id)+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
-          '<button type="button" class="btn '+(inativo?"btn-primary":"btn-danger")+'" onclick="toggleMaterialAtivo(\''+id+'\')">'+(inativo?"Ativar":"Inativar")+'</button></div>'+
+          '<button type="button" class="btn '+(inativo?"btn-primary":"btn-danger")+'" onclick="toggleMaterialAtivo(\''+id+'\')">'+(inativo?"Reativar":"Inativar")+'</button></div>'+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
 }
 async function toggleMaterialAtivo(id){
   const m = STATE.materiais.find(x=>x.id===id);
+  const dataEl = document.getElementById("inat-data"), respEl = document.getElementById("inat-resp"), motEl = document.getElementById("inat-motivo");
+  const data = dataEl ? dataEl.value : "";
+  const responsavel = respEl ? (respEl.value||"").trim() : "";
+  const motivo = motEl ? (motEl.value||"").trim() : "";
   const atual = await configGet("materiais_inativos");
   const lista = Array.isArray(atual) ? atual.slice() : (STATE.materiaisInativosIds||[]).slice();
   const eraInativo = lista.indexOf(id)!==-1;
+  if(!data){ showToast("error","Informe a data."); return; }
+  if(!responsavel){ showToast("error","Informe o nome do responsável."); return; }
+  if(!eraInativo && !motivo){ showToast("error","Informe o motivo da inativação."); return; }
+  const infoAtual = await configGet("materiais_inativos_info");
+  const infoMapa = Object.assign({}, (infoAtual && typeof infoAtual==="object") ? infoAtual : (STATE.materiaisInativosInfo||{}));
+  const reg = {acao: eraInativo ? "reativado" : "inativado", data:data, motivo:motivo, responsavel:responsavel,
+    registradoPor: STATE.currentUserEmail||STATE.userName||"", registradoEm: new Date().toISOString()};
+  const anterior = infoMapa[id] || {};
+  const historico = (Array.isArray(anterior.historico) ? anterior.historico.slice() : []).concat([reg]);
+  infoMapa[id] = eraInativo
+    ? {historico:historico}
+    : {data:data, motivo:motivo, responsavel:responsavel, registradoPor:reg.registradoPor, registradoEm:reg.registradoEm, historico:historico};
   const nova = eraInativo ? lista.filter(x=>x!==id) : lista.concat([id]);
   const ok = await configSet("materiais_inativos", nova);
-  closeModal();
   if(!ok) return;
+  const okInfo = await configSet("materiais_inativos_info", infoMapa);
+  closeModal();
   STATE.materiaisInativosIds = nova;
+  if(okInfo) STATE.materiaisInativosInfo = infoMapa;
   renderScreen();
-  showToast("success", (m?'"'+m.nome+'" ':"Item ")+(eraInativo ? "ativado — liberado para uso." : "inativado — bloqueado para uso no sistema."));
+  showToast("success", (m?'"'+m.nome+'" ':"Item ")+(eraInativo ? "reativado — liberado para uso." : "inativado — bloqueado para uso no sistema."));
 }
 
 function fieldHtml(f, item){
@@ -4343,7 +4406,7 @@ function renderGenericScreen(type){
     const acertoBtn = (type==="material" && isCurrentUserAdmin()) ? '<button class="icon-btn" title="Acerto de Estoque" onclick="openAcertoModal(\''+it.id+'\')">'+icon("sliders",13)+'</button>' : '';
     const inativo = type==="material" && materialInativo(it.id);
     const ativoBtn = type==="material"
-      ? '<button class="icon-btn'+(inativo?' ativar-btn':'')+'" title="'+(inativo?"Ativar produto (liberar para uso)":"Inativar produto (bloquear o uso no sistema)")+'" onclick="confirmToggleMaterialAtivo(\''+it.id+'\')">'+icon(inativo?"checkCircle":"xCircle",13)+'</button>'
+      ? '<button class="icon-btn'+(inativo?' ativar-btn':'')+'" title="'+(inativo?"Reativar produto (liberar para uso)":"Inativar produto (bloquear o uso no sistema)")+'" onclick="confirmToggleMaterialAtivo(\''+it.id+'\')">'+icon(inativo?"checkCircle":"xCircle",13)+'</button>'
       : '';
     return '<tr'+(inativo?' class="row-inativo"':'')+'>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+ativoBtn+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
   }).join("");
@@ -7733,23 +7796,167 @@ function pararAutoScrollDrag(){
   document.removeEventListener("dragover", __autoScrollDragOver);
   if(__autoScrollRaf){ cancelAnimationFrame(__autoScrollRaf); __autoScrollRaf = null; }
 }
+/* ---- Editar Metas de Produção: metas padrão por dia da semana + (Colagem/Perfilar) metas do mês
+   dia a dia. "Preencher dias úteis" lança a meta em todos os dias úteis do mês de uma vez, pulando
+   domingos, feriados, férias e paradas cadastrados em Metas por Dia; depois cada dia pode ser ajustado.
+   Dia com valor igual ao padrão não vira exceção (fica seguindo a meta da semana). ---- */
+let __metasModal = null;
+const TIPOS_AUSENCIA = {
+  feriado:{label:"Feriado", cor:"#C98200"},
+  ferias:{label:"Férias coletivas", cor:"#8E44AD"},
+  recesso:{label:"Recesso / Ponte", cor:"#2B8FC9"},
+  parada:{label:"Parada / Manutenção", cor:"#D1493E"},
+  outro:{label:"Outro", cor:"#66707C"},
+};
+function tipoAusenciaInfo(f){ return TIPOS_AUSENCIA[(f && f.tipo) || "feriado"] || TIPOS_AUSENCIA.feriado; }
 function openMetasModal(stage){
   const s = STATE.stageState[stage];
-  const fields = DIAS_UTEIS.map((label,i)=>'<div><label class="field-label">'+label+' (m)</label><input class="field-input" type="number" id="meta-input-'+i+'" value="'+(s.metas[i]||0)+'"/></div>').join("");
+  const temMetaDia = !!(STATE.metasDiaOverride && STATE.metasDiaOverride[stage]);
+  const f = STATE.acompFiltro || {};
+  const hoje = new Date();
+  __metasModal = {stage:stage, ano:Number(f.ano)||hoje.getFullYear(), mes:Number(f.mes)||(hoje.getMonth()+1), edits:{}};
+  const fields = DIAS_UTEIS.map((label,i)=>'<div><label class="field-label">'+label+' (m)</label><input class="field-input" type="number" id="meta-input-'+i+'" value="'+(s.metas[i]||0)+'"'+(temMetaDia?' oninput="renderMetasMesBox()"':'')+'/></div>').join("");
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:480px">'+
+      '<div class="modal-card" style="max-width:'+(temMetaDia?"780px":"480px")+'">'+
         '<div class="modal-header"><h3>Editar Metas de Produção — '+STAGE_DEFS[stage].short+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
-        '<div class="grid-2">'+fields+'</div>'+
+        (temMetaDia ? '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700;margin-bottom:8px">Meta padrão por dia da semana</div>' : '')+
+        '<div class="grid-2" style="'+(temMetaDia?"grid-template-columns:repeat(3,1fr)":"")+'">'+fields+'</div>'+
+        (temMetaDia ? '<div id="metas-mes-box" style="margin-top:18px;padding-top:14px;border-top:1px solid var(--steel-border)"></div>' : '')+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button><button type="button" class="btn btn-primary" onclick="saveMetas(\''+stage+'\')">Salvar</button></div>'+
       '</div>'+
     '</div>';
   document.getElementById("modal-root").innerHTML = html;
+  if(temMetaDia) renderMetasMesBox();
+}
+function metasSemanaDoModal(){
+  const v = [];
+  for(let i=0;i<6;i++){ const el = document.getElementById("meta-input-"+i); v.push(el ? Number(el.value||0) : 0); }
+  return v;
+}
+/* Meta padrão de um dia (sem exceção): domingo e feriado/férias/parada = 0; demais = meta da semana. */
+function metaPadraoDoDia(dataStr, metasSemana){
+  const d = new Date(dataStr+"T00:00:00");
+  const wd = d.getDay();
+  if(wd===0 || feriadoInfo(dataStr)) return 0;
+  return Number(metasSemana[wd-1]||0);
+}
+function valorMetaModalDia(dataStr, metasSemana){
+  const M = __metasModal;
+  if(M.edits[dataStr]!=null) return Number(M.edits[dataStr]);
+  const ov = (STATE.metasDiaOverride[M.stage]||{});
+  if(ov[dataStr]!=null) return Number(ov[dataStr]||0);
+  return metaPadraoDoDia(dataStr, metasSemana);
+}
+function shiftMetasModalMes(n){
+  const M = __metasModal; if(!M) return;
+  let m = M.mes + n, y = M.ano;
+  if(m<1){ m=12; y--; } else if(m>12){ m=1; y++; }
+  M.mes = m; M.ano = y;
+  renderMetasMesBox();
+}
+function setMetaModalDia(dataStr, valor){
+  const M = __metasModal; if(!M) return;
+  M.edits[dataStr] = (valor===""||valor==null) ? 0 : Number(valor);
+  atualizarTotalMetasModal();
+}
+function atualizarTotalMetasModal(){
+  const M = __metasModal; if(!M) return;
+  const metasSemana = metasSemanaDoModal();
+  const dim = new Date(M.ano, M.mes, 0).getDate();
+  let total = 0, diasComMeta = 0;
+  for(let d=1; d<=dim; d++){ const v = valorMetaModalDia(M.ano+"-"+pad2(M.mes)+"-"+pad2(d), metasSemana); total += v; if(v>0) diasComMeta++; }
+  const el = document.getElementById("metas-mes-total");
+  if(el) el.innerHTML = 'Meta do mês: <strong style="color:'+COLORS.brand+'">'+fmtNum(total)+' m</strong> · '+diasComMeta+' dia(s) com meta';
+}
+function preencherMetasMesDiasUteis(modo){
+  const M = __metasModal; if(!M) return;
+  const metasSemana = metasSemanaDoModal();
+  const incluirSab = !!(document.getElementById("metas-mes-sab")||{}).checked;
+  const valorFixoEl = document.getElementById("metas-mes-valor");
+  const valorFixo = valorFixoEl && valorFixoEl.value!=="" ? Number(valorFixoEl.value) : null;
+  if(modo==="fixo" && (valorFixo==null || isNaN(valorFixo) || valorFixo<0)){ showToast("error","Informe o valor da meta por dia útil."); return; }
+  const dim = new Date(M.ano, M.mes, 0).getDate();
+  let n = 0;
+  for(let d=1; d<=dim; d++){
+    const dataStr = M.ano+"-"+pad2(M.mes)+"-"+pad2(d);
+    const wd = new Date(M.ano, M.mes-1, d).getDay();
+    let v;
+    if(wd===0 || feriadoInfo(dataStr)) v = 0;
+    else if(wd===6) v = incluirSab ? (modo==="fixo" ? valorFixo : Number(metasSemana[5]||0)) : 0;
+    else { v = modo==="fixo" ? valorFixo : Number(metasSemana[wd-1]||0); n++; }
+    M.edits[dataStr] = v;
+  }
+  renderMetasMesBox();
+  showToast("info", "Metas lançadas em "+n+" dia(s) útil(eis)"+(incluirSab?" + sábados":"")+". Ajuste os dias que precisar e clique em Salvar.");
+}
+function renderMetasMesBox(){
+  const M = __metasModal; const box = document.getElementById("metas-mes-box");
+  if(!M || !box) return;
+  const metasSemana = metasSemanaDoModal();
+  const ano = M.ano, mes = M.mes;
+  const first = new Date(ano, mes-1, 1), dim = new Date(ano, mes, 0).getDate();
+  const cells = [];
+  for(let i=0;i<first.getDay();i++) cells.push(null);
+  for(let d=1; d<=dim; d++) cells.push(d);
+  while(cells.length%7!==0) cells.push(null);
+  const sabMarcado = (document.getElementById("metas-mes-sab")||{}).checked;
+  const valorAnt = (document.getElementById("metas-mes-valor")||{}).value || "";
+  const hojeStr = todayStr();
+  const cellsHtml = cells.map(function(d){
+    if(d==null) return '<div></div>';
+    const dataStr = ano+"-"+pad2(mes)+"-"+pad2(d);
+    const wd = new Date(ano, mes-1, d).getDay();
+    const fer = feriadoInfo(dataStr);
+    const editado = M.edits[dataStr]!=null || (STATE.metasDiaOverride[M.stage]||{})[dataStr]!=null;
+    let bg = "var(--panel)", badge = "";
+    if(fer){ const t = tipoAusenciaInfo(fer); bg = t.cor+"22"; badge = '<span title="'+escapeAttr(t.label+": "+fer.nome)+'" style="font-size:8px;font-weight:700;color:'+t.cor+';white-space:nowrap;overflow:hidden;text-overflow:ellipsis;display:block">'+escapeHtml(fer.nome)+'</span>'; }
+    else if(wd===0){ bg = "var(--panel-alt)"; badge = '<span style="font-size:8px;font-weight:700;color:'+COLORS.textMuted+'">DOM</span>'; }
+    else if(wd===6){ bg = COLORS.brand+"14"; badge = '<span style="font-size:8px;font-weight:700;color:'+COLORS.brand+'">SÁB</span>'; }
+    return '<div style="border:1px solid var(--steel-border);border-radius:6px;padding:4px;background:'+bg+';min-width:0;'+(dataStr===hojeStr?"box-shadow:inset 0 0 0 2px "+COLORS.brand+";":"")+'">'+
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:3px;min-height:13px"><span style="font-size:10.5px;font-weight:700">'+d+'</span>'+badge+'</div>'+
+      '<input class="field-input" type="number" min="0" step="1" value="'+valorMetaModalDia(dataStr, metasSemana)+'" style="font-size:11.5px;padding:3px 4px;margin-top:2px;font-family:\'IBM Plex Mono\',monospace;'+(editado?"border-color:"+COLORS.brand+";font-weight:700":"")+'" onfocus="this.select()" oninput="setMetaModalDia(\''+dataStr+'\', this.value)"/>'+
+    '</div>';
+  }).join("");
+  const head = DIAS_SEMANA_CURTO.map(function(x){ return '<div style="font-size:9.5px;text-transform:uppercase;color:'+COLORS.textMuted+';font-weight:700;text-align:center">'+x+'</div>'; }).join("");
+  box.innerHTML =
+    '<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">'+
+      '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Metas do mês — dia a dia</div>'+
+      '<div style="display:flex;align-items:center;gap:8px">'+
+        '<button type="button" class="icon-btn" onclick="shiftMetasModalMes(-1)">'+icon("chevronLeft",14)+'</button>'+
+        '<span style="font-family:\'Space Grotesk\',sans-serif;font-size:13.5px;font-weight:700;color:'+COLORS.brand+';min-width:130px;text-align:center">'+MESES[mes-1]+' de '+ano+'</span>'+
+        '<button type="button" class="icon-btn" onclick="shiftMetasModalMes(1)">'+icon("chevronRight",14)+'</button>'+
+      '</div>'+
+    '</div>'+
+    '<div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;margin-bottom:10px;background:var(--panel-alt);padding:9px 10px;border-radius:8px">'+
+      '<button type="button" class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="preencherMetasMesDiasUteis(\'padrao\')" title="Usa os valores de Segunda a Sexta (e Sábado, se marcado) acima">'+icon("sliders",12)+' Preencher dias úteis com a meta padrão</button>'+
+      '<span style="font-size:11.5px;color:'+COLORS.textMuted+';padding-bottom:7px">ou</span>'+
+      '<div style="width:110px"><label class="field-label" style="font-size:10px">Valor por dia útil (m)</label><input class="field-input" type="number" min="0" step="1" id="metas-mes-valor" value="'+escapeAttr(valorAnt)+'" placeholder="Ex.: 800" style="padding:5px 7px"/></div>'+
+      '<button type="button" class="btn btn-primary" style="padding:6px 10px;font-size:12px" onclick="preencherMetasMesDiasUteis(\'fixo\')">Aplicar no mês</button>'+
+      '<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding-bottom:7px;margin-left:auto"><input type="checkbox" id="metas-mes-sab" '+(sabMarcado?"checked":"")+'/> Incluir sábados</label>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px;margin-bottom:4px">'+head+'</div>'+
+    '<div style="display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px">'+cellsHtml+'</div>'+
+    '<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:8px;font-size:11.5px;color:'+COLORS.textMuted+'">'+
+      '<span>Domingos, feriados, férias e paradas ficam 0 ao preencher — cadastre em <a href="#" onclick="closeModal();STATE.metasCalStage=\''+M.stage+'\';setScreen(\'metasCalendario\');return false" style="color:'+COLORS.brand+'">Metas por Dia</a>. Qualquer dia pode ser editado manualmente.</span>'+
+      '<span id="metas-mes-total"></span>'+
+    '</div>';
+  atualizarTotalMetasModal();
 }
 async function saveMetas(stage){
-  const s = STATE.stageState[stage];
   const novasMetas = [];
   for(let i=0;i<6;i++){ novasMetas.push(Number(document.getElementById("meta-input-"+i).value||0)); }
+  const M = __metasModal;
+  if(M && M.stage===stage && STATE.metasDiaOverride && STATE.metasDiaOverride[stage] && Object.keys(M.edits).length){
+    const mapa = Object.assign({}, STATE.metasDiaOverride[stage]);
+    Object.keys(M.edits).forEach(function(dataStr){
+      const v = Number(M.edits[dataStr]||0);
+      if(v===metaPadraoDoDia(dataStr, novasMetas)) delete mapa[dataStr]; else mapa[dataStr] = v;
+    });
+    const ok = await configSet("metas_dia_"+stage, mapa);
+    if(!ok) return;
+    STATE.metasDiaOverride[stage] = mapa;
+  }
   await gravarMetas(stage, novasMetas);
 }
 async function gravarMetas(stage, novasMetas){
@@ -7757,6 +7964,7 @@ async function gravarMetas(stage, novasMetas){
   const ok = await configSet("metas_"+stage, novasMetas);
   if(!ok) return;
   s.metas = novasMetas;
+  __metasModal = null;
   closeModal();
   renderScreen();
   showToast("success","Metas de produção atualizadas.");
@@ -10201,13 +10409,18 @@ async function clearMetaDiaOverride(stage, dataStr){
   showToast("info","Meta do dia "+fmtDateBR(dataStr)+" voltou ao padrão.");
 }
 function openAdicionarFeriadoModal(){
+  const opts = Object.keys(TIPOS_AUSENCIA).map(function(k){ return '<option value="'+k+'">'+TIPOS_AUSENCIA[k].label+'</option>'; }).join("");
   const html =
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
-      '<div class="modal-card" style="max-width:400px">'+
-        '<div class="modal-header"><h3>Novo Feriado</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
-        '<div><label class="field-label">Data</label><input class="field-input" type="date" id="novo-feriado-data" value="'+todayStr()+'"/></div>'+
-        '<div style="margin-top:12px"><label class="field-label">Nome do feriado</label><input class="field-input" id="novo-feriado-nome" placeholder="Ex.: Aniversário da cidade"/></div>'+
-        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Feriados customizados valem para Colagem e Perfilar. A meta padrão do dia fica 0 — se precisar produzir nesse dia, edite a meta normalmente na célula do calendário.</p>'+
+      '<div class="modal-card" style="max-width:440px">'+
+        '<div class="modal-header"><h3>Adicionar feriado / férias / parada</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<div><label class="field-label">Tipo</label><select class="field-select" id="novo-feriado-tipo">'+opts+'</select></div>'+
+        '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:12px">'+
+          '<div style="flex:1;min-width:140px"><label class="field-label">De</label><input class="field-input" type="date" id="novo-feriado-data" value="'+todayStr()+'" onchange="var a=document.getElementById(\'novo-feriado-fim\'); if(a && (!a.value || a.value<this.value)) a.value=this.value;"/></div>'+
+          '<div style="flex:1;min-width:140px"><label class="field-label">Até</label><input class="field-input" type="date" id="novo-feriado-fim" value="'+todayStr()+'"/></div>'+
+        '</div>'+
+        '<div style="margin-top:12px"><label class="field-label">Descrição</label><input class="field-input" id="novo-feriado-nome" placeholder="Ex.: Férias coletivas de fim de ano"/></div>'+
+        '<p style="font-size:11.5px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.5">Vale para Colagem e Perfilar. Todos os dias do período ficam com meta 0 — se precisar produzir em algum deles, edite a meta normalmente na célula do calendário. Para um dia só, deixe "De" e "Até" iguais.</p>'+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
         '<button type="button" class="btn btn-primary" onclick="submitNovoFeriado()">Adicionar</button></div>'+
       '</div>'+
@@ -10215,19 +10428,29 @@ function openAdicionarFeriadoModal(){
   document.getElementById("modal-root").innerHTML = html;
 }
 async function submitNovoFeriado(){
-  const dataInput = document.getElementById("novo-feriado-data");
-  const nomeInput = document.getElementById("novo-feriado-nome");
-  const data = dataInput.value;
-  const nome = (nomeInput.value||"").trim();
-  if(!data || !nome){ showToast("error","Informe a data e o nome do feriado."); return; }
-  const lista = (STATE.feriadosCustom||[]).slice();
-  lista.push({data:data, nome:nome});
+  const data = (document.getElementById("novo-feriado-data")||{}).value || "";
+  const fimEl = document.getElementById("novo-feriado-fim");
+  const fim = (fimEl && fimEl.value) ? fimEl.value : data;
+  const tipo = (document.getElementById("novo-feriado-tipo")||{}).value || "feriado";
+  const nome = ((document.getElementById("novo-feriado-nome")||{}).value||"").trim();
+  if(!data || !nome){ showToast("error","Informe a data e a descrição."); return; }
+  if(fim < data){ showToast("error","A data final precisa ser igual ou depois da inicial."); return; }
+  const grupo = "g"+Date.now();
+  let lista = (STATE.feriadosCustom||[]).slice();
+  let d = new Date(data+"T00:00:00"); const dFim = new Date(fim+"T00:00:00"); let n = 0;
+  while(d<=dFim){
+    const ds = toISO(d);
+    lista = lista.filter(function(f){ return f.data!==ds; });
+    lista.push({data:ds, nome:nome, tipo:tipo, grupo:grupo});
+    d = addDays(d,1); n++;
+    if(n>400){ showToast("error","Período muito longo (máx. 400 dias)."); return; }
+  }
   const ok = await configSet("feriados_custom", lista);
   if(!ok) return;
   STATE.feriadosCustom = lista;
   closeModal();
   renderScreen();
-  showToast("success","Feriado adicionado.");
+  showToast("success", TIPOS_AUSENCIA[tipo].label+" adicionado ("+n+" dia(s)).");
 }
 async function removerFeriado(dataStr, isCustom){
   if(isCustom){
@@ -10243,7 +10466,26 @@ async function removerFeriado(dataStr, isCustom){
     STATE.feriadosRemovidos = lista;
   }
   renderScreen();
-  showToast("info","Feriado removido da lista.");
+  showToast("info","Dia removido da lista.");
+}
+/* Remove um período inteiro (férias/parada lançados de uma vez). */
+async function removerGrupoAusencia(grupo){
+  const lista = (STATE.feriadosCustom||[]).filter(function(f){ return f.grupo!==grupo; });
+  const ok = await configSet("feriados_custom", lista);
+  if(!ok) return;
+  STATE.feriadosCustom = lista;
+  renderScreen();
+  showToast("info","Período removido.");
+}
+/* Volta os feriados nacionais padrão do Brasil que tinham sido removidos no ano. */
+async function restaurarFeriadosNacionais(ano){
+  const doAno = feriadosNacionaisDoAno(ano).map(function(f){ return f.data; });
+  const lista = (STATE.feriadosRemovidos||[]).filter(function(d){ return doAno.indexOf(d)===-1; });
+  const ok = await configSet("feriados_removidos", lista);
+  if(!ok) return;
+  STATE.feriadosRemovidos = lista;
+  renderScreen();
+  showToast("success","Feriados nacionais de "+ano+" restaurados.");
 }
 /* ---- Preenchimento em massa das metas por dia: aplica um valor (ou limpa) em todos os dias
    de um intervalo que caiam nos dias da semana escolhidos, pulando feriados se marcado.
@@ -10272,7 +10514,7 @@ function openAplicarMetaEmMassaModal(stage){
         '<div style="margin-top:14px"><label class="field-label">Aplicar nestes dias da semana</label>'+
           '<div style="display:flex;gap:12px;margin-top:4px">'+dowCheckboxes+'</div>'+
         '</div>'+
-        '<label style="display:flex;align-items:center;gap:7px;margin-top:14px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="massa-pular-feriados" checked/> Pular feriados (mantêm meta 0)</label>'+
+        '<label style="display:flex;align-items:center;gap:7px;margin-top:14px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="massa-pular-feriados" checked/> Pular feriados, férias e paradas (mantêm meta 0)</label>'+
         '<p style="font-size:11px;color:'+COLORS.textMuted+';margin:10px 0 0;line-height:1.4">Depois de aplicar, você ainda pode clicar em qualquer dia individualmente pra fazer um ajuste manual — isso não trava a edição dia a dia.</p>'+
         '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
         '<button type="button" class="btn btn-primary" onclick="confirmAplicarMetaEmMassa(\''+stage+'\')">Aplicar</button></div>'+
@@ -10336,12 +10578,12 @@ function metaDiaCellHtml(stage, dataStr, dayNum, isCurrentMonth){
 
   let bg = "var(--panel)";
   let badge = "";
-  if(feriado){ bg = "#C9820022"; badge = '<span title="'+escapeAttr(feriado.nome)+'" style="font-size:8.5px;font-weight:700;color:#C98200;background:#C9820022;padding:1px 5px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">'+escapeHtml(feriado.nome)+'</span>'; }
+  if(feriado){ const tA = tipoAusenciaInfo(feriado); bg = tA.cor+"22"; badge = '<span title="'+escapeAttr(tA.label+": "+feriado.nome)+'" style="font-size:8.5px;font-weight:700;color:'+tA.cor+';background:'+tA.cor+'22;padding:1px 5px;border-radius:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;display:inline-block">'+escapeHtml(feriado.nome)+'</span>'; }
   else if(isDomingo){ bg = "var(--panel-alt)"; badge = '<span style="font-size:8.5px;font-weight:700;color:'+COLORS.textMuted+'">DOM</span>'; }
   else if(isSabado){ bg = COLORS.brand+"14"; badge = '<span style="font-size:8.5px;font-weight:700;color:'+COLORS.brand+'">SÁB</span>'; }
 
   const removerBtn = feriado
-    ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover feriado" onclick="removerFeriado(\''+dataStr+'\','+(feriado.custom?"true":"false")+')">'+icon("x",9)+'</button>'
+    ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover este dia da lista" onclick="removerFeriado(\''+dataStr+'\','+(feriado.custom?"true":"false")+')">'+icon("x",9)+'</button>'
     : '';
   const resetBtn = temOverride
     ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Voltar ao padrão" onclick="clearMetaDiaOverride(\''+stage+'\',\''+dataStr+'\')">'+icon("undo",9)+'</button>'
@@ -10384,14 +10626,30 @@ function renderMetasCalendarioScreen(){
   const monthLabel = MESES[month]+" de "+year;
 
   const feriadosDoAno = feriadosEfetivosDoAno(year);
-  const feriadosListHtml = feriadosDoAno.length===0
+  /* Períodos lançados de uma vez (férias, paradas) aparecem como um item só: "De – Até". */
+  const itensLista = [];
+  feriadosDoAno.forEach(function(f){
+    const ult = itensLista[itensLista.length-1];
+    if(f.custom && f.grupo && ult && ult.grupo===f.grupo){ ult.fim = f.data; ult.dias++; return; }
+    itensLista.push({data:f.data, fim:f.data, nome:f.nome, custom:!!f.custom, grupo:f.custom?(f.grupo||""):"", tipo:f.tipo||"feriado", dias:1});
+  });
+  const removidosNoAno = (STATE.feriadosRemovidos||[]).filter(function(d){ return feriadosNacionaisDoAno(year).some(function(f){ return f.data===d; }); }).length;
+  const legendaTipos = Object.keys(TIPOS_AUSENCIA).map(function(k){ const t=TIPOS_AUSENCIA[k]; return '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:'+COLORS.textMuted+'"><span style="width:9px;height:9px;border-radius:2px;background:'+t.cor+'"></span>'+t.label+'</span>'; }).join("")+
+    '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:'+COLORS.textMuted+'"><span style="width:9px;height:9px;border-radius:2px;background:'+COLORS.brand+'55"></span>Sábado</span>'+
+    '<span style="display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:'+COLORS.textMuted+'"><span style="width:9px;height:9px;border-radius:2px;background:var(--steel-border)"></span>Domingo</span>';
+  const feriadosListHtml = (itensLista.length===0
     ? '<p style="font-size:12px;color:'+COLORS.textMuted+'">Nenhum feriado cadastrado para '+year+'.</p>'
-    : '<div style="display:flex;flex-wrap:wrap;gap:6px">'+feriadosDoAno.map(function(f){
-        return '<span style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;background:var(--panel-alt);padding:4px 8px;border-radius:14px">'+
-          '<strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtDateBR(f.data)+'</strong> '+escapeHtml(f.nome)+
-          '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover" onclick="removerFeriado(\''+f.data+'\','+(f.custom?"true":"false")+')">'+icon("x",9)+'</button>'+
+    : '<div style="display:flex;flex-wrap:wrap;gap:6px">'+itensLista.map(function(f){
+        const t = tipoAusenciaInfo(f);
+        const periodo = f.dias>1 ? fmtDateBR(f.data)+' a '+fmtDateBR(f.fim) : fmtDateBR(f.data);
+        const btn = (f.grupo && f.dias>1)
+          ? '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover o período inteiro" onclick="removerGrupoAusencia(\''+f.grupo+'\')">'+icon("x",9)+'</button>'
+          : '<button type="button" class="icon-btn" style="width:16px;height:16px;padding:0" title="Remover" onclick="removerFeriado(\''+f.data+'\','+(f.custom?"true":"false")+')">'+icon("x",9)+'</button>';
+        return '<span title="'+escapeAttr(t.label+(f.custom?"":" (nacional)"))+'" style="display:inline-flex;align-items:center;gap:5px;font-size:11.5px;background:'+t.cor+'18;border:1px solid '+t.cor+'55;padding:4px 8px;border-radius:14px">'+
+          '<strong style="font-family:\'IBM Plex Mono\',monospace">'+periodo+'</strong> '+escapeHtml(f.nome)+(f.dias>1?' <span style="color:'+COLORS.textMuted+'">('+f.dias+' dias)</span>':'')+btn+
         '</span>';
-      }).join("")+'</div>';
+      }).join("")+'</div>')+
+    '<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:10px">'+legendaTipos+'</div>';
 
   document.getElementById("content").innerHTML =
     screenHeaderHtml("target","Metas por Dia","Metas de produção dia a dia, com destaque para feriados, sábados e domingos — Colagem e Perfilar",
@@ -10413,8 +10671,11 @@ function renderMetasCalendarioScreen(){
     '</div>'+
     '<div class="pcp-card" style="margin-bottom:16px">'+
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px">'+
-        '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Feriados de '+year+'</div>'+
-        '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openAdicionarFeriadoModal()">'+icon("plus",12)+' Adicionar feriado</button>'+
+        '<div style="font-size:10.5px;text-transform:uppercase;letter-spacing:.05em;color:'+COLORS.textMuted+';font-weight:700">Feriados, férias e paradas de '+year+' <span style="text-transform:none;font-weight:500">(feriados nacionais do Brasil já incluídos)</span></div>'+
+        '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
+          (removidosNoAno ? '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="restaurarFeriadosNacionais('+year+')" title="'+removidosNoAno+' feriado(s) nacional(is) removido(s) neste ano">'+icon("undo",12)+' Restaurar feriados nacionais</button>' : '')+
+          '<button class="btn btn-ghost" style="padding:6px 10px;font-size:12px" onclick="openAdicionarFeriadoModal()">'+icon("plus",12)+' Adicionar feriado / férias / parada</button>'+
+        '</div>'+
       '</div>'+
       feriadosListHtml+
     '</div>'+
@@ -11544,7 +11805,7 @@ function feriadosNacionaisDoAno(ano){
 function feriadosEfetivosDoAno(ano){
   const removidos = STATE.feriadosRemovidos||[];
   const nacionais = feriadosNacionaisDoAno(ano).filter(function(f){ return removidos.indexOf(f.data)===-1; });
-  const customDoAno = (STATE.feriadosCustom||[]).filter(function(f){ return f.data && f.data.slice(0,4)===String(ano); }).map(function(f){ return {data:f.data, nome:f.nome, fixo:false, custom:true}; });
+  const customDoAno = (STATE.feriadosCustom||[]).filter(function(f){ return f.data && f.data.slice(0,4)===String(ano); }).map(function(f){ return {data:f.data, nome:f.nome, fixo:false, custom:true, tipo:f.tipo||"feriado", grupo:f.grupo||""}; });
   return nacionais.concat(customDoAno).sort(function(a,b){ return a.data.localeCompare(b.data); });
 }
 function feriadoInfo(dataStr){
@@ -12061,6 +12322,137 @@ function acumuladoAnualCardHtml(titulo, iconName, cor, stage, ano){
   '</div>';
 }
 
+/* ============================== COLAGEM POR GRUPO DE PRODUTO ==============================
+   Só a produção de Colagem, agrupada por tipo de produto:
+   Colonial = Colonial + Colonial Simples + Colonial Semi · Sanduíche = Sanduíche + Semi-Sanduíche · Bandeja.
+   Qualquer outro tipo que passe pela Colagem cai em "Outros" (só aparece se houver).
+   Mesma Base do cálculo e mesmo filtro de Máquina dos demais gráficos da tela. */
+const GRUPOS_COLAGEM = [
+  {key:"colonial", label:"Colonial", desc:"Colonial + Colonial Simples + Colonial Semi", cor:"#0080C6"},
+  {key:"sanduiche", label:"Sanduíche", desc:"Sanduíche + Semi-Sanduíche", cor:"#C98A00"},
+  {key:"bandeja", label:"Bandeja", desc:"Bandeja", cor:"#2F9E5B"},
+  {key:"outros", label:"Outros", desc:"Demais tipos com Colagem", cor:"#8C97A6"},
+];
+function grupoColagemDoTipo(tipo){
+  const t = String(tipo||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().trim();
+  if(t.indexOf("colonial")===0) return "colonial";
+  if(t.indexOf("sanduiche")!==-1) return "sanduiche";
+  if(t.indexOf("bandeja")!==-1) return "bandeja";
+  return "outros";
+}
+function producaoColagemPorGrupo(ano){
+  const f = STATE.acompFiltro;
+  const res = {};
+  GRUPOS_COLAGEM.forEach(function(g){ res[g.key] = new Array(12).fill(0); });
+  STATE.pedidos.forEach(function(p){
+    if(!p.temColagem) return;
+    if(f.base==="concl" && !stageConcluido(p, "colagem")) return;
+    const dataRef = dataBaseProducao(p, "colagem", f.base);
+    if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    const m = Number(dataRef.slice(5,7));
+    if(!(m>=1 && m<=12)) return;
+    res[grupoColagemDoTipo(p.tipo)][m-1] += Number(p.metragem||0);
+  });
+  return res;
+}
+function updateAcompMesPizza(val){ STATE.acompFiltro.mesPizza = val; renderScreen(); }
+function colagemGruposCardHtml(ano){
+  const dados = producaoColagemPorGrupo(ano);
+  const grupos = GRUPOS_COLAGEM.filter(function(g){ return g.key!=="outros" || dados.outros.some(function(v){ return v>0; }); });
+  const maxValor = Math.max.apply(null, [1].concat.apply([], grupos.map(function(g){ return dados[g.key]; })));
+  const escala = maxValor*1.18;
+  const hoje = new Date();
+  const mesHoje = (Number(ano)===hoje.getFullYear()) ? (hoje.getMonth()+1) : 0;
+  const barras = MESES.map(function(nome,i){
+    const futuro = mesHoje>0 && (i+1)>mesHoje;
+    const totalMes = grupos.reduce(function(s2,g){ return s2+dados[g.key][i]; },0);
+    const tip = nome+"/"+ano+" — "+grupos.map(function(g){ return g.label+": "+fmtNum(dados[g.key][i])+" m"; }).join(" · ")+" · Total: "+fmtNum(totalMes)+" m";
+    return '<div class="chart-col" title="'+escapeAttr(tip)+'" style="flex-direction:row;align-items:flex-end;justify-content:center;gap:2px;opacity:'+(futuro?0.4:1)+'">'+
+      grupos.map(function(g){
+        const v = dados[g.key][i];
+        const h = escala>0 ? Math.min(100,(v/escala)*100) : 0;
+        return '<div style="flex:1 1 0;max-width:16px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center">'+
+          (v>0 ? '<div style="font-size:'+rf(9)+';font-weight:700;color:'+g.cor+';writing-mode:vertical-rl;transform:rotate(180deg);margin-bottom:2px;white-space:nowrap">'+fmtNum(Math.round(v))+'</div>' : '')+
+          '<div class="chart-bar" style="width:100%;height:'+h+'%;background:'+(v===0?"var(--steel-border)":g.cor)+'"></div></div>';
+      }).join("")+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(nome,i){ return '<div class="chart-day" style="flex:1;text-align:center;'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+nome.slice(0,3)+'</div>'; }).join("");
+  const legenda = grupos.map(function(g){
+    const tot = dados[g.key].reduce(function(a,b){return a+b;},0);
+    return '<span title="'+escapeAttr(g.desc)+'" style="display:inline-flex;align-items:center;gap:6px;font-size:12px"><span style="width:11px;height:11px;border-radius:3px;background:'+g.cor+'"></span><strong>'+g.label+'</strong> <span style="color:'+COLORS.textMuted+'">'+fmtNum(tot)+' m no ano</span></span>';
+  }).join("");
+
+  /* Pizza do mês escolhido */
+  const mesPizza = STATE.acompFiltro.mesPizza || STATE.acompFiltro.mes || pad2(hoje.getMonth()+1);
+  const iM = Number(mesPizza)-1;
+  const fatias = grupos.map(function(g){ return {g:g, v:dados[g.key][iM]}; });
+  const totalPizza = fatias.reduce(function(a,b){ return a+b.v; },0);
+  let pizzaSvg;
+  if(totalPizza<=0){
+    pizzaSvg = '<div style="height:200px;display:flex;align-items:center;justify-content:center;font-size:12px;color:'+COLORS.textMuted+';text-align:center">Sem produção de Colagem em '+MESES[iM]+'/'+ano+'.</div>';
+  } else {
+    const R = 90, C = 100; let ang = -Math.PI/2; let paths = "";
+    const comValor = fatias.filter(function(x){ return x.v>0; });
+    comValor.forEach(function(x){
+      const frac = x.v/totalPizza;
+      const pct = Math.round(frac*1000)/10;
+      const tip = x.g.label+": "+fmtNum(x.v)+" m ("+String(pct).replace(".",",")+"%)";
+      if(comValor.length===1){
+        paths += '<circle cx="'+C+'" cy="'+C+'" r="'+R+'" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip)+'</title></circle>';
+      } else {
+        const a2 = ang + frac*2*Math.PI;
+        const x1 = C+R*Math.cos(ang), y1 = C+R*Math.sin(ang), x2 = C+R*Math.cos(a2), y2 = C+R*Math.sin(a2);
+        paths += '<path d="M'+C+','+C+' L'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+R+','+R+' 0 '+(frac>0.5?1:0)+' 1 '+x2.toFixed(2)+','+y2.toFixed(2)+' Z" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip)+'</title></path>';
+        ang = a2;
+      }
+    });
+    /* rótulos de % dentro das fatias (só fatias com 5% ou mais, para não encavalar) */
+    let angL = -Math.PI/2, labels = "";
+    comValor.forEach(function(x){
+      const frac = x.v/totalPizza; const meio = angL + frac*Math.PI; angL += frac*2*Math.PI;
+      if(frac<0.05) return;
+      const lx = C+R*0.62*Math.cos(meio), ly = C+R*0.62*Math.sin(meio);
+      labels += '<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" dominant-baseline="middle" style="font-size:13px;font-weight:700;fill:#fff;font-family:\'Space Grotesk\',sans-serif;pointer-events:none">'+String(Math.round(frac*1000)/10).replace(".",",")+'%</text>';
+    });
+    pizzaSvg = '<svg viewBox="0 0 200 200" style="width:200px;height:200px;display:block;margin:0 auto">'+paths+labels+'</svg>';
+  }
+  const pizzaLegenda = fatias.map(function(x){
+    const pct = totalPizza>0 ? Math.round((x.v/totalPizza)*1000)/10 : 0;
+    return '<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--steel-border)">'+
+      '<span style="width:11px;height:11px;border-radius:3px;background:'+x.g.cor+';flex:none"></span>'+
+      '<span style="flex:1" title="'+escapeAttr(x.g.desc)+'"><strong>'+x.g.label+'</strong><br><span style="font-size:10.5px;color:'+COLORS.textMuted+'">'+escapeHtml(x.g.desc)+'</span></span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;text-align:right">'+fmtNum(x.v)+' m<br><strong style="color:'+x.g.cor+'">'+String(pct).replace(".",",")+'%</strong></span>'+
+    '</div>';
+  }).join("")+
+    '<div style="display:flex;justify-content:space-between;font-size:12.5px;padding-top:6px"><strong>Total</strong><strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(totalPizza)+' m</strong></div>';
+
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon("layers",17,COLORS.brand)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Colagem por grupo de produto — mês a mês (m)</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+ano+'</span></div>'+
+    '</div>'+
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">'+legenda+'</div>'+
+    '<div class="chart-wrap" style="height:230px">'+chartGridlinesHtml(escala)+barras+'</div>'+
+    '<div class="chart-days" style="display:flex">'+rotulos+'</div>'+
+  '</div>'+
+  '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon("layers",17,COLORS.brand)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Colagem — % de cada grupo no mês</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+MESES[iM]+'/'+ano+'</span></div>'+
+      '<div class="no-print" style="min-width:150px"><label class="field-label">Mês da pizza</label><select class="field-select" onchange="updateAcompMesPizza(this.value)">'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(mesPizza===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:24px;align-items:center">'+
+      '<div>'+pizzaSvg+'</div>'+
+      '<div>'+pizzaLegenda+'</div>'+
+    '</div>'+
+  '</div>';
+}
+
 function renderAcompanhamentoScreen(){
   const f = STATE.acompFiltro;
   const anosPedidos = STATE.pedidos.map(function(p){ return p.dataProg ? p.dataProg.slice(0,4) : null; }).filter(Boolean);
@@ -12108,6 +12500,7 @@ function renderAcompanhamentoScreen(){
           '</select></div>'+
       '</div>'+
       acumuladoAnualCardHtml("Colagem — produção mês a mês (m)","layers",COLORS.brand,"colagem",anoAcum)+
+      colagemGruposCardHtml(anoAcum)+
       acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum)+
       acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum)+
     '</div>';

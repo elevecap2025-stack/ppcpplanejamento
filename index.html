@@ -166,6 +166,17 @@ button,input,select{font-family:'Inter',sans-serif;}
 .inativo-badge{display:inline-flex;align-items:center;padding:1px 7px;border-radius:20px;font-size:9.5px;font-weight:700;letter-spacing:.04em;background:rgba(209,73,62,.14);color:#D1493E;border:1px solid rgba(209,73,62,.55);white-space:nowrap;margin-left:6px;vertical-align:middle;cursor:help;}
 /* Linha de matéria-prima inativa: fundo avermelhado + faixa à esquerda, pra destacar do resto. */
 .row-inativo td{background:rgba(209,73,62,.09) !important;color:#9A5A55;}
+.cg-leg-click:hover,.cg-row-click:hover{background:var(--row-hover);}
+.cg-bar-click:hover .chart-bar{filter:brightness(1.12);box-shadow:0 0 0 2px var(--text) inset;}
+.cg-slice{cursor:pointer;transition:opacity .15s;}
+.cg-slice:hover{opacity:.82;}
+@media print{
+  body.print-acomp-sel .acomp-print-page .acomp-rel:not(.rel-incluir),
+  body.print-acomp-sel .acomp-print-page .acomp-anual-sep:not(.rel-incluir){display:none !important;}
+  body.print-acomp-umpagina .acomp-print-page .acomp-rel.rel-incluir{page-break-after:always;break-after:page;}
+  body.print-acomp-umpagina .acomp-print-page .acomp-rel.rel-incluir .chart-wrap{height:300px !important;}
+  .acomp-rel .icon-btn.no-print{display:none !important;}
+}
 .row-inativo td:first-child{box-shadow:inset 4px 0 0 #D1493E;}
 .inativo-info{display:block;font-size:10.5px;color:#D1493E;margin-top:3px;line-height:1.35;white-space:normal;}
 .icon-btn.ativar-btn{color:#2F9E5B;border-color:#2F9E5B88;}
@@ -2235,7 +2246,7 @@ function applyTheme(theme){
 function toggleTheme(){ applyTheme(STATE.theme==="dark" ? "light" : "dark"); }
 
 /* ============================== MODAL / TOAST ============================== */
-function closeModal(){ document.getElementById("modal-root").innerHTML=""; }
+function closeModal(){ document.getElementById("modal-root").innerHTML=""; if(typeof voltarColagemDrillSePreciso==="function") voltarColagemDrillSePreciso(); }
 function showToast(type, text){
   const root = document.getElementById("toast-root");
   const color = type==="success" ? COLORS.green : (type==="error" ? COLORS.red : COLORS.brand);
@@ -5152,11 +5163,12 @@ async function submitQuickAdd(type){
       const ok = await configSet("tipo_options", STATE.tipoOptions);
       if(!ok){ STATE.tipoOptions.pop(); return; }
     }
-    const tipoInput = document.getElementById("f-pedido-tipo");
-    if(tipoInput) tipoInput.value = val;
-    const dl = document.getElementById("tipo-list");
-    if(dl && !Array.from(dl.options).some(o=>o.value===val)){
-      const opt2 = document.createElement("option"); opt2.value = val; dl.appendChild(opt2);
+    const tipoSel = document.getElementById("f-pedido-tipo");
+    if(tipoSel){
+      if(!Array.from(tipoSel.options).some(o=>o.value===val)){
+        const opt2 = document.createElement("option"); opt2.value = val; opt2.textContent = val; tipoSel.appendChild(opt2);
+      }
+      tipoSel.value = val;
     }
     cancelQuickAdd(type);
     return;
@@ -5233,8 +5245,11 @@ function openPedidoModal(mode, id){
       '<form id="pedido-form" onsubmit="return submitPedidoForm(event,\''+mode+'\',\''+(id||"")+'\')">'+
         '<div class="grid-3">'+
 
-          '<div><label class="field-label">Tipo</label><input class="field-input" id="f-pedido-tipo" list="tipo-list" name="tipo" value="'+escapeAttr(f.tipo)+'" placeholder="Ex: Sanduíche"/>'+
-            '<datalist id="tipo-list">'+STATE.tipoOptions.map(t=>'<option value="'+escapeAttr(t)+'">').join("")+'</datalist>'+
+          '<div><label class="field-label">Tipo *</label><select class="field-select" id="f-pedido-tipo" name="tipo" required>'+
+            '<option value="">Selecione o tipo…</option>'+
+            /* Só dá para escolher da lista. Um tipo antigo que não está mais na lista continua aparecendo, para não se perder na edição. */
+            STATE.tipoOptions.concat(f.tipo && STATE.tipoOptions.indexOf(f.tipo)===-1 ? [f.tipo] : []).map(t=>'<option value="'+escapeAttr(t)+'" '+(f.tipo===t?"selected":"")+'>'+escapeHtml(t)+'</option>').join("")+
+            '</select>'+
             '<div id="qa-tipoPedido">'+quickAddButtonHtml("tipoPedido")+'</div></div>'+
           '<div><label class="field-label">OP (nº do pedido)</label><input class="field-input" name="op" value="'+escapeAttr(f.op)+'"/></div>'+
           '<div><label class="field-label">Data de Entrega</label><input class="field-input" type="date" name="dataEntrega" value="'+(f.dataEntrega||"")+'"/></div>'+
@@ -5329,6 +5344,7 @@ async function submitPedidoForm(event, mode, id){
   const data = Object.fromEntries(fd.entries());
   data.temPintura = !!(event.target.elements["temPintura"] && event.target.elements["temPintura"].checked);
   data.temColagem = !!(event.target.elements["temColagem"] && event.target.elements["temColagem"].checked);
+  if(!(data.tipo||"").trim()){ showToast("error","Selecione o Tipo do pedido."); return false; }
   const retiradaMarcada = !!(event.target.elements["retirada"] && event.target.elements["retirada"].checked);
   const dataVendaValor = (data.dataVenda||"").trim();
   const equipamentoInfValor = (data.equipamentoInf||"").trim();
@@ -12324,20 +12340,20 @@ function acumuladoAnualCardHtml(titulo, iconName, cor, stage, ano){
 
 /* ============================== COLAGEM POR GRUPO DE PRODUTO ==============================
    Só a produção de Colagem, agrupada por tipo de produto:
-   Colonial = Colonial + Colonial Simples + Colonial Semi · Sanduíche = Sanduíche + Semi-Sanduíche · Bandeja.
+   Colonial = Colonial + Colonial Simples + Colonial Semi · Sanduíche = Sanduíche + Semi-Sanduíche · Bandeja + Painel Térmico.
    Qualquer outro tipo que passe pela Colagem cai em "Outros" (só aparece se houver).
    Mesma Base do cálculo e mesmo filtro de Máquina dos demais gráficos da tela. */
 const GRUPOS_COLAGEM = [
   {key:"colonial", label:"Colonial", desc:"Colonial + Colonial Simples + Colonial Semi", cor:"#0080C6"},
   {key:"sanduiche", label:"Sanduíche", desc:"Sanduíche + Semi-Sanduíche", cor:"#C98A00"},
-  {key:"bandeja", label:"Bandeja", desc:"Bandeja", cor:"#2F9E5B"},
+  {key:"bandeja", label:"Bandeja + Painel Térmico", desc:"Bandeja + Painel Térmico", cor:"#2F9E5B"},
   {key:"outros", label:"Outros", desc:"Demais tipos com Colagem", cor:"#8C97A6"},
 ];
 function grupoColagemDoTipo(tipo){
   const t = String(tipo||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().trim();
   if(t.indexOf("colonial")===0) return "colonial";
   if(t.indexOf("sanduiche")!==-1) return "sanduiche";
-  if(t.indexOf("bandeja")!==-1) return "bandeja";
+  if(t.indexOf("bandeja")!==-1 || t.indexOf("painel termico")!==-1) return "bandeja";
   return "outros";
 }
 function producaoColagemPorGrupo(ano){
@@ -12368,11 +12384,11 @@ function colagemGruposCardHtml(ano){
     const futuro = mesHoje>0 && (i+1)>mesHoje;
     const totalMes = grupos.reduce(function(s2,g){ return s2+dados[g.key][i]; },0);
     const tip = nome+"/"+ano+" — "+grupos.map(function(g){ return g.label+": "+fmtNum(dados[g.key][i])+" m"; }).join(" · ")+" · Total: "+fmtNum(totalMes)+" m";
-    return '<div class="chart-col" title="'+escapeAttr(tip)+'" style="flex-direction:row;align-items:flex-end;justify-content:center;gap:2px;opacity:'+(futuro?0.4:1)+'">'+
+    return '<div class="chart-col chart-col-click" title="'+escapeAttr(tip+" — clique para ver os lançamentos")+'" onclick="openColagemDrill(\''+ano+'\',\''+pad2(i+1)+'\',\'\')" style="flex-direction:row;align-items:flex-end;justify-content:center;gap:2px;opacity:'+(futuro?0.4:1)+'">'+
       grupos.map(function(g){
         const v = dados[g.key][i];
         const h = escala>0 ? Math.min(100,(v/escala)*100) : 0;
-        return '<div style="flex:1 1 0;max-width:16px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center">'+
+        return '<div class="cg-bar-click" title="'+escapeAttr(g.label+" · "+nome+"/"+ano+": "+fmtNum(v)+" m — clique para ver os lançamentos")+'" onclick="event.stopPropagation();openColagemDrill(\''+ano+'\',\''+pad2(i+1)+'\',\''+g.key+'\')" style="flex:1 1 0;max-width:16px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;cursor:pointer">'+
           (v>0 ? '<div style="font-size:'+rf(9)+';font-weight:700;color:'+g.cor+';writing-mode:vertical-rl;transform:rotate(180deg);margin-bottom:2px;white-space:nowrap">'+fmtNum(Math.round(v))+'</div>' : '')+
           '<div class="chart-bar" style="width:100%;height:'+h+'%;background:'+(v===0?"var(--steel-border)":g.cor)+'"></div></div>';
       }).join("")+
@@ -12381,7 +12397,7 @@ function colagemGruposCardHtml(ano){
   const rotulos = MESES.map(function(nome,i){ return '<div class="chart-day" style="flex:1;text-align:center;'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+nome.slice(0,3)+'</div>'; }).join("");
   const legenda = grupos.map(function(g){
     const tot = dados[g.key].reduce(function(a,b){return a+b;},0);
-    return '<span title="'+escapeAttr(g.desc)+'" style="display:inline-flex;align-items:center;gap:6px;font-size:12px"><span style="width:11px;height:11px;border-radius:3px;background:'+g.cor+'"></span><strong>'+g.label+'</strong> <span style="color:'+COLORS.textMuted+'">'+fmtNum(tot)+' m no ano</span></span>';
+    return '<span class="cg-leg-click" title="'+escapeAttr(g.desc+" — clique para ver os lançamentos do ano")+'" onclick="openColagemDrill(\''+ano+'\',\'\',\''+g.key+'\')" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:3px 8px;border-radius:14px"><span style="width:11px;height:11px;border-radius:3px;background:'+g.cor+'"></span><strong>'+g.label+'</strong> <span style="color:'+COLORS.textMuted+'">'+fmtNum(tot)+' m no ano</span></span>';
   }).join("");
 
   /* Pizza do mês escolhido */
@@ -12400,11 +12416,11 @@ function colagemGruposCardHtml(ano){
       const pct = Math.round(frac*1000)/10;
       const tip = x.g.label+": "+fmtNum(x.v)+" m ("+String(pct).replace(".",",")+"%)";
       if(comValor.length===1){
-        paths += '<circle cx="'+C+'" cy="'+C+'" r="'+R+'" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip)+'</title></circle>';
+        paths += '<circle class="cg-slice" onclick="openColagemDrill(\''+ano+'\',\''+mesPizza+'\',\''+x.g.key+'\')" cx="'+C+'" cy="'+C+'" r="'+R+'" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip+" — clique para ver os lançamentos")+'</title></circle>';
       } else {
         const a2 = ang + frac*2*Math.PI;
         const x1 = C+R*Math.cos(ang), y1 = C+R*Math.sin(ang), x2 = C+R*Math.cos(a2), y2 = C+R*Math.sin(a2);
-        paths += '<path d="M'+C+','+C+' L'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+R+','+R+' 0 '+(frac>0.5?1:0)+' 1 '+x2.toFixed(2)+','+y2.toFixed(2)+' Z" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip)+'</title></path>';
+        paths += '<path d="M'+C+','+C+' L'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+R+','+R+' 0 '+(frac>0.5?1:0)+' 1 '+x2.toFixed(2)+','+y2.toFixed(2)+' Z" class="cg-slice" onclick="openColagemDrill(\''+ano+'\',\''+mesPizza+'\',\''+x.g.key+'\')" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip+" — clique para ver os lançamentos")+'</title></path>';
         ang = a2;
       }
     });
@@ -12420,15 +12436,15 @@ function colagemGruposCardHtml(ano){
   }
   const pizzaLegenda = fatias.map(function(x){
     const pct = totalPizza>0 ? Math.round((x.v/totalPizza)*1000)/10 : 0;
-    return '<div style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 0;border-bottom:1px solid var(--steel-border)">'+
+    return '<div class="cg-row-click" onclick="openColagemDrill(\''+ano+'\',\''+mesPizza+'\',\''+x.g.key+'\')" title="Clique para ver os lançamentos" style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 6px;border-bottom:1px solid var(--steel-border);cursor:pointer;border-radius:5px">'+
       '<span style="width:11px;height:11px;border-radius:3px;background:'+x.g.cor+';flex:none"></span>'+
       '<span style="flex:1" title="'+escapeAttr(x.g.desc)+'"><strong>'+x.g.label+'</strong><br><span style="font-size:10.5px;color:'+COLORS.textMuted+'">'+escapeHtml(x.g.desc)+'</span></span>'+
       '<span style="font-family:\'IBM Plex Mono\',monospace;text-align:right">'+fmtNum(x.v)+' m<br><strong style="color:'+x.g.cor+'">'+String(pct).replace(".",",")+'%</strong></span>'+
     '</div>';
   }).join("")+
-    '<div style="display:flex;justify-content:space-between;font-size:12.5px;padding-top:6px"><strong>Total</strong><strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(totalPizza)+' m</strong></div>';
+    '<div class="cg-row-click" onclick="openColagemDrill(\''+ano+'\',\''+mesPizza+'\',\'\')" title="Clique para ver todos os lançamentos do mês" style="display:flex;justify-content:space-between;font-size:12.5px;padding:6px 6px 0;cursor:pointer;border-radius:5px"><strong>Total</strong><strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(totalPizza)+' m</strong></div>';
 
-  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+  const cardBarras = '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
       '<div style="display:flex;align-items:center;gap:9px">'+icon("layers",17,COLORS.brand)+
         '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Colagem por grupo de produto — mês a mês (m)</h3>'+
@@ -12437,8 +12453,9 @@ function colagemGruposCardHtml(ano){
     '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">'+legenda+'</div>'+
     '<div class="chart-wrap" style="height:230px">'+chartGridlinesHtml(escala)+barras+'</div>'+
     '<div class="chart-days" style="display:flex">'+rotulos+'</div>'+
-  '</div>'+
-  '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<p class="no-print" style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Clique numa barra, num mês ou num grupo da legenda para ver, editar ou excluir os lançamentos.</p>'+
+  '</div>';
+  const cardPizza = '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
       '<div style="display:flex;align-items:center;gap:9px">'+icon("layers",17,COLORS.brand)+
         '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Colagem — % de cada grupo no mês</h3>'+
@@ -12451,6 +12468,197 @@ function colagemGruposCardHtml(ano){
       '<div>'+pizzaLegenda+'</div>'+
     '</div>'+
   '</div>';
+  return {barras:cardBarras, pizza:cardPizza};
+}
+
+/* ============================== DETALHE DOS LANÇAMENTOS DA COLAGEM ==============================
+   Abre ao clicar nos gráficos de Colagem por grupo (barra, mês, legenda, fatia ou linha da tabela).
+   Mostra os pedidos que compõem aquele número, com o mesmo critério do gráfico, e permite editar
+   (abre o formulário normal do pedido) ou excluir. Ao fechar o formulário, volta para esta lista. */
+let __colagemDrill = null, __colagemDrillVoltar = null;
+function pedidosColagemDoGrafico(ano, mes, grupo){
+  const f = STATE.acompFiltro;
+  const out = [];
+  STATE.pedidos.forEach(function(p){
+    if(!p.temColagem) return;
+    if(f.base==="concl" && !stageConcluido(p, "colagem")) return;
+    const dataRef = dataBaseProducao(p, "colagem", f.base);
+    if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
+    if(mes && dataRef.slice(5,7)!==mes) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    const g = grupoColagemDoTipo(p.tipo);
+    if(grupo && g!==grupo) return;
+    out.push({p:p, dataRef:dataRef, grupo:g});
+  });
+  return out;
+}
+function openColagemDrill(ano, mes, grupo){
+  __colagemDrillVoltar = null;
+  __colagemDrill = Object.assign({busca:"", ordem:"data", dir:1}, (__colagemDrill && __colagemDrill.ano===ano) ? {busca:__colagemDrill.busca, ordem:__colagemDrill.ordem, dir:__colagemDrill.dir} : {}, {ano:String(ano), mes:mes||"", grupo:grupo||""});
+  renderColagemDrill();
+}
+function setColagemDrill(campo, valor){
+  if(!__colagemDrill) return;
+  if(campo==="ordem"){
+    if(__colagemDrill.ordem===valor) __colagemDrill.dir *= -1; else { __colagemDrill.ordem = valor; __colagemDrill.dir = 1; }
+  } else __colagemDrill[campo] = valor;
+  renderColagemDrill(campo==="busca");
+}
+function editarPedidoDoDrill(id){ __colagemDrillVoltar = Object.assign({}, __colagemDrill); openPedidoModal("edit", id); }
+function excluirPedidoDoDrill(id){ __colagemDrillVoltar = Object.assign({}, __colagemDrill); confirmDeletePedido(id); }
+/* Reabre a lista depois que o formulário do pedido (ou a confirmação de exclusão) fecha. */
+function voltarColagemDrillSePreciso(){
+  if(!__colagemDrillVoltar || STATE.screen!=="acompanhamento") { __colagemDrillVoltar = null; return; }
+  const d = __colagemDrillVoltar;
+  setTimeout(function(){
+    if(document.getElementById("modal-root").innerHTML) return;
+    __colagemDrill = d; __colagemDrillVoltar = null;
+    renderColagemDrill();
+  }, 60);
+}
+function renderColagemDrill(manterFoco){
+  const D = __colagemDrill; if(!D) return;
+  const grupoInfo = GRUPOS_COLAGEM.find(function(g){ return g.key===D.grupo; });
+  const cor = grupoInfo ? grupoInfo.cor : COLORS.brand;
+  let itens = pedidosColagemDoGrafico(D.ano, D.mes, D.grupo);
+  const totalPeriodoTodos = pedidosColagemDoGrafico(D.ano, D.mes, "").reduce(function(s2,x){ return s2+Number(x.p.metragem||0); },0);
+  const busca = (D.busca||"").trim().toLowerCase();
+  if(busca) itens = itens.filter(function(x){ const p=x.p; return [p.cliente,p.op,p.tipo,nomeEquip(p.equipamentoId)].join(" ").toLowerCase().indexOf(busca)!==-1; });
+  const chave = {
+    data:function(x){ return x.dataRef; }, op:function(x){ return String(x.p.op||""); }, cliente:function(x){ return (x.p.cliente||"").toLowerCase(); },
+    tipo:function(x){ return (x.p.tipo||"").toLowerCase(); }, maquina:function(x){ return nomeEquip(x.p.equipamentoId).toLowerCase(); },
+    metragem:function(x){ return Number(x.p.metragem||0); }, status:function(x){ return stageConcluido(x.p,"colagem")?1:0; },
+  }[D.ordem] || function(x){ return x.dataRef; };
+  itens.sort(function(a,b){ const va=chave(a), vb=chave(b); return (va<vb?-1:va>vb?1:0)*D.dir; });
+  const totalM = itens.reduce(function(s2,x){ return s2+Number(x.p.metragem||0); },0);
+  const concl = itens.filter(function(x){ return stageConcluido(x.p,"colagem"); }).length;
+  const pct = totalPeriodoTodos>0 ? Math.round((totalM/totalPeriodoTodos)*1000)/10 : 0;
+  const periodoLabel = D.mes ? MESES[Number(D.mes)-1]+"/"+D.ano : "Ano de "+D.ano;
+  const chip = function(key, label, c){
+    const on = D.grupo===key;
+    return '<button type="button" class="btn '+(on?"btn-primary":"btn-ghost")+'" style="padding:5px 11px;font-size:12px;'+(on&&c?"background:"+c+";border-color:"+c:"")+'" onclick="setColagemDrill(\'grupo\',\''+key+'\')">'+(c?'<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:'+(on?"#fff":c)+';margin-right:5px"></span>':'')+label+'</button>';
+  };
+  const th = function(key, label, align){
+    const seta = D.ordem===key ? (D.dir>0?" ▲":" ▼") : "";
+    return '<th style="cursor:pointer;white-space:nowrap;'+(align?"text-align:"+align:"")+'" onclick="setColagemDrill(\'ordem\',\''+key+'\')">'+label+'<span style="font-size:9px">'+seta+'</span></th>';
+  };
+  const linhas = itens.map(function(x){
+    const p = x.p; const g = GRUPOS_COLAGEM.find(function(gg){ return gg.key===x.grupo; });
+    const ok = stageConcluido(p,"colagem");
+    return '<tr>'+
+      '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtDateBR(x.dataRef)+'</td>'+
+      '<td style="font-weight:700">'+escapeHtml(p.op||"—")+'</td>'+
+      '<td>'+escapeHtml(p.cliente||"—")+'</td>'+
+      '<td><span style="display:inline-flex;align-items:center;gap:5px"><span style="width:8px;height:8px;border-radius:2px;background:'+g.cor+'"></span>'+escapeHtml(p.tipo||"—")+'</span></td>'+
+      '<td>'+escapeHtml(nomeEquip(p.equipamentoId)||"—")+'</td>'+
+      '<td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;font-weight:700">'+fmtNum(p.metragem)+'</td>'+
+      '<td><span style="font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:10px;white-space:nowrap;background:'+(ok?COLORS.green:"#C98200")+'22;color:'+(ok?COLORS.green:"#C98200")+'">'+(ok?"Concluída":"Em aberto")+'</span></td>'+
+      '<td class="no-print"><div style="display:flex;gap:5px">'+
+        '<button class="icon-btn" title="Editar pedido" onclick="editarPedidoDoDrill(\''+p.id+'\')">'+icon("edit",13)+'</button>'+
+        '<button class="icon-btn" title="Excluir pedido" style="color:'+COLORS.red+'" onclick="excluirPedidoDoDrill(\''+p.id+'\')">'+icon("trash",13)+'</button>'+
+      '</div></td>'+
+    '</tr>';
+  }).join("");
+  const kpi = function(label, valor, c){ return '<div style="flex:1;min-width:120px;background:var(--panel-alt);border-radius:8px;padding:9px 12px"><div class="stat-label" style="font-size:10px">'+label+'</div><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700;'+(c?"color:"+c:"")+'">'+valor+'</div></div>'; };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:1080px;padding:0;overflow:hidden;display:flex;flex-direction:column">'+
+        '<div style="padding:18px 22px 14px;border-bottom:1px solid var(--steel-border);border-top:4px solid '+cor+'">'+
+          '<div class="modal-header" style="margin-bottom:4px"><h3 style="display:flex;align-items:center;gap:8px">'+icon("layers",17,cor)+'Lançamentos da Colagem — '+(grupoInfo?grupoInfo.label:"Todos os grupos")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+          '<div style="font-size:12px;color:'+COLORS.textMuted+';margin-bottom:12px">'+periodoLabel+(grupoInfo?' · '+escapeHtml(grupoInfo.desc):'')+' · Base: '+(STATE.acompFiltro.base==="concl"?"somente etapas concluídas":"programado")+(STATE.acompFiltro.maquinaId?' · Máquina: '+escapeHtml(nomeEquip(STATE.acompFiltro.maquinaId)):'')+'</div>'+
+          '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">'+
+            kpi("Pedidos", itens.length)+kpi("Metragem", fmtNum(totalM)+" m", cor)+kpi("Média por pedido", fmtNum(itens.length?totalM/itens.length:0)+" m")+
+            kpi("% do período", String(pct).replace(".",",")+"%")+kpi("Concluídos", concl+" / "+itens.length, COLORS.green)+
+          '</div>'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">'+
+            '<div style="display:flex;gap:5px;flex-wrap:wrap">'+chip("","Todos",null)+GRUPOS_COLAGEM.map(function(g){ return chip(g.key,g.label,g.cor); }).join("")+'</div>'+
+            '<div style="margin-left:auto;width:140px"><label class="field-label" style="font-size:10px">Mês</label><select class="field-select" onchange="setColagemDrill(\'mes\', this.value)"><option value="">Ano inteiro</option>'+
+              MESES.map(function(n,i){ return '<option value="'+pad2(i+1)+'" '+(D.mes===pad2(i+1)?"selected":"")+'>'+n+'</option>'; }).join("")+'</select></div>'+
+            '<div style="width:220px"><label class="field-label" style="font-size:10px">Buscar</label><input class="field-input" id="cg-drill-busca" placeholder="Cliente, OP, tipo, máquina…" value="'+escapeAttr(D.busca||"")+'" oninput="setColagemDrill(\'busca\', this.value)"/></div>'+
+          '</div>'+
+        '</div>'+
+        '<div style="overflow:auto;max-height:52vh;padding:0 22px">'+
+          (itens.length===0 ? '<div style="padding:30px 0">'+emptyStateHtml("Nenhum lançamento encontrado para este filtro.")+'</div>' :
+          '<table class="pcp-table" style="width:100%"><thead><tr>'+th("data","Data")+th("op","OP")+th("cliente","Cliente")+th("tipo","Tipo")+th("maquina","Máquina")+th("metragem","Metragem (m)","right")+th("status","Colagem")+'<th class="no-print">Ações</th></tr></thead>'+
+          '<tbody>'+linhas+'</tbody>'+
+          '<tfoot><tr><td colspan="5" style="font-weight:700">Total ('+itens.length+' pedido'+(itens.length===1?'':'s')+')</td><td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+cor+'">'+fmtNum(totalM)+'</td><td colspan="2"></td></tr></tfoot></table>')+
+        '</div>'+
+        '<div style="padding:12px 22px;border-top:1px solid var(--steel-border);display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">'+
+          '<span style="font-size:11.5px;color:'+COLORS.textMuted+'">Editar abre o formulário do pedido; ao salvar ou fechar, você volta para esta lista. Excluir estorna o estoque consumido pelo pedido.</span>'+
+          '<button type="button" class="btn btn-ghost" onclick="closeModal()">Fechar</button>'+
+        '</div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+  if(manterFoco){ const el = document.getElementById("cg-drill-busca"); if(el){ el.focus(); const v=el.value; el.setSelectionRange(v.length, v.length); } }
+}
+function nomeEquip(id){ const e = (STATE.equipamentos||[]).find(function(x){ return x.id===id; }); return e ? e.nome : ""; }
+
+/* ============================== RELATÓRIOS (PDF) — ACOMPANHAMENTO DA PRODUÇÃO ==============================
+   Cada gráfico da tela fica num bloco com data-rel. Na impressão, só os blocos marcados saem.
+   Dá para imprimir um gráfico sozinho (ícone de impressora no título) ou escolher vários. */
+const ACOMP_RELATORIOS = [
+  {key:"colagemDia", label:"Colagem — produção por dia"},
+  {key:"perfilarDia", label:"Perfilar — produção por dia"},
+  {key:"colagemMes", label:"Colagem — produção mês a mês"},
+  {key:"colagemGrupos", label:"Colagem por grupo de produto — mês a mês"},
+  {key:"colagemPizza", label:"Colagem — % de cada grupo no mês"},
+  {key:"perfilarMes", label:"Perfilar — produção mês a mês"},
+  {key:"pinturaMes", label:"Pintura — produção mês a mês"},
+];
+let __acompRelSel = null;
+function acompRelBloco(key, html){
+  const btn = '<button type="button" class="icon-btn no-print" style="width:26px;height:26px" title="Imprimir só este gráfico (PDF)" onclick="openAcompRelatoriosModal(\''+key+'\')">'+icon("printer",13)+'</button>';
+  return '<div class="acomp-rel" data-rel="'+key+'">'+html.replace('</h3>','</h3>'+btn)+'</div>';
+}
+function openAcompRelatoriosModal(somente){
+  if(!__acompRelSel) __acompRelSel = {sel:ACOMP_RELATORIOS.map(function(r){ return r.key; }), orient:"landscape", umPorPagina:false};
+  const sel = somente ? [somente] : __acompRelSel.sel;
+  const itens = ACOMP_RELATORIOS.map(function(r){
+    return '<label style="display:flex;align-items:center;gap:9px;padding:8px 10px;border:1px solid var(--steel-border);border-radius:7px;cursor:pointer;font-size:13px">'+
+      '<input type="checkbox" class="acomp-rel-chk" value="'+r.key+'" '+(sel.indexOf(r.key)!==-1?"checked":"")+' style="width:16px;height:16px"/>'+escapeHtml(r.label)+'</label>';
+  }).join("");
+  const orientBtn = function(v, label, ic){
+    const on = __acompRelSel.orient===v;
+    return '<label style="flex:1;display:flex;align-items:center;gap:8px;padding:10px 12px;border:2px solid '+(on?COLORS.brand:"var(--steel-border)")+';border-radius:8px;cursor:pointer;font-size:13px;font-weight:600">'+
+      '<input type="radio" name="acomp-rel-orient" value="'+v+'" '+(on?"checked":"")+' onchange="__acompRelSel.orient=this.value;openAcompRelatoriosModal()"/>'+ic+label+'</label>';
+  };
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>'+icon("printer",16)+' Relatórios em PDF</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Escolha o que vai no PDF. Usa o mês, o ano e os filtros que estão na tela. Na janela de impressão, escolha "Salvar como PDF".</p>'+
+        '<div style="display:flex;gap:8px;margin-bottom:8px"><button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px" onclick="document.querySelectorAll(\'.acomp-rel-chk\').forEach(function(c){c.checked=true})">Marcar todos</button>'+
+          '<button type="button" class="btn btn-ghost" style="padding:4px 10px;font-size:11.5px" onclick="document.querySelectorAll(\'.acomp-rel-chk\').forEach(function(c){c.checked=false})">Desmarcar todos</button></div>'+
+        '<div style="display:grid;gap:6px">'+itens+'</div>'+
+        '<div class="field-label" style="margin-top:14px">Orientação</div>'+
+        '<div style="display:flex;gap:8px">'+orientBtn("landscape","Paisagem",'<span style="display:inline-block;width:20px;height:14px;border:2px solid currentColor;border-radius:2px"></span>')+orientBtn("portrait","Retrato",'<span style="display:inline-block;width:14px;height:20px;border:2px solid currentColor;border-radius:2px"></span>')+'</div>'+
+        '<label style="display:flex;align-items:center;gap:8px;margin-top:12px;font-size:12.5px;cursor:pointer"><input type="checkbox" id="acomp-rel-pagina" '+(__acompRelSel.umPorPagina?"checked":"")+'/> Um gráfico por página (relatórios individuais)</label>'+
+        '<div class="modal-actions"><button type="button" class="btn btn-ghost" onclick="closeModal()">Cancelar</button>'+
+          '<button type="button" class="btn btn-primary" onclick="gerarAcompRelatorio()">'+icon("printer",14)+' Gerar PDF</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+function gerarAcompRelatorio(){
+  const sel = Array.prototype.slice.call(document.querySelectorAll(".acomp-rel-chk")).filter(function(c){ return c.checked; }).map(function(c){ return c.value; });
+  if(!sel.length){ showToast("error","Marque pelo menos um gráfico."); return; }
+  const radio = document.querySelector('input[name="acomp-rel-orient"]:checked');
+  __acompRelSel.sel = sel;
+  __acompRelSel.orient = radio ? radio.value : "landscape";
+  __acompRelSel.umPorPagina = !!(document.getElementById("acomp-rel-pagina")||{}).checked;
+  closeModal();
+  document.querySelectorAll(".acomp-rel").forEach(function(el){ el.classList.toggle("rel-incluir", sel.indexOf(el.getAttribute("data-rel"))!==-1); });
+  const temAnual = sel.some(function(k){ return ["colagemMes","colagemGrupos","colagemPizza","perfilarMes","pinturaMes"].indexOf(k)!==-1; });
+  const sep = document.querySelector(".acomp-anual-sep"); if(sep) sep.classList.toggle("rel-incluir", temAnual);
+  document.body.classList.add("print-acomp-sel");
+  if(__acompRelSel.umPorPagina) document.body.classList.add("print-acomp-umpagina");
+  const limpar = function(){
+    document.body.classList.remove("print-acomp-sel","print-acomp-umpagina");
+    window.removeEventListener("afterprint", limpar);
+  };
+  window.addEventListener("afterprint", limpar);
+  setTimeout(function(){ printTelaComo(__acompRelSel.orient); }, 50);
 }
 
 function renderAcompanhamentoScreen(){
@@ -12459,9 +12667,11 @@ function renderAcompanhamentoScreen(){
   const anos = Array.from(new Set(anosPedidos.concat([String(new Date().getFullYear())]))).sort();
   const anoAcum = f.anoAcum || String(new Date().getFullYear());
   const anosAcum = Array.from(new Set(anos.concat([anoAcum]))).sort();
+  const cgCards = colagemGruposCardHtml(anoAcum);
   const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
     rotuloControleHtml("acompanhamento")+
     '<button class="btn btn-primary" onclick="exportarApresentacaoPptx()" title="Gera um PowerPoint com os gráficos desta tela e da Baixa de Estoque (Perda), com a logo e as cores da ELEVE">'+icon("fileText",14)+' Exportar PowerPoint</button>'+
+    '<button class="btn" onclick="openAcompRelatoriosModal()" title="Escolha quais gráficos imprimir, um por página ou juntos, em paisagem ou retrato">'+icon("printer",14)+' Relatórios / Escolher o que imprimir</button>'+
     '<button class="btn" onclick="printTelaComo(\'landscape\')">'+icon("printer",14)+' PDF Paisagem</button>'+
     '<button class="btn" onclick="printTelaComo(\'portrait\')">'+icon("printer",14)+' PDF Retrato</button>'+
   '</div>';
@@ -12487,8 +12697,8 @@ function renderAcompanhamentoScreen(){
     '</div>'+
     '<div class="acomp-print-page">'+
       '<div class="print-only" style="margin-bottom:14px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:16px;font-weight:700">Acompanhamento da Produção — '+MESES[Number(f.mes)-1]+'/'+f.ano+'</div></div>'+
-      producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand)+
-      producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00")+
+      acompRelBloco("colagemDia", producaoChartHtml("colagem","Colagem — produção por dia (m)","layers",COLORS.brand))+
+      acompRelBloco("perfilarDia", producaoChartHtml("perfilar","Perfilar — produção por dia (m)","calendar","#C98A00"))+
       '<div class="acomp-anual-sep" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin:22px 0 12px;padding-top:16px;border-top:1px solid var(--steel-border)">'+
         '<div>'+
           '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">Produção mês a mês no ano — janeiro a dezembro (m)</div>'+
@@ -12499,10 +12709,11 @@ function renderAcompanhamentoScreen(){
             anosAcum.map(function(y){ return '<option value="'+y+'" '+(anoAcum===y?"selected":"")+'>'+y+'</option>'; }).join("")+
           '</select></div>'+
       '</div>'+
-      acumuladoAnualCardHtml("Colagem — produção mês a mês (m)","layers",COLORS.brand,"colagem",anoAcum)+
-      colagemGruposCardHtml(anoAcum)+
-      acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum)+
-      acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum)+
+      acompRelBloco("colagemMes", acumuladoAnualCardHtml("Colagem — produção mês a mês (m)","layers",COLORS.brand,"colagem",anoAcum))+
+      acompRelBloco("colagemGrupos", cgCards.barras)+
+      acompRelBloco("colagemPizza", cgCards.pizza)+
+      acompRelBloco("perfilarMes", acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum))+
+      acompRelBloco("pinturaMes", acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum))+
     '</div>';
 }
 

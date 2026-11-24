@@ -964,6 +964,9 @@ const DEFAULT_CONFIG_VALUES = {
   /* Dados da inativação por matéria-prima: {id: {data, motivo, responsavel, registradoPor, registradoEm,
      historico:[{acao:"inativado"|"reativado", data, motivo, responsavel, registradoPor, registradoEm}]}} */
   materiais_inativos_info: {},
+  /* Matérias-primas ocultadas da tabela da tela Matéria-Prima — lista de ids. Só esconde
+     a linha da tabela (e das exportações dela); o item continua ativo e utilizável. */
+  materiais_ocultos: [],
   /* Pendências de Entrega (falta de material na entrega): motivos, pessoas responsáveis e
      o histórico das pendências — tudo em app_config, mesmo padrão dos cancelamentos. */
   motivos_falta_material: ["Faltou parafuso","Faltou telha","Faltou cumeeira","Faltou acabamento","Outro"],
@@ -1577,6 +1580,7 @@ const ICON_PATHS = {
   undo:'<polyline points="9 14 4 9 9 4"/><path d="M20 20v-7a4 4 0 0 0-4-4H4"/>',
   xCircle:'<circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>',
   eye:'<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>',
+  eyeOff:'<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><path d="M14.12 14.12a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>',
   clock:'<circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>',
   maximize:'<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
   minimize:'<path d="M8 3v3a2 2 0 0 1-2 2H3"/><path d="M21 8h-3a2 2 0 0 1-2-2V3"/><path d="M3 16h3a2 2 0 0 1 2 2v3"/><path d="M16 21v-3a2 2 0 0 1 2-2h3"/>',
@@ -2163,7 +2167,7 @@ const STATE = {
   dashColaAno:String(new Date().getFullYear()),
   canceladosFiltro:{mes:"",ano:"",motivo:"",cliente:"",op:""},
   /* Matérias-primas inativas (ids) — ver materialInativo(). */
-  materiaisInativosIds:[], materiaisInativosInfo:{},
+  materiaisInativosIds:[], materiaisInativosInfo:{}, materiaisOcultosIds:[],
   /* Pendências de Entrega — ver seção PENDÊNCIAS DE ENTREGA. */
   pendenciasEntrega:[], motivosFaltaMaterial:[], pessoasErroEntrega:[],
   pendenciasFiltro:{mes:"",ano:String(new Date().getFullYear()),motivo:"",responsavel:"",status:"",cliente:"",op:""},
@@ -2288,10 +2292,11 @@ async function loadAllData(){
   const [fatoresConsumoCola, pedidosColaCfg] = await Promise.all([configGet("fatores_consumo_cola"), configGet("pedidos_cola")]);
   STATE.fatoresConsumoCola = (fatoresConsumoCola && typeof fatoresConsumoCola==="object") ? fatoresConsumoCola : {};
   STATE.pedidosCola = (pedidosColaCfg && typeof pedidosColaCfg==="object") ? pedidosColaCfg : {};
-  const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega, materiaisInativosInfo] = await Promise.all([
+  const [materiaisInativos, pendenciasEntrega, motivosFaltaMaterial, pessoasErroEntrega, materiaisInativosInfo, materiaisOcultos] = await Promise.all([
     configGet("materiais_inativos"), configGet("pendencias_entrega"), configGet("motivos_falta_material"), configGet("pessoas_erro_entrega"),
-    configGet("materiais_inativos_info"),
+    configGet("materiais_inativos_info"), configGet("materiais_ocultos"),
   ]);
+  STATE.materiaisOcultosIds = Array.isArray(materiaisOcultos) ? materiaisOcultos : [];
   STATE.materiaisInativosIds = Array.isArray(materiaisInativos) ? materiaisInativos : [];
   STATE.materiaisInativosInfo = (materiaisInativosInfo && typeof materiaisInativosInfo==="object") ? materiaisInativosInfo : {};
   STATE.pendenciasEntrega = Array.isArray(pendenciasEntrega) ? pendenciasEntrega : [];
@@ -2504,7 +2509,7 @@ function ordenarMateriais(items, ordenarPor){
 function materialTipoTabsHtml(){
   const f = STATE.materiaisFiltro;
   const tipos = uniqueMaterialTipos();
-  const contarTipo = (t)=> STATE.materiais.filter(m=>!t || m.tipo===t).length;
+  const contarTipo = (t)=> STATE.materiais.filter(m=>!materialOculto(m.id) && (!t || m.tipo===t)).length;
   const aba = (valor, rotulo)=>{
     const ativa = (f.tipo||"") === valor;
     return '<button type="button" onclick="updateMateriaisFiltro(\'tipo\', \''+escapeAttr(valor)+'\')" '+
@@ -3925,6 +3930,7 @@ const ENTITY_CONFIGS = {
       const f = STATE.materiaisFiltro;
       const preTotals = f.somentePreProducao ? preProducaoTotalsEstoque() : null;
       const filtrados = items.filter(m=>{
+        if(materialOculto(m.id)) return false;
         if(f.tipo && m.tipo!==f.tipo) return false;
         if(f.produto && !(m.nome||"").toLowerCase().includes(f.produto.toLowerCase())) return false;
         if(f.ano && (!m.dataCadastro || m.dataCadastro.slice(0,4)!==String(f.ano))) return false;
@@ -4289,6 +4295,69 @@ async function toggleMaterialAtencao(id){
   renderScreen();
 }
 
+/* ============================== MATÉRIA-PRIMA OCULTA DA TABELA ==============================
+   Ocultar só tira a linha da tabela da tela Matéria-Prima (e do Excel/PDF dela). O item
+   continua ativo e aparece normalmente nos pedidos, notas, baixas etc. — para bloquear o uso
+   existe o Inativar. A lista é gravada em app_config, então vale para todos os usuários. */
+function materialOculto(id){ return !!id && (STATE.materiaisOcultosIds||[]).indexOf(id)!==-1; }
+function materiaisOcultosValidos(){
+  return (STATE.materiaisOcultosIds||[]).map(function(id){ return STATE.materiais.find(function(m){ return m.id===id; }); }).filter(Boolean);
+}
+async function salvarMateriaisOcultos(transformar){
+  const atual = await configGet("materiais_ocultos");
+  const base = Array.isArray(atual) ? atual.slice() : (STATE.materiaisOcultosIds||[]).slice();
+  const nova = transformar(base);
+  const ok = await configSet("materiais_ocultos", nova);
+  if(!ok) return false;
+  STATE.materiaisOcultosIds = nova;
+  return true;
+}
+async function ocultarMaterial(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  const ok = await salvarMateriaisOcultos(function(l){ return l.indexOf(id)===-1 ? l.concat([id]) : l; });
+  if(!ok) return;
+  renderScreen();
+  showToast("info", (m?'"'+m.nome+'" ':"Produto ")+'ocultado da tabela. Para trazer de volta, clique em "Ocultos" no topo da tela.');
+}
+async function reexibirMaterial(id){
+  const m = STATE.materiais.find(x=>x.id===id);
+  const ok = await salvarMateriaisOcultos(function(l){ return l.filter(function(x){ return x!==id; }); });
+  if(!ok) return;
+  renderScreen();
+  showToast("success", (m?'"'+m.nome+'" ':"Produto ")+"voltou a aparecer na tabela.");
+  if(materiaisOcultosValidos().length) openMateriaisOcultosModal(); else closeModal();
+}
+async function reexibirTodosMateriais(){
+  const ok = await salvarMateriaisOcultos(function(){ return []; });
+  if(!ok) return;
+  closeModal();
+  renderScreen();
+  showToast("success","Todos os produtos ocultos voltaram a aparecer na tabela.");
+}
+function openMateriaisOcultosModal(){
+  const lista = materiaisOcultosValidos().slice().sort(function(a,b){ return (a.tipo+" "+a.nome).localeCompare(b.tipo+" "+b.nome); });
+  const linhas = lista.length ? lista.map(function(m){
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:8px 10px;border-bottom:1px solid var(--steel-border)">'+
+      '<div style="min-width:0"><div style="font-size:13px;font-weight:600">'+(m.tipo==="Bobina"?coilSwatchHtml(m.nome):escapeHtml(m.nome))+
+        (materialInativo(m.id)?' <span class="inativo-badge">INATIVO</span>':'')+'</div>'+
+        '<div style="font-size:11.5px;color:'+COLORS.textMuted+'">'+escapeHtml(m.tipo||"—")+' · Saldo atual: '+fmtNum(m.estoque)+' '+escapeHtml(m.unidade||"")+'</div></div>'+
+      '<button type="button" class="btn btn-ghost" style="padding:6px 10px;font-size:12px;white-space:nowrap" onclick="reexibirMaterial(\''+m.id+'\')">'+icon("eye",13)+' Mostrar</button>'+
+    '</div>';
+  }).join("") : '<p style="font-size:13px;color:'+COLORS.textMuted+';padding:14px 0;margin:0">Nenhum produto oculto.</p>';
+  const html =
+    '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
+      '<div class="modal-card" style="max-width:520px">'+
+        '<div class="modal-header"><h3>Produtos ocultos</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+        '<p style="font-size:12.5px;color:'+COLORS.textMuted+';margin:0 0 10px;line-height:1.5">Estes produtos não aparecem na tabela de Matéria-Prima, mas continuam no cadastro e podem ser usados normalmente. Clique em <strong style="color:'+COLORS.text+'">Mostrar</strong> para trazer de volta.</p>'+
+        '<div style="max-height:380px;overflow:auto;border:1px solid var(--steel-border);border-radius:8px">'+linhas+'</div>'+
+        '<div class="modal-actions">'+
+          (lista.length>1 ? '<button type="button" class="btn btn-ghost" onclick="reexibirTodosMateriais()">Mostrar todos</button>' : '')+
+          '<button type="button" class="btn btn-primary" onclick="closeModal()">Fechar</button></div>'+
+      '</div>'+
+    '</div>';
+  document.getElementById("modal-root").innerHTML = html;
+}
+
 /* ============================== MATÉRIA-PRIMA ATIVA / INATIVA ==============================
    Item inativo continua no cadastro e no histórico (filtros, relatórios), mas não pode ser
    usado: não entra em novo pedido, baixa, separação avulsa, transferência, nota nem acerto.
@@ -4496,15 +4565,19 @@ function renderGenericScreen(type){
     const ativoBtn = type==="material"
       ? '<button class="icon-btn'+(inativo?' ativar-btn':'')+'" title="'+(inativo?"Reativar produto (liberar para uso)":"Inativar produto (bloquear o uso no sistema)")+'" onclick="confirmToggleMaterialAtivo(\''+it.id+'\')">'+icon(inativo?"checkCircle":"xCircle",13)+'</button>'
       : '';
-    return '<tr'+(inativo?' class="row-inativo"':'')+'>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+ativoBtn+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
+    const ocultarBtn = type==="material"
+      ? '<button class="icon-btn" title="Ocultar este produto da tabela (para trazer de volta, use o botão Ocultos no topo)" onclick="ocultarMaterial(\''+it.id+'\')">'+icon("eyeOff",13)+'</button>'
+      : '';
+    return '<tr'+(inativo?' class="row-inativo"':'')+'>'+tds+'<td class="no-print"><div style="display:flex;gap:6px">'+ocultarBtn+ativoBtn+acertoBtn+'<button class="icon-btn" onclick="openEntityModal(\''+type+'\',\'edit\',\''+it.id+'\')">'+icon("edit",13)+'</button><button class="icon-btn" onclick="confirmDeleteEntity(\''+type+'\',\''+it.id+'\')">'+icon("trash",13)+'</button></div></td></tr>';
   }).join("");
   const table = items.length===0 ? emptyStateHtml() :
-    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=> cfg.headerCell ? cfg.headerCell(c) : '<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:'+(type==="material"?140:110)+'px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
+    '<table class="pcp-table"><thead><tr>'+cfg.columns.map(c=> cfg.headerCell ? cfg.headerCell(c) : '<th>'+c.label+'</th>').join("")+'<th class="no-print" style="width:'+(type==="material"?175:110)+'px">Ações</th></tr></thead><tbody>'+rows+'</tbody></table>';
   const extra = cfg.extraTop ? cfg.extraTop(items) : "";
   const filterBar = cfg.filterBar ? cfg.filterBar() : "";
   const printHeader = cfg.printable ? '<div class="print-only" style="margin-bottom:18px"><div style="font-family:\'Space Grotesk\',sans-serif;font-size:18px;font-weight:700">Relatório de '+cfg.title+' — ELEVE</div><div style="font-size:10.5px;color:#555;margin-top:4px">Gerado em '+fmtDateBR(todayStr())+'</div></div>' : "";
   const actions = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap">'+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openTiposModal()">'+icon("settings",14)+' Gerenciar Tipos</button>' : '')+
+    (type==="material" && materiaisOcultosValidos().length ? '<button class="btn btn-ghost" onclick="openMateriaisOcultosModal()" title="Ver os produtos ocultados e trazer de volta para a tabela">'+icon("eyeOff",14)+' Ocultos ('+materiaisOcultosValidos().length+')</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openDiagnosticoDivergenciasModal()" title="Ver quais materiais estão com a conta aberta e por quê">'+icon("alert",14)+' Divergências</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="exportarMateriaisExcel()" title="Baixar planilha (.csv, abre no Excel)">'+icon("package",14)+' Excel</button>' : '')+
     (type==="material" ? '<button class="btn btn-ghost" onclick="openMateriaisColunasModal()" title="Escolher quais colunas saem no relatório em PDF">'+icon("filter",14)+' Colunas do PDF</button>' : '')+
@@ -10963,22 +11036,36 @@ function toggleNotaItemConversao(checkbox){
     if(valorInput){ valorInput.readOnly = false; valorInput.style.background = ""; }
   }
 }
+/* Item recebido em Kg: o valor que vale é o da nota (Kg × custo por Kg). A metragem é
+   arredondada em 2 casas, então o valor por metro é calculado a partir do total e da
+   metragem já arredondada, com 8 casas decimais — assim Quantidade × Valor Unit. bate
+   com o total da nota (ex.: 6.490 kg × R$ 7,69 = R$ 49.908,10), sem a sobra de centavos
+   que aparecia quando o R$/m era arredondado para 2 casas (28,84). */
+function notaValorUnitConvertido(kg, custoKg, qtdM){
+  const total = Number(kg||0)*Number(custoKg||0);
+  const qtd = Number(qtdM||0);
+  if(!(total>0) || !(qtd>0)) return 0;
+  return Math.round((total/qtd)*1e8)/1e8;
+}
 function recalcNotaItemConversao(el){
   const row = el.closest(".nota-item-row");
   const kg = Number(row.querySelector(".nota-item-kg").value||0);
   const custoKg = Number(row.querySelector(".nota-item-custo-kg").value||0);
   const fatorKg = Number(row.querySelector(".nota-item-fator-kg").value||0);
-  const qtdM = fatorKg>0 ? kg/fatorKg : 0;
-  const valorM = custoKg * fatorKg;
+  const qtdM = fatorKg>0 ? Math.round((kg/fatorKg)*100)/100 : 0;
+  const valorM = notaValorUnitConvertido(kg, custoKg, qtdM);
+  const totalNota = kg*custoKg;
   const qtdOut = row.querySelector(".nota-item-conv-qtd");
   const valorOut = row.querySelector(".nota-item-conv-valor");
+  const totalOut = row.querySelector(".nota-item-conv-total");
   if(qtdOut) qtdOut.textContent = fmtNum(qtdM)+" m";
   if(valorOut) valorOut.textContent = fmtBRL(valorM)+"/m";
+  if(totalOut) totalOut.textContent = fmtBRL(totalNota);
   const qtdInput = row.querySelector(".nota-item-qtd");
   const valorInput = row.querySelector(".nota-item-valor");
   const unidadeInput = row.querySelector(".nota-item-unidade");
   if(qtdInput) qtdInput.value = qtdM>0 ? qtdM.toFixed(2) : "";
-  if(valorInput) valorInput.value = valorM>0 ? valorM.toFixed(2) : "";
+  if(valorInput) valorInput.value = valorM>0 ? String(valorM) : "";
   if(unidadeInput && !unidadeInput.value) unidadeInput.value = "m";
 }
 function notaItemRowHtml(item){
@@ -10995,6 +11082,7 @@ function notaItemRowHtml(item){
   const readonlyAttr = conversaoAtiva ? 'readonly style="background:var(--panel-alt)"' : '';
   const qtdPreviewTxt = quantidade ? fmtNum(Number(quantidade))+" m" : "0,00 m";
   const valorPreviewTxt = valorUnitario ? fmtBRL(Number(valorUnitario))+"/m" : "R$ 0,00/m";
+  const totalPreviewTxt = fmtBRL(Number(kgTotais||0)*Number(custoPorKg||0));
   return '<div class="nota-item-row pcp-card" style="padding:12px;margin-bottom:0">'+
     '<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">'+
       '<select class="field-select nota-item-material" onchange="onNotaItemMaterialChange(this)" style="flex:1">'+
@@ -11007,18 +11095,19 @@ function notaItemRowHtml(item){
       '<input type="checkbox" class="nota-item-conv-toggle" onchange="toggleNotaItemConversao(this)" '+(conversaoAtiva?"checked":"")+' '+(fatorAtual<=0 && !conversaoAtiva?"disabled":"")+'/> Este item veio em Kg na nota — converter para metros usando o fator cadastrado</label>'+
     '<p class="nota-item-conv-hint" style="display:'+(materialId && fatorAtual<=0 && !conversaoAtiva ? "block":"none")+';font-size:11.5px;color:'+COLORS.red+';margin:0 0 10px;line-height:1.4">Este material ainda não tem um fator de conversão vigente. <a href="#" onclick="irParaFatorConversao();return false" style="color:'+COLORS.brand+'">Cadastre em Fator de Conversão</a> antes de converter.</p>'+
     '<div class="nota-item-conv-fields" style="display:'+(conversaoAtiva?"grid":"none")+';grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:10px;padding:10px;background:var(--panel-alt);border-radius:6px">'+
-      '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="0.01" placeholder="0" value="'+kgTotais+'" oninput="recalcNotaItemConversao(this)"/></div>'+
-      '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="0.01" placeholder="0,00" value="'+custoPorKg+'" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Kg totais recebidos</label><input class="field-input nota-item-kg" type="number" step="any" placeholder="0" value="'+kgTotais+'" oninput="recalcNotaItemConversao(this)"/></div>'+
+      '<div><label class="field-label">Custo por Kg (R$)</label><input class="field-input nota-item-custo-kg" type="number" step="any" placeholder="0,00" value="'+custoPorKg+'" oninput="recalcNotaItemConversao(this)"/></div>'+
       '<div><label class="field-label">Fator de conversão (kg/m)</label><input class="field-input nota-item-fator-kg" type="number" step="0.0001" placeholder="0" value="'+(fatorExibido||"")+'" readonly title="Vem do cadastro em Fator de Conversão — não editável aqui" style="background:var(--panel-alt);cursor:not-allowed"/></div>'+
       '<div style="grid-column:1 / -1;display:flex;gap:18px;font-size:12px;color:'+COLORS.text+';padding-top:6px;border-top:1px dashed var(--steel-border)">'+
         '<div>Quantidade convertida: <strong class="nota-item-conv-qtd" style="font-family:\'IBM Plex Mono\',monospace">'+qtdPreviewTxt+'</strong></div>'+
         '<div>Custo calculado: <strong class="nota-item-conv-valor" style="font-family:\'IBM Plex Mono\',monospace">'+valorPreviewTxt+'</strong></div>'+
+        '<div>Total do item: <strong class="nota-item-conv-total" style="font-family:\'IBM Plex Mono\',monospace">'+totalPreviewTxt+'</strong></div>'+
       '</div>'+
     '</div>'+
     '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'+
       '<div><label class="field-label">Quantidade</label><input class="field-input nota-item-qtd" type="number" step="0.01" placeholder="0" value="'+quantidade+'" '+readonlyAttr+'/></div>'+
       '<div><label class="field-label">Unidade</label><input class="field-input nota-item-unidade" type="text" placeholder="m" value="'+escapeAttr(unidade)+'"/></div>'+
-      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="0.01" placeholder="0,00" value="'+valorUnitario+'" '+readonlyAttr+'/></div>'+
+      '<div><label class="field-label">Valor Unit. (R$)</label><input class="field-input nota-item-valor" type="number" step="any" placeholder="0,00" value="'+valorUnitario+'" '+readonlyAttr+'/></div>'+
     '</div>'+
   '</div>';
 }
@@ -11059,11 +11148,18 @@ async function submitNotaForm(event, editId){
     const materialId = r.querySelector(".nota-item-material").value;
     const quantidade = Number(r.querySelector(".nota-item-qtd").value||0);
     const unidade = r.querySelector(".nota-item-unidade").value.trim();
-    const valorUnitario = Number(r.querySelector(".nota-item-valor").value||0);
+    const valorUnitarioDigitado = Number(r.querySelector(".nota-item-valor").value||0);
     const kgInput = r.querySelector(".nota-item-kg");
     const custoKgInput = r.querySelector(".nota-item-custo-kg");
     const kgTotais = kgInput ? Number(kgInput.value||0) : 0;
     const custoPorKg = custoKgInput ? Number(custoKgInput.value||0) : 0;
+    /* Item convertido de Kg: recalcula o R$/m com precisão a partir do total da nota.
+       Também corrige notas antigas gravadas com 2 casas — basta abrir e salvar. */
+    const convToggle = r.querySelector(".nota-item-conv-toggle");
+    let valorUnitario = valorUnitarioDigitado;
+    if(convToggle && convToggle.checked && kgTotais>0 && custoPorKg>0 && quantidade>0){
+      valorUnitario = notaValorUnitConvertido(kgTotais, custoPorKg, quantidade);
+    }
     if(materialId && quantidade>0) itens.push({materialId, quantidade, unidade, valorUnitario, kgTotais, custoPorKg});
   });
   if(itens.length===0) return false;
@@ -14537,6 +14633,7 @@ function coletarDadosBackup(){
       fatoresKgTelha: STATE.fatoresKgTelha,
       recados: STATE.recados,
       materiaisInativos: STATE.materiaisInativosIds,
+      materiaisOcultos: STATE.materiaisOcultosIds,
       motivosFaltaMaterial: STATE.motivosFaltaMaterial,
       pessoasErroEntrega: STATE.pessoasErroEntrega,
     },
@@ -15290,7 +15387,7 @@ const AUD_TABELA_LABELS = {pedidos:"Pedidos", materiais:"Matéria-Prima", notas:
 const AUD_CONFIG_LABELS = {pedidos_retirada:"Cliente retira", pedidos_op_impressa:"OP impressa", pedidos_data_venda:"Data da venda",
   pedidos_datas_conclusao:"Datas de conclusão das etapas", pedidos_equipamento_inf:"Máquina da Cor Inf.", pedidos_producao_inf:"Cronômetro Cor Inf.",
   pedidos_observacoes:"Observações do pedido", pedidos_regional:"Regional", pedidos_cancelados:"Pedidos cancelados", pedidos_cola:"Cola por pedido",
-  materiais_inativos:"Matérias-primas inativas", pendencias_entrega:"Pendências de entrega", motivos_perda:"Motivos de perda",
+  materiais_inativos:"Matérias-primas inativas", materiais_ocultos:"Matérias-primas ocultas da tabela", pendencias_entrega:"Pendências de entrega", motivos_perda:"Motivos de perda",
   motivos_cancelamento:"Motivos de cancelamento", motivos_falta_material:"Motivos de falta de material", pessoas_erro_entrega:"Pessoas (pendências)",
   material_tipos:"Tipos de matéria-prima", tipo_options:"Tipos de produto", cumeeira_options:"Cumeeira/acabamento",
   metas_perfilar:"Metas Perfilar", metas_pintura:"Metas Pintura", metas_colagem:"Metas Colagem", metas_entrega:"Metas Entrega",

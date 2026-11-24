@@ -203,6 +203,9 @@ button,input,select{font-family:'Inter',sans-serif;}
   .cap-table tr{break-inside:avoid;}
   body.print-cap-colagem .cap-card[data-cap="perfilar"], body.print-cap-perfilar .cap-card[data-cap="colagem"]{display:none !important;}
   body.print-cap-ambos .cap-card[data-cap="perfilar"]{page-break-before:always;break-before:page;}
+  body.print-cap-colagem .cap-prev-bloco[data-cap-prev="perfilar"], body.print-cap-perfilar .cap-prev-bloco[data-cap-prev="colagem"]{display:none !important;}
+  .cap-prev-secao{page-break-before:always;break-before:page;}
+  .cap-prev-bloco .chart-card{break-inside:avoid;page-break-inside:avoid;}
 }
 .cg-leg-click:hover,.cg-row-click:hover{background:var(--row-hover);}
 .cg-bar-click:hover .chart-bar{filter:brightness(1.12);box-shadow:0 0 0 2px var(--text) inset;}
@@ -214,7 +217,8 @@ button,input,select{font-family:'Inter',sans-serif;}
   body.print-acomp-sel .acomp-print-page .acomp-prev-sep:not(.rel-incluir){display:none !important;}
   body.print-acomp-umpagina .acomp-print-page .acomp-rel.rel-incluir{page-break-after:always;break-after:page;}
   body.print-acomp-umpagina .acomp-print-page .acomp-rel.rel-incluir .chart-wrap{height:300px !important;}
-  .acomp-rel .icon-btn.no-print{display:none !important;}
+  .acomp-rel .icon-btn.no-print, .acomp-rel .acomp-rel-btns{display:none !important;}
+  body.print-acomp-um .acomp-print-page .acomp-rel.rel-incluir .chart-wrap{height:320px !important;}
   /* ---- Relatórios do Acompanhamento: cabeçalho/rodapé repetidos e gráficos com acabamento de relatório ---- */
   .rel-print-table{display:table !important;}
   .rel-print-thead{display:table-header-group !important;}
@@ -12063,12 +12067,12 @@ function cumulativeLineChartHtml(cor, maxDia, metasPorDia, dadosDias, ano, mes, 
   '</div>';
 }
 /* Linhas de referência (grid) + rótulos de valor para o gráfico de barras "por dia". */
-function chartGridlinesHtml(escala){
+function chartGridlinesHtml(escala, sufixo){
   if(!(escala>0)) return '';
   return [0.25,0.5,0.75,1].map(function(f){
     const valor = Math.round(escala*f);
     return '<div style="position:absolute;left:0;right:0;bottom:'+(f*100)+'%;border-top:1px dashed '+COLORS.steelBorder+';pointer-events:none">'+
-      '<span class="chart-grid-label" style="position:absolute;right:2px;bottom:2px;font-size:'+rf(10)+';color:'+COLORS.textMuted+';background:var(--panel);padding:0 3px;line-height:1.4">'+fmtNumCard(valor)+'</span>'+
+      '<span class="chart-grid-label" style="position:absolute;right:2px;bottom:2px;font-size:'+rf(10)+';color:'+COLORS.textMuted+';background:var(--panel);padding:0 3px;line-height:1.4">'+fmtNumCard(valor)+(sufixo||"")+'</span>'+
     '</div>';
   }).join('');
 }
@@ -12648,30 +12652,215 @@ function colagemGruposCardHtml(ano){
   return {barras:cardBarras, pizza:cardPizza};
 }
 
+/* ============================== PERFILAR (CORTE) POR GRUPO DE PRODUTO ==============================
+   Mesmos grupos da Colagem + "Simples", que só passa pelo Perfilar (não vai para a Colagem):
+   Colonial = Colonial + Colonial Simples + Colonial Semi · Sanduíche = Sanduíche + Semi-Sanduíche ·
+   Bandeja + Painel Térmico · Simples = Simples e variações (TP25, TP35, TP40…). O resto cai em
+   "Outros" (só aparece se houver). Usado na Previsão de Corte por grupo e na pizza do Perfilar.
+   Os gráficos da Colagem continuam com GRUPOS_COLAGEM, sem alteração. */
+const GRUPOS_PERFILAR = [
+  {key:"colonial", label:"Colonial", desc:"Colonial + Colonial Simples + Colonial Semi", cor:"#0080C6"},
+  {key:"sanduiche", label:"Sanduíche", desc:"Sanduíche + Semi-Sanduíche", cor:"#C98A00"},
+  {key:"bandeja", label:"Bandeja + Painel Térmico", desc:"Bandeja + Painel Térmico", cor:"#2F9E5B"},
+  {key:"simples", label:"Simples", desc:"Simples + Simples TP25 / TP35 / TP40", cor:"#8E44AD"},
+  {key:"outros", label:"Outros", desc:"Demais tipos (Chapa lisa, EPS…)", cor:"#8C97A6"},
+];
+function grupoPerfilarDoTipo(tipo){
+  const t = String(tipo||"").normalize("NFD").replace(/[̀-ͯ]/g,"").toLowerCase().trim();
+  if(t.indexOf("colonial")===0) return "colonial";
+  if(t.indexOf("sanduiche")!==-1) return "sanduiche";
+  if(t.indexOf("bandeja")!==-1 || t.indexOf("painel termico")!==-1) return "bandeja";
+  if(t.indexOf("simples")===0) return "simples";
+  return "outros";
+}
+function gruposDoStage(stage){ return stage==="perfilar" ? GRUPOS_PERFILAR : GRUPOS_COLAGEM; }
+function grupoDoTipoNoStage(stage, tipo){ return stage==="perfilar" ? grupoPerfilarDoTipo(tipo) : grupoColagemDoTipo(tipo); }
+/* Produção do Perfilar por grupo, mês a mês. Metragem do pedido (sem o Fator Produção Perfilar),
+   igual à pizza da Colagem e à Previsão de Corte — assim a pizza bate com a lista de lançamentos. */
+function producaoPerfilarPorGrupo(ano){
+  const f = STATE.acompFiltro;
+  const res = {};
+  GRUPOS_PERFILAR.forEach(function(g){ res[g.key] = new Array(12).fill(0); });
+  STATE.pedidos.forEach(function(p){
+    if(f.base==="concl" && !stageConcluido(p, "perfilar")) return;
+    const dataRef = dataBaseProducao(p, "perfilar", f.base);
+    if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
+    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    const m = Number(dataRef.slice(5,7));
+    if(!(m>=1 && m<=12)) return;
+    res[grupoPerfilarDoTipo(p.tipo)][m-1] += Number(p.metragem||0);
+  });
+  return res;
+}
+/* Perfilar por grupo — barras mês a mês (uma coluna por grupo, com rótulo), mesmo desenho do
+   gráfico "Colagem por grupo de produto", com o grupo Simples junto. Clique abre os lançamentos.
+   Modo "m" = metragem; modo "pct" = % de cada grupo no total do mês. A última coluna, "Média",
+   é a média do ano: em m, a média mensal de cada grupo (só meses com produção); em %, a
+   participação de cada grupo no total do ano. */
+function updateAcompPerfGruposModo(val){ STATE.acompFiltro.perfGruposModo = val; renderScreen(); }
+function updateAcompPerfGruposModo(val){ STATE.acompFiltro.perfGruposModo = val; renderScreen(); }
+function perfilarGruposBarrasCardHtml(ano){
+  const dados = producaoPerfilarPorGrupo(ano);
+  const grupos = GRUPOS_PERFILAR.filter(function(g){ return g.key!=="outros" || dados.outros.some(function(v){ return v>0; }); });
+  const modoPct = STATE.acompFiltro.perfGruposModo==="pct";
+  const cor = "#C98A00";
+  const hoje = new Date();
+  const mesHoje = (Number(ano)===hoje.getFullYear()) ? (hoje.getMonth()+1) : 0;
+  const totais = MESES.map(function(n,i){ return grupos.reduce(function(s2,g){ return s2+dados[g.key][i]; },0); });
+  const totalAno = totais.reduce(function(a,b){ return a+b; },0);
+  /* Média do ano = total ÷ meses com produção (mesmo critério do "Média por mês produzido"). */
+  const mesesComProd = totais.filter(function(v){ return v>0; }).length;
+  const mediaMes = mesesComProd>0 ? totalAno/mesesComProd : 0;
+  const pctTxt = function(v){ return String(Math.round(v*10)/10).replace(".",",")+"%"; };
+  const valorDe = function(g,i){ const v = dados[g.key][i]; return modoPct ? (totais[i]>0 ? v/totais[i]*100 : 0) : v; };
+  const maxValor = Math.max.apply(null, [modoPct?10:1].concat.apply([], grupos.map(function(g){ return MESES.map(function(n,i){ return valorDe(g,i); }); })));
+  const escala = modoPct ? 120 : maxValor*1.22;
+  const barras = MESES.map(function(nome,i){
+    const futuro = mesHoje>0 && (i+1)>mesHoje;
+    const tip = nome+"/"+ano+" — "+grupos.map(function(g){ return g.label+": "+fmtNum(dados[g.key][i])+" m ("+pctTxt(totais[i]>0?dados[g.key][i]/totais[i]*100:0)+")"; }).join(" · ")+" · Total: "+fmtNum(totais[i])+" m";
+    return '<div class="chart-col chart-col-click" title="'+escapeAttr(tip+" — clique para ver os lançamentos")+'" onclick="openColagemDrill(\''+ano+'\',\''+pad2(i+1)+'\',\'\',\'perfilar\')" style="flex-direction:row;align-items:flex-end;justify-content:center;gap:2px;opacity:'+(futuro?0.4:1)+'">'+
+      grupos.map(function(g){
+        const vm = dados[g.key][i];
+        const v = valorDe(g,i);
+        const h = escala>0 ? Math.min(100,(v/escala)*100) : 0;
+        const rot = modoPct ? pctTxt(v) : fmtNumCard(vm);
+        return '<div class="cg-bar-click" title="'+escapeAttr(g.label+" · "+nome+"/"+ano+": "+fmtNum(vm)+" m · "+pctTxt(totais[i]>0?vm/totais[i]*100:0)+" do mês — clique para ver os lançamentos")+'" onclick="event.stopPropagation();openColagemDrill(\''+ano+'\',\''+pad2(i+1)+'\',\''+g.key+'\',\'perfilar\')" style="flex:1 1 0;max-width:16px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;cursor:pointer">'+
+          (vm>0 ? '<div style="font-size:'+rf(9)+';font-weight:700;color:'+g.cor+';writing-mode:vertical-rl;transform:rotate(180deg);margin-bottom:2px;white-space:nowrap">'+rot+'</div>' : '')+
+          '<div class="chart-bar" style="width:100%;height:'+h+'%;background:'+(vm===0?"var(--steel-border)":g.cor)+'"></div></div>';
+      }).join("")+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(nome,i){
+    return '<div class="chart-day" style="flex:1;text-align:center;'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+nome.slice(0,3)+
+      (totais[i]>0 ? '<div style="font-size:'+rf(10)+';font-weight:700;color:var(--text)">'+fmtNumCard(totais[i])+'</div>' : '')+'</div>';
+  }).join("");
+  const legenda = grupos.map(function(g){
+    const tot = dados[g.key].reduce(function(a,b){return a+b;},0);
+    const pct = totalAno>0 ? tot/totalAno*100 : 0;
+    const mediaG = mesesComProd>0 ? tot/mesesComProd : 0;
+    return '<span class="cg-leg-click" title="'+escapeAttr(g.desc+" — clique para ver os lançamentos do ano")+'" onclick="openColagemDrill(\''+ano+'\',\'\',\''+g.key+'\',\'perfilar\')" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:3px 8px;border-radius:14px"><span style="width:11px;height:11px;border-radius:3px;background:'+g.cor+'"></span><strong>'+g.label+'</strong> <span style="color:'+COLORS.textMuted+'">'+
+      (modoPct ? pctTxt(pct)+' do ano · '+fmtNum(tot)+' m' : fmtNum(tot)+' m no ano ('+pctTxt(pct)+')')+' · média '+fmtNum(mediaG)+' m/mês</span></span>';
+  }).join("");
+  const stat = function(rot, val, c){ return '<div class="chart-stat"><div class="stat-label">'+rot+'</div><div class="chart-stat-value" style="font-family:\'Space Grotesk\',sans-serif;font-size:19px;font-weight:700;'+(c?"color:"+c:"")+'">'+val+'</div></div>'; };
+  const melhorI = totais.reduce(function(b,v,i){ return v>totais[b]?i:b; },0);
+  const stats = '<div class="chart-stats-row" style="display:flex;gap:22px;flex-wrap:wrap;margin-bottom:12px">'+
+    stat("Total no ano", fmtNum(totalAno)+" m", cor)+
+    stat("Média do ano (por mês produzido)", fmtNum(mediaMes)+" m")+
+    stat("Melhor mês", totalAno>0 ? MESES[melhorI]+" · "+fmtNumCard(totais[melhorI])+" m" : "—")+
+    stat("Meses com produção", String(mesesComProd))+
+  '</div>';
+  const modoBtn = function(v, label){
+    const on = (modoPct?"pct":"qtd")===v;
+    return '<button type="button" class="btn '+(on?"btn-primary":"btn-ghost")+'" style="padding:5px 12px;font-size:12px" onclick="updateAcompPerfGruposModo(\''+v+'\')">'+label+'</button>';
+  };
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon("calendar",17,cor)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Perfilar por grupo de produto — mês a mês ('+(modoPct?"% do mês":"m")+')</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+ano+'</span></div>'+
+      '<div class="no-print" style="display:flex;gap:4px;align-items:center"><span style="font-size:11px;color:'+COLORS.textMuted+';margin-right:4px">Ver em</span>'+modoBtn("qtd","Quantidade (m)")+modoBtn("pct","%")+'</div>'+
+    '</div>'+
+    stats+
+    '<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:12px">'+legenda+'</div>'+
+    '<div class="chart-wrap" style="height:250px">'+chartGridlinesHtml(escala, modoPct?"%":"")+barras+'</div>'+
+    '<div class="chart-days" style="display:flex">'+rotulos+'</div>'+
+    '<p class="no-print" style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">'+
+      (modoPct ? 'Valor em cima de cada coluna = participação do grupo no total do mês (soma 100% por mês)' : 'Valor em cima de cada coluna = metragem do grupo')+
+      '; número embaixo do mês = total do mês em metros. Média do ano = total ÷ meses com produção. Clique numa barra, num mês ou num grupo da legenda para ver, editar ou excluir os lançamentos.</p>'+
+  '</div>';
+}
+function updateAcompMesPizzaPerf(val){ STATE.acompFiltro.mesPizzaPerf = val; renderScreen(); }
+/* Pizza do Perfilar — mesmo desenho da pizza da Colagem, com o grupo Simples junto. */
+function perfilarPizzaCardHtml(ano){
+  const dados = producaoPerfilarPorGrupo(ano);
+  const grupos = GRUPOS_PERFILAR.filter(function(g){ return g.key!=="outros" || dados.outros.some(function(v){ return v>0; }); });
+  const hoje = new Date();
+  const mesPizza = STATE.acompFiltro.mesPizzaPerf || STATE.acompFiltro.mesPizza || STATE.acompFiltro.mes || pad2(hoje.getMonth()+1);
+  const iM = Number(mesPizza)-1;
+  const cor = "#C98A00";
+  const drill = function(g){ return 'openColagemDrill(\''+ano+'\',\''+mesPizza+'\',\''+g+'\',\'perfilar\')'; };
+  const fatias = grupos.map(function(g){ return {g:g, v:dados[g.key][iM]}; });
+  const totalPizza = fatias.reduce(function(a,b){ return a+b.v; },0);
+  let pizzaSvg;
+  if(totalPizza<=0){
+    pizzaSvg = '<div style="height:200px;display:flex;align-items:center;justify-content:center;font-size:12px;color:'+COLORS.textMuted+';text-align:center">Sem produção no Perfilar em '+MESES[iM]+'/'+ano+'.</div>';
+  } else {
+    const R = 90, C = 100; let ang = -Math.PI/2; let paths = "";
+    const comValor = fatias.filter(function(x){ return x.v>0; });
+    comValor.forEach(function(x){
+      const frac = x.v/totalPizza;
+      const pct = Math.round(frac*1000)/10;
+      const tip = x.g.label+": "+fmtNum(x.v)+" m ("+String(pct).replace(".",",")+"%)";
+      if(comValor.length===1){
+        paths += '<circle class="cg-slice" onclick="'+drill(x.g.key)+'" cx="'+C+'" cy="'+C+'" r="'+R+'" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip+" — clique para ver os lançamentos")+'</title></circle>';
+      } else {
+        const a2 = ang + frac*2*Math.PI;
+        const x1 = C+R*Math.cos(ang), y1 = C+R*Math.sin(ang), x2 = C+R*Math.cos(a2), y2 = C+R*Math.sin(a2);
+        paths += '<path d="M'+C+','+C+' L'+x1.toFixed(2)+','+y1.toFixed(2)+' A'+R+','+R+' 0 '+(frac>0.5?1:0)+' 1 '+x2.toFixed(2)+','+y2.toFixed(2)+' Z" class="cg-slice" onclick="'+drill(x.g.key)+'" fill="'+x.g.cor+'" stroke="var(--panel)" stroke-width="2"><title>'+escapeHtml(tip+" — clique para ver os lançamentos")+'</title></path>';
+        ang = a2;
+      }
+    });
+    let angL = -Math.PI/2, labels = "";
+    comValor.forEach(function(x){
+      const frac = x.v/totalPizza; const meio = angL + frac*Math.PI; angL += frac*2*Math.PI;
+      if(frac<0.05) return;
+      const lx = C+R*0.76*Math.cos(meio), ly = C+R*0.76*Math.sin(meio);
+      labels += '<text x="'+lx.toFixed(1)+'" y="'+ly.toFixed(1)+'" text-anchor="middle" dominant-baseline="middle" style="font-size:13px;font-weight:700;fill:#fff;font-family:\'Space Grotesk\',sans-serif;pointer-events:none">'+String(Math.round(frac*1000)/10).replace(".",",")+'%</text>';
+    });
+    const centro = '<circle cx="'+C+'" cy="'+C+'" r="'+(R*0.5)+'" fill="var(--panel)" style="pointer-events:none"/>'+
+      '<text x="'+C+'" y="'+(C-6)+'" text-anchor="middle" style="font-size:10px;fill:'+COLORS.textMuted+';font-weight:600;letter-spacing:.04em;pointer-events:none">TOTAL</text>'+
+      '<text x="'+C+'" y="'+(C+12)+'" text-anchor="middle" style="font-size:15px;font-weight:700;fill:var(--text);font-family:\'Space Grotesk\',sans-serif;pointer-events:none">'+fmtNumCard(totalPizza)+' m</text>';
+    pizzaSvg = '<svg class="cg-pizza-svg" viewBox="0 0 200 200" style="width:210px;height:210px;display:block;margin:0 auto">'+paths+labels+centro+'</svg>';
+  }
+  const pizzaLegenda = fatias.map(function(x){
+    const pct = totalPizza>0 ? Math.round((x.v/totalPizza)*1000)/10 : 0;
+    return '<div class="cg-row-click" onclick="'+drill(x.g.key)+'" title="Clique para ver os lançamentos" style="display:flex;align-items:center;gap:8px;font-size:12.5px;padding:5px 6px;border-bottom:1px solid var(--steel-border);cursor:pointer;border-radius:5px">'+
+      '<span style="width:11px;height:11px;border-radius:3px;background:'+x.g.cor+';flex:none"></span>'+
+      '<span style="flex:1" title="'+escapeAttr(x.g.desc)+'"><strong>'+x.g.label+'</strong><br><span style="font-size:10.5px;color:'+COLORS.textMuted+'">'+escapeHtml(x.g.desc)+'</span></span>'+
+      '<span style="font-family:\'IBM Plex Mono\',monospace;text-align:right">'+fmtNum(x.v)+' m<br><strong style="color:'+x.g.cor+'">'+String(pct).replace(".",",")+'%</strong></span>'+
+    '</div>';
+  }).join("")+
+    '<div class="cg-row-click" onclick="'+drill("")+'" title="Clique para ver todos os lançamentos do mês" style="display:flex;justify-content:space-between;font-size:12.5px;padding:6px 6px 0;cursor:pointer;border-radius:5px"><strong>Total</strong><strong style="font-family:\'IBM Plex Mono\',monospace">'+fmtNum(totalPizza)+' m</strong></div>';
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    '<div class="chart-card-header" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px">'+
+      '<div style="display:flex;align-items:center;gap:9px">'+icon("calendar",17,cor)+
+        '<h3 class="chart-card-title" style="font-family:\'Space Grotesk\',sans-serif;font-size:15.5px;font-weight:600;margin:0">Perfilar — % de cada grupo no mês (com Simples)</h3>'+
+        '<span style="font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:'+COLORS.textMuted+';background:var(--panel-alt);padding:2px 8px;border-radius:10px">'+MESES[iM]+'/'+ano+'</span></div>'+
+      '<div class="no-print" style="min-width:150px"><label class="field-label">Mês da pizza</label><select class="field-select" onchange="updateAcompMesPizzaPerf(this.value)">'+
+        MESES.map(function(nome,i){ return '<option value="'+pad2(i+1)+'" '+(mesPizza===pad2(i+1)?"selected":"")+'>'+nome+'</option>'; }).join("")+'</select></div>'+
+    '</div>'+
+    '<div style="display:grid;grid-template-columns:minmax(200px,260px) 1fr;gap:24px;align-items:center">'+
+      '<div>'+pizzaSvg+'</div>'+
+      '<div>'+pizzaLegenda+'</div>'+
+    '</div>'+
+  '</div>';
+}
+
 /* ============================== DETALHE DOS LANÇAMENTOS DA COLAGEM ==============================
    Abre ao clicar nos gráficos de Colagem por grupo (barra, mês, legenda, fatia ou linha da tabela).
    Mostra os pedidos que compõem aquele número, com o mesmo critério do gráfico, e permite editar
    (abre o formulário normal do pedido) ou excluir. Ao fechar o formulário, volta para esta lista. */
 let __colagemDrill = null, __colagemDrillVoltar = null;
-function pedidosColagemDoGrafico(ano, mes, grupo){
+function pedidosColagemDoGrafico(ano, mes, grupo, stage){
   const f = STATE.acompFiltro;
+  const st = stage==="perfilar" ? "perfilar" : "colagem";
   const out = [];
   STATE.pedidos.forEach(function(p){
-    if(!p.temColagem) return;
-    if(f.base==="concl" && !stageConcluido(p, "colagem")) return;
-    const dataRef = dataBaseProducao(p, "colagem", f.base);
+    if(st==="colagem" && !p.temColagem) return;
+    if(f.base==="concl" && !stageConcluido(p, st)) return;
+    const dataRef = dataBaseProducao(p, st, f.base);
     if(!dataRef || dataRef.slice(0,4)!==String(ano)) return;
     if(mes && dataRef.slice(5,7)!==mes) return;
     if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
-    const g = grupoColagemDoTipo(p.tipo);
+    const g = grupoDoTipoNoStage(st, p.tipo);
     if(grupo && g!==grupo) return;
     out.push({p:p, dataRef:dataRef, grupo:g});
   });
   return out;
 }
-function openColagemDrill(ano, mes, grupo){
+function openColagemDrill(ano, mes, grupo, stage){
   __colagemDrillVoltar = null;
-  __colagemDrill = Object.assign({busca:"", ordem:"data", dir:1}, (__colagemDrill && __colagemDrill.ano===ano) ? {busca:__colagemDrill.busca, ordem:__colagemDrill.ordem, dir:__colagemDrill.dir} : {}, {ano:String(ano), mes:mes||"", grupo:grupo||""});
+  __colagemDrill = Object.assign({busca:"", ordem:"data", dir:1}, (__colagemDrill && __colagemDrill.ano===ano) ? {busca:__colagemDrill.busca, ordem:__colagemDrill.ordem, dir:__colagemDrill.dir} : {}, {ano:String(ano), mes:mes||"", grupo:grupo||"", stage:stage==="perfilar"?"perfilar":"colagem"});
   renderColagemDrill();
 }
 function setColagemDrill(campo, valor){
@@ -12695,20 +12884,23 @@ function voltarColagemDrillSePreciso(){
 }
 function renderColagemDrill(manterFoco){
   const D = __colagemDrill; if(!D) return;
-  const grupoInfo = GRUPOS_COLAGEM.find(function(g){ return g.key===D.grupo; });
-  const cor = grupoInfo ? grupoInfo.cor : COLORS.brand;
-  let itens = pedidosColagemDoGrafico(D.ano, D.mes, D.grupo);
-  const totalPeriodoTodos = pedidosColagemDoGrafico(D.ano, D.mes, "").reduce(function(s2,x){ return s2+Number(x.p.metragem||0); },0);
+  const ST = D.stage==="perfilar" ? "perfilar" : "colagem";
+  const GRUPOS = gruposDoStage(ST);
+  const nomeEtapa = ST==="perfilar" ? "Perfilar" : "Colagem";
+  const grupoInfo = GRUPOS.find(function(g){ return g.key===D.grupo; });
+  const cor = grupoInfo ? grupoInfo.cor : (ST==="perfilar" ? "#C98A00" : COLORS.brand);
+  let itens = pedidosColagemDoGrafico(D.ano, D.mes, D.grupo, ST);
+  const totalPeriodoTodos = pedidosColagemDoGrafico(D.ano, D.mes, "", ST).reduce(function(s2,x){ return s2+Number(x.p.metragem||0); },0);
   const busca = (D.busca||"").trim().toLowerCase();
   if(busca) itens = itens.filter(function(x){ const p=x.p; return [p.cliente,p.op,p.tipo,nomeEquip(p.equipamentoId)].join(" ").toLowerCase().indexOf(busca)!==-1; });
   const chave = {
     data:function(x){ return x.dataRef; }, op:function(x){ return String(x.p.op||""); }, cliente:function(x){ return (x.p.cliente||"").toLowerCase(); },
     tipo:function(x){ return (x.p.tipo||"").toLowerCase(); }, maquina:function(x){ return nomeEquip(x.p.equipamentoId).toLowerCase(); },
-    metragem:function(x){ return Number(x.p.metragem||0); }, status:function(x){ return stageConcluido(x.p,"colagem")?1:0; },
+    metragem:function(x){ return Number(x.p.metragem||0); }, status:function(x){ return stageConcluido(x.p,ST)?1:0; },
   }[D.ordem] || function(x){ return x.dataRef; };
   itens.sort(function(a,b){ const va=chave(a), vb=chave(b); return (va<vb?-1:va>vb?1:0)*D.dir; });
   const totalM = itens.reduce(function(s2,x){ return s2+Number(x.p.metragem||0); },0);
-  const concl = itens.filter(function(x){ return stageConcluido(x.p,"colagem"); }).length;
+  const concl = itens.filter(function(x){ return stageConcluido(x.p,ST); }).length;
   const pct = totalPeriodoTodos>0 ? Math.round((totalM/totalPeriodoTodos)*1000)/10 : 0;
   const periodoLabel = D.mes ? MESES[Number(D.mes)-1]+"/"+D.ano : "Ano de "+D.ano;
   const chip = function(key, label, c){
@@ -12720,8 +12912,8 @@ function renderColagemDrill(manterFoco){
     return '<th style="cursor:pointer;white-space:nowrap;'+(align?"text-align:"+align:"")+'" onclick="setColagemDrill(\'ordem\',\''+key+'\')">'+label+'<span style="font-size:9px">'+seta+'</span></th>';
   };
   const linhas = itens.map(function(x){
-    const p = x.p; const g = GRUPOS_COLAGEM.find(function(gg){ return gg.key===x.grupo; });
-    const ok = stageConcluido(p,"colagem");
+    const p = x.p; const g = GRUPOS.find(function(gg){ return gg.key===x.grupo; });
+    const ok = stageConcluido(p,ST);
     return '<tr>'+
       '<td style="font-family:\'IBM Plex Mono\',monospace;white-space:nowrap">'+fmtDateBR(x.dataRef)+'</td>'+
       '<td style="font-weight:700">'+escapeHtml(p.op||"—")+'</td>'+
@@ -12741,14 +12933,14 @@ function renderColagemDrill(manterFoco){
     '<div class="modal-overlay" onmousedown="if(event.target===this) closeModal()">'+
       '<div class="modal-card" style="max-width:1080px;padding:0;overflow:hidden;display:flex;flex-direction:column">'+
         '<div style="padding:18px 22px 14px;border-bottom:1px solid var(--steel-border);border-top:4px solid '+cor+'">'+
-          '<div class="modal-header" style="margin-bottom:4px"><h3 style="display:flex;align-items:center;gap:8px">'+icon("layers",17,cor)+'Lançamentos da Colagem — '+(grupoInfo?grupoInfo.label:"Todos os grupos")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
+          '<div class="modal-header" style="margin-bottom:4px"><h3 style="display:flex;align-items:center;gap:8px">'+icon(ST==="perfilar"?"calendar":"layers",17,cor)+'Lançamentos do'+(ST==="perfilar"?"":"a")+' '+nomeEtapa+' — '+(grupoInfo?grupoInfo.label:"Todos os grupos")+'</h3><button type="button" class="icon-btn" onclick="closeModal()">'+icon("x",16)+'</button></div>'+
           '<div style="font-size:12px;color:'+COLORS.textMuted+';margin-bottom:12px">'+periodoLabel+(grupoInfo?' · '+escapeHtml(grupoInfo.desc):'')+' · Base: '+(STATE.acompFiltro.base==="concl"?"somente etapas concluídas":"programado")+(STATE.acompFiltro.maquinaId?' · Máquina: '+escapeHtml(nomeEquip(STATE.acompFiltro.maquinaId)):'')+'</div>'+
           '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px">'+
             kpi("Pedidos", itens.length)+kpi("Metragem", fmtNum(totalM)+" m", cor)+kpi("Média por pedido", fmtNum(itens.length?totalM/itens.length:0)+" m")+
             kpi("% do período", String(pct).replace(".",",")+"%")+kpi("Concluídos", concl+" / "+itens.length, COLORS.green)+
           '</div>'+
           '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">'+
-            '<div style="display:flex;gap:5px;flex-wrap:wrap">'+chip("","Todos",null)+GRUPOS_COLAGEM.map(function(g){ return chip(g.key,g.label,g.cor); }).join("")+'</div>'+
+            '<div style="display:flex;gap:5px;flex-wrap:wrap">'+chip("","Todos",null)+GRUPOS.map(function(g){ return chip(g.key,g.label,g.cor); }).join("")+'</div>'+
             '<div style="margin-left:auto;width:140px"><label class="field-label" style="font-size:10px">Mês</label><select class="field-select" onchange="setColagemDrill(\'mes\', this.value)"><option value="">Ano inteiro</option>'+
               MESES.map(function(n,i){ return '<option value="'+pad2(i+1)+'" '+(D.mes===pad2(i+1)?"selected":"")+'>'+n+'</option>'; }).join("")+'</select></div>'+
             '<div style="width:220px"><label class="field-label" style="font-size:10px">Buscar</label><input class="field-input" id="cg-drill-busca" placeholder="Cliente, OP, tipo, máquina…" value="'+escapeAttr(D.busca||"")+'" oninput="setColagemDrill(\'busca\', this.value)"/></div>'+
@@ -12756,7 +12948,7 @@ function renderColagemDrill(manterFoco){
         '</div>'+
         '<div style="overflow:auto;max-height:52vh;padding:0 22px">'+
           (itens.length===0 ? '<div style="padding:30px 0">'+emptyStateHtml("Nenhum lançamento encontrado para este filtro.")+'</div>' :
-          '<table class="pcp-table" style="width:100%"><thead><tr>'+th("data","Data")+th("op","OP")+th("cliente","Cliente")+th("tipo","Tipo")+th("maquina","Máquina")+th("metragem","Metragem (m)","right")+th("status","Colagem")+'<th class="no-print">Ações</th></tr></thead>'+
+          '<table class="pcp-table" style="width:100%"><thead><tr>'+th("data","Data")+th("op","OP")+th("cliente","Cliente")+th("tipo","Tipo")+th("maquina","Máquina")+th("metragem","Metragem (m)","right")+th("status",nomeEtapa)+'<th class="no-print">Ações</th></tr></thead>'+
           '<tbody>'+linhas+'</tbody>'+
           '<tfoot><tr><td colspan="5" style="font-weight:700">Total ('+itens.length+' pedido'+(itens.length===1?'':'s')+')</td><td style="text-align:right;font-family:\'IBM Plex Mono\',monospace;font-weight:700;color:'+cor+'">'+fmtNum(totalM)+'</td><td colspan="2"></td></tr></tfoot></table>')+
         '</div>'+
@@ -12781,16 +12973,34 @@ const ACOMP_RELATORIOS = [
   {key:"colagemGrupos", label:"Colagem por grupo de produto — mês a mês"},
   {key:"colagemPizza", label:"Colagem — % de cada grupo no mês"},
   {key:"perfilarMes", label:"Perfilar — produção mês a mês"},
+  {key:"perfilarGrupos", label:"Perfilar por grupo de produto — mês a mês"},
+  {key:"perfilarPizza", label:"Perfilar — % de cada grupo no mês (com Simples)"},
   {key:"pinturaMes", label:"Pintura — produção mês a mês"},
-  {key:"prevColagem", label:"Previsão de Colagem (em aberto) — janeiro a dezembro"},
-  {key:"prevColagemTipo", label:"Previsão de Colagem por tipo de produto"},
-  {key:"prevCorte", label:"Previsão de Corte (em aberto) — janeiro a dezembro"},
-  {key:"prevCorteTipo", label:"Previsão de Corte por tipo de produto"},
 ];
 let __acompRelSel = null;
 function acompRelBloco(key, html){
-  const btn = '<button type="button" class="icon-btn no-print" style="width:26px;height:26px" title="Imprimir só este gráfico (PDF)" onclick="openAcompRelatoriosModal(\''+key+'\')">'+icon("printer",13)+'</button>';
+  const estilo = 'width:auto;height:26px;padding:0 8px;gap:5px;font-size:11px;font-weight:600;white-space:nowrap';
+  const btn = '<span class="no-print acomp-rel-btns" style="display:inline-flex;gap:5px;margin-left:2px">'+
+    '<button type="button" class="icon-btn no-print" style="'+estilo+'" title="PDF só deste gráfico — paisagem (com logo e cabeçalho)" onclick="imprimirGraficoAcomp(\''+key+'\',\'landscape\')">'+icon("printer",12)+
+      '<span style="display:inline-block;width:13px;height:9px;border:1.5px solid currentColor;border-radius:2px"></span>Paisagem</button>'+
+    '<button type="button" class="icon-btn no-print" style="'+estilo+'" title="PDF só deste gráfico — retrato (com logo e cabeçalho)" onclick="imprimirGraficoAcomp(\''+key+'\',\'portrait\')">'+icon("printer",12)+
+      '<span style="display:inline-block;width:9px;height:13px;border:1.5px solid currentColor;border-radius:2px"></span>Retrato</button>'+
+  '</span>';
   return '<div class="acomp-rel" data-rel="'+key+'">'+html.replace('</h3>','</h3>'+btn)+'</div>';
+}
+/* PDF de um gráfico sozinho, direto na orientação escolhida. Usa o mesmo cabeçalho com a logo
+   (repetido em todas as páginas) e o rodapé dos relatórios da tela. */
+function imprimirGraficoAcomp(key, orientacao){
+  document.querySelectorAll(".acomp-rel").forEach(function(el){ el.classList.toggle("rel-incluir", el.getAttribute("data-rel")===key); });
+  const sep = document.querySelector(".acomp-anual-sep"); if(sep) sep.classList.remove("rel-incluir");
+  document.body.classList.remove("print-acomp-umpagina");
+  document.body.classList.add("print-acomp-sel", "print-acomp-um");
+  const limpar = function(){
+    document.body.classList.remove("print-acomp-sel", "print-acomp-um");
+    window.removeEventListener("afterprint", limpar);
+  };
+  window.addEventListener("afterprint", limpar);
+  setTimeout(function(){ printAcompComo(orientacao, [key]); }, 50);
 }
 function openAcompRelatoriosModal(somente){
   if(!__acompRelSel) __acompRelSel = {sel:ACOMP_RELATORIOS.map(function(r){ return r.key; }), orient:"landscape", umPorPagina:false};
@@ -12830,7 +13040,7 @@ function gerarAcompRelatorio(){
   __acompRelSel.umPorPagina = !!(document.getElementById("acomp-rel-pagina")||{}).checked;
   closeModal();
   document.querySelectorAll(".acomp-rel").forEach(function(el){ el.classList.toggle("rel-incluir", sel.indexOf(el.getAttribute("data-rel"))!==-1); });
-  const temAnual = sel.some(function(k){ return ["colagemMes","colagemGrupos","colagemPizza","perfilarMes","pinturaMes"].indexOf(k)!==-1; });
+  const temAnual = sel.some(function(k){ return ["colagemMes","colagemGrupos","colagemPizza","perfilarMes","perfilarGrupos","perfilarPizza","pinturaMes"].indexOf(k)!==-1; });
   const sep = document.querySelector(".acomp-anual-sep"); if(sep) sep.classList.toggle("rel-incluir", temAnual);
   const temPrev = sel.some(function(k){ return k.indexOf("prev")===0; });
   const sepPrev = document.querySelector(".acomp-prev-sep"); if(sepPrev) sepPrev.classList.toggle("rel-incluir", temPrev);
@@ -12857,7 +13067,7 @@ function corDoTipo(tipo){
   return PALETA_TIPOS[i % PALETA_TIPOS.length];
 }
 function updateAcompPrev(key, val){ STATE.acompFiltro[key] = val; renderScreen(); }
-function previsaoEmAberto(stage, ano, desde){
+function previsaoEmAberto(stage, ano, desde, semMaquina){
   const f = STATE.acompFiltro;
   const r = {meses:new Array(12).fill(0), pedidos:new Array(12).fill(0), porTipo:{}, semData:{m:0,n:0}, total:0, totalPedidos:0, vencido:0};
   const hoje = todayStr();
@@ -12865,7 +13075,7 @@ function previsaoEmAberto(stage, ano, desde){
     if(p.etapaAtual==="entregue") return;
     if(stage==="colagem" && !p.temColagem) return;
     if(stageConcluido(p, stage)) return;
-    if(f.maquinaId && p.equipamentoId!==f.maquinaId) return;
+    if(!semMaquina && f.maquinaId && p.equipamentoId!==f.maquinaId) return;
     const m = Number(p.metragem||0);
     const d = p.dataProg||"";
     if(!d){ r.semData.m += m; r.semData.n++; return; }
@@ -12892,8 +13102,8 @@ function previsaoRodapeHtml(r, ano, desde, cor){
       '<div style="font-size:11px;color:'+COLORS.textMuted+'">'+r.totalPedidos+' pedido(s) · '+ano+'</div></div>'+
   '</div>';
 }
-function previsaoCardsHtml(stage, nome, iconName, cor, ano, desde){
-  const r = previsaoEmAberto(stage, ano, desde);
+function previsaoCardsHtml(stage, nome, iconName, cor, ano, desde, semMaquina){
+  const r = previsaoEmAberto(stage, ano, desde, semMaquina);
   const hoje = new Date();
   const mesHoje = (Number(ano)===hoje.getFullYear()) ? (hoje.getMonth()+1) : 0;
   const rotulos = MESES.map(function(n,i){ return '<div class="chart-day" style="flex:1;text-align:center;'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+n.slice(0,3)+'</div>'; }).join("");
@@ -12941,6 +13151,7 @@ function previsaoCardsHtml(stage, nome, iconName, cor, ano, desde){
     const pct = r.total>0 ? Math.round(tot/r.total*1000)/10 : 0;
     return '<span style="display:inline-flex;align-items:center;gap:6px;font-size:12px"><span style="width:11px;height:11px;border-radius:3px;background:'+corDoTipo(t)+'"></span><strong>'+escapeHtml(t)+'</strong> <span style="color:'+COLORS.textMuted+'">'+fmtNum(tot)+' m ('+String(pct).replace(".",",")+'%)</span></span>';
   }).join("") : '<span style="font-size:12px;color:'+COLORS.textMuted+'">Nada em aberto no período.</span>';
+  if(stage==="perfilar") return {total:card1, tipos:previsaoCorteGruposCardHtml(r, ano, desde, cor, header, mesHoje)};
   const card2 = '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
     header("Previsão de "+nome+" por tipo de produto — mês a mês (m)")+
     '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px">'+legenda+'</div>'+
@@ -12949,6 +13160,54 @@ function previsaoCardsHtml(stage, nome, iconName, cor, ano, desde){
     previsaoRodapeHtml(r, ano, desde, cor)+
   '</div>';
   return {total:card1, tipos:card2};
+}
+
+/* Previsão de Corte por grupo: uma coluna por grupo em cada mês (Colonial, Sanduíche,
+   Bandeja + Painel Térmico, Simples e Outros), com o rótulo da metragem em cada coluna e o total
+   do mês embaixo do nome do mês. Só para o Corte — a Previsão de Colagem segue empilhada por tipo. */
+function previsaoCorteGruposCardHtml(r, ano, desde, cor, header, mesHoje){
+  const porGrupo = {};
+  GRUPOS_PERFILAR.forEach(function(g){ porGrupo[g.key] = new Array(12).fill(0); });
+  Object.keys(r.porTipo).forEach(function(t){
+    const k = grupoPerfilarDoTipo(t);
+    r.porTipo[t].forEach(function(v,i){ porGrupo[k][i] += v; });
+  });
+  const grupos = GRUPOS_PERFILAR.filter(function(g){ return g.key!=="outros" || porGrupo.outros.some(function(v){ return v>0; }); });
+  const maxValor = Math.max.apply(null, [1].concat.apply([], grupos.map(function(g){ return porGrupo[g.key]; })));
+  const escala = maxValor*1.22;
+  const barras = MESES.map(function(nome,i){
+    const totalMes = r.meses[i];
+    const passado = mesHoje>0 && (i+1)<mesHoje;
+    const tip = nome+"/"+ano+" — "+grupos.map(function(g){ return g.label+": "+fmtNum(porGrupo[g.key][i])+" m"; }).join(" · ")+" · Total: "+fmtNum(totalMes)+" m"+(passado&&totalMes>0?" (mês já passou — atrasado)":"");
+    return '<div class="chart-col" title="'+escapeAttr(totalMes>0?tip:nome+"/"+ano+" — sem saldo em aberto")+'" style="flex-direction:row;align-items:flex-end;justify-content:center;gap:2px">'+
+      grupos.map(function(g){
+        const v = porGrupo[g.key][i];
+        const h = escala>0 ? Math.min(100,(v/escala)*100) : 0;
+        return '<div title="'+escapeAttr(g.label+" · "+nome+"/"+ano+": "+fmtNum(v)+" m")+'" style="flex:1 1 0;max-width:16px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;align-items:center">'+
+          (v>0 ? '<div class="chart-bar-label" style="font-size:'+rf(9)+';font-weight:700;color:'+g.cor+';writing-mode:vertical-rl;transform:rotate(180deg);margin-bottom:2px;white-space:nowrap">'+fmtNumCard(v)+'</div>' : '')+
+          '<div class="chart-bar" style="width:100%;height:'+h+'%;background:'+(v===0?"var(--steel-border)":g.cor)+'"></div></div>';
+      }).join("")+
+    '</div>';
+  }).join("");
+  const rotulos = MESES.map(function(n,i){
+    const v = r.meses[i];
+    const passado = mesHoje>0 && (i+1)<mesHoje;
+    return '<div class="chart-day" style="flex:1;text-align:center;'+((i+1)===mesHoje?"font-weight:700;color:"+COLORS.brand:"")+'">'+n.slice(0,3)+
+      (v>0 ? '<div style="font-size:'+rf(10)+';font-weight:700;color:'+(passado?COLORS.red:"var(--text)")+'">'+fmtNumCard(v)+'</div>' : '')+'</div>';
+  }).join("");
+  const legenda = r.total>0 ? grupos.map(function(g){
+    const tot = porGrupo[g.key].reduce(function(a,b){return a+b;},0);
+    const pct = r.total>0 ? Math.round(tot/r.total*1000)/10 : 0;
+    return '<span title="'+escapeAttr(g.desc)+'" style="display:inline-flex;align-items:center;gap:6px;font-size:12px"><span style="width:11px;height:11px;border-radius:3px;background:'+g.cor+'"></span><strong>'+g.label+'</strong> <span style="color:'+COLORS.textMuted+'">'+fmtNum(tot)+' m ('+String(pct).replace(".",",")+'%)</span></span>';
+  }).join("") : '<span style="font-size:12px;color:'+COLORS.textMuted+'">Nada em aberto no período.</span>';
+  return '<div class="pcp-card chart-card" style="margin-bottom:16px">'+
+    header("Previsão de Corte por grupo de produto — mês a mês (m)")+
+    '<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:12px">'+legenda+'</div>'+
+    '<div class="chart-wrap" style="height:250px">'+chartGridlinesHtml(escala)+barras+'</div>'+
+    '<div class="chart-days" style="display:flex">'+rotulos+'</div>'+
+    '<p class="no-print" style="font-size:11px;color:'+COLORS.textMuted+';margin:8px 0 0">Valor em cima de cada coluna = metragem do grupo; número embaixo do mês = total do mês'+(mesHoje>1?' (em vermelho quando o mês já passou e ainda tem saldo em aberto)':'')+'. Passe o mouse para ver o detalhe.</p>'+
+    previsaoRodapeHtml(r, ano, desde, cor)+
+  '</div>';
 }
 
 /* ============================== CABEÇALHO E RODAPÉ DOS RELATÓRIOS (PDF) ==============================
@@ -12971,7 +13230,6 @@ function acompRelCabecalhoHtml(prevAno, prevDesde, anoAcum){
       item("Base do cálculo", f.base==="concl" ? "Somente etapas concluídas" : "Programado (data de prog.)")+
       item("Máquina", maq)+
       item("Ano mês a mês", String(anoAcum))+
-      item("Previsão", String(prevAno)+(prevDesde?" · a partir de "+fmtDateBR(prevDesde):""))+
     '</div>'+
   '</div>';
 }
@@ -13189,7 +13447,34 @@ function renderCapacidadeScreen(){
     '<tbody><tr><td class="rel-print-body">'+
       capacidadeCardHtml("colagem","Colagem",COLORS.brand,ano)+
       capacidadeCardHtml("perfilar","Perfilar","#C98A00",ano)+
+      capPrevisaoSecaoHtml(ano)+
     '</td></tr></tbody></table>';
+}
+/* Previsão (em aberto) também na tela de Capacidade, abaixo do Perfilar — os mesmos gráficos do
+   Acompanhamento da Produção, no ano escolhido aqui. Sem filtro de máquina (a Capacidade considera
+   todas). "A partir de" é próprio desta tela. */
+function capPrevisaoSecaoHtml(ano){
+  const F = STATE.capFiltro || {};
+  const desde = F.prevDesde || "";
+  const prevCol = previsaoCardsHtml("colagem","Colagem","layers",COLORS.brand,String(ano),desde,true);
+  const prevCor = previsaoCardsHtml("perfilar","Corte","calendar","#C98A00",String(ano),desde,true);
+  return '<div class="cap-prev-secao">'+
+    '<div class="cap-prev-sep" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:22px 0 12px;padding-top:16px;border-top:1px solid var(--steel-border)">'+
+      '<div>'+
+        '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">Previsão — o que está programado e ainda em aberto (m)</div>'+
+        '<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:3px">Pedidos com a etapa ainda não concluída, pelo mês da Data Prog. Corte = Perfilar. Todas as máquinas'+(desde?'; mostrando a partir de '+fmtDateBR(desde):'')+'.</div>'+
+      '</div>'+
+      '<div class="no-print" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'+
+        '<div style="width:160px"><label class="field-label">A partir de</label><input class="field-input" type="date" value="'+desde+'" onchange="updateCapFiltro(\'prevDesde\', this.value)"/></div>'+
+        '<button class="btn btn-ghost" style="padding:7px 10px;font-size:12px" onclick="updateCapFiltro(\'prevDesde\', todayStr())">A partir de hoje</button>'+
+        (desde?'<button class="btn btn-ghost" style="padding:7px 10px;font-size:12px" onclick="updateCapFiltro(\'prevDesde\', \'\')">Limpar</button>':'')+
+      '</div>'+
+    '</div>'+
+    '<div class="cap-prev-bloco" data-cap-prev="colagem">'+prevCol.total+'</div>'+
+    '<div class="cap-prev-bloco" data-cap-prev="colagem">'+prevCol.tipos+'</div>'+
+    '<div class="cap-prev-bloco" data-cap-prev="perfilar">'+prevCor.total+'</div>'+
+    '<div class="cap-prev-bloco" data-cap-prev="perfilar">'+prevCor.tipos+'</div>'+
+  '</div>';
 }
 function capRelCabecalhoHtml(ano){
   return '<div class="rel-print-header">'+
@@ -13398,9 +13683,6 @@ function renderAcompanhamentoScreen(){
   const cgCards = colagemGruposCardHtml(anoAcum);
   const prevAno = f.prevAno || String(new Date().getFullYear());
   const prevDesde = f.prevDesde || "";
-  const anosPrev = Array.from(new Set(anosAcum.concat([prevAno, String(new Date().getFullYear()+1)]))).sort();
-  const prevCol = previsaoCardsHtml("colagem","Colagem","layers",COLORS.brand,prevAno,prevDesde);
-  const prevCor = previsaoCardsHtml("perfilar","Corte","calendar","#C98A00",prevAno,prevDesde);
   const acoes = '<div class="no-print" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">'+
     rotuloControleHtml("acompanhamento")+
     '<button class="btn btn-primary" onclick="exportarApresentacaoPptx()" title="Gera um PowerPoint com os gráficos desta tela e da Baixa de Estoque (Perda), com a logo e as cores da ELEVE">'+icon("fileText",14)+' Exportar PowerPoint</button>'+
@@ -13447,24 +13729,10 @@ function renderAcompanhamentoScreen(){
       acompRelBloco("colagemGrupos", cgCards.barras)+
       acompRelBloco("colagemPizza", cgCards.pizza)+
       acompRelBloco("perfilarMes", acumuladoAnualCardHtml("Perfilar — produção mês a mês (m)","calendar","#C98A00","perfilar",anoAcum))+
+      acompRelBloco("perfilarGrupos", perfilarGruposBarrasCardHtml(anoAcum))+
+      acompRelBloco("perfilarPizza", perfilarPizzaCardHtml(anoAcum))+
       acompRelBloco("pinturaMes", acumuladoAnualCardHtml("Pintura — produção mês a mês (m)","droplet","#2B8FC9","pintura",anoAcum))+
-      '<div class="acomp-prev-sep" style="display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap;margin:22px 0 12px;padding-top:16px;border-top:1px solid var(--steel-border)">'+
-        '<div>'+
-          '<div style="font-family:\'Space Grotesk\',sans-serif;font-size:14.5px;font-weight:700">Previsão — o que está programado e ainda em aberto (m)</div>'+
-          '<div style="font-size:11px;color:'+COLORS.textMuted+';margin-top:3px">Pedidos com a etapa ainda não concluída, pelo mês da Data Prog. Corte = Perfilar. Usa o filtro de Máquina acima'+(prevDesde?'; mostrando a partir de '+fmtDateBR(prevDesde):'')+'.</div>'+
-        '</div>'+
-        '<div class="no-print" style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">'+
-          '<div style="width:110px"><label class="field-label">Ano</label><select class="field-select" onchange="updateAcompPrev(\'prevAno\', this.value)">'+
-            anosPrev.map(function(y){ return '<option value="'+y+'" '+(prevAno===y?"selected":"")+'>'+y+'</option>'; }).join("")+'</select></div>'+
-          '<div style="width:160px"><label class="field-label">A partir de</label><input class="field-input" type="date" value="'+prevDesde+'" onchange="updateAcompPrev(\'prevDesde\', this.value)"/></div>'+
-          '<button class="btn btn-ghost" style="padding:7px 10px;font-size:12px" onclick="updateAcompPrev(\'prevDesde\', todayStr())">A partir de hoje</button>'+
-          (prevDesde?'<button class="btn btn-ghost" style="padding:7px 10px;font-size:12px" onclick="updateAcompPrev(\'prevDesde\', \'\')">Limpar</button>':'')+
-        '</div>'+
-      '</div>'+
-      acompRelBloco("prevColagem", prevCol.total)+
-      acompRelBloco("prevColagemTipo", prevCol.tipos)+
-      acompRelBloco("prevCorte", prevCor.total)+
-      acompRelBloco("prevCorteTipo", prevCor.tipos)+
+      /* A Previsão (em aberto) saiu desta tela: fica na tela Capacidade de Produção, abaixo do Perfilar. */
     '</td></tr></tbody></table>'+
     '</div>';
 }
